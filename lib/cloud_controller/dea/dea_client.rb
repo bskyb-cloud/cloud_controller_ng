@@ -76,7 +76,7 @@ module VCAP::CloudController
         
         if index < 0 || index >= app.instances
           msg = "Request failed for app: #{app.name}, instance: #{index}"
-          msg << " and path: #{path || '/'} as the instance is out of range."
+          msg << " as the instance is out of range."
         
           raise msg
         end
@@ -89,7 +89,9 @@ module VCAP::CloudController
         }
         message.merge!(options)
 
-        dea_request_ssh_details(message, :timeout => 2).first
+        response = dea_request_ssh_details(message, :timeout => 2).first
+        response == nil and raise "No response when trying to locate instance."
+        response
       end
 
       def find_instances(app, message_options = {}, request_options = {})
