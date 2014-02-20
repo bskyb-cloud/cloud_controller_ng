@@ -77,15 +77,15 @@ module VCAP::CloudController
         if index < 0 || index >= app.instances
           msg = "Request failed for app: #{app.name}, instance: #{index}"
           msg << " as the instance is out of range."
-        
-          raise msg
+
+          raise SshError.new(msg)
         end
         
         message = {
           droplet: app.guid,
           indices: [index],
           version: app.version,
-          states: ACTIVE_APP_STATES
+          states: [:RUNNING]
         }
         message.merge!(options)
 
