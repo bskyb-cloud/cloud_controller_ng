@@ -71,6 +71,28 @@ module VCAP::CloudController
 
         dea_request_find_droplet(message, :timeout => 2).first
       end
+      
+      def ssh_instance(app, index, options = {})
+        
+        if index < 0 || index >= app.instances
+          msg = "Request failed for app: #{app.name}, instance: #{index}"
+          msg << " as the instance is out of range."
+
+          raise SshError.new(msg)
+        end
+        
+        message = {
+          droplet: app.guid,
+          indices: [index],
+          version: app.version,
+          states: [:RUNNING]
+        }
+        message.merge!(options)
+
+        response = dea_request_ssh_details(message, :timeout => 2).first
+        response == nil and raise "No response when trying to locate instance."
+        response
+      end
 
       def find_instances(app, message_options = {}, request_options = {})
         message = {droplet: app.guid}
@@ -372,6 +394,11 @@ module VCAP::CloudController
       def dea_request_find_droplet(args, opts = {})
         logger.debug "sending dea.find.droplet with args: '#{args}' and opts: '#{opts}'"
         message_bus.synchronous_request("dea.find.droplet", args, opts)
+      end
+      
+      def dea_request_ssh_details(args, opts = {})
+        logger.debug "sending dea.ssh.droplet with args: '#{args}' and opts: '#{opts}'"
+        message_bus.synchronous_request("dea.ssh.droplet", args, opts)
       end
 
       def logger
