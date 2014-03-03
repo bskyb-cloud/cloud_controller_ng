@@ -2,6 +2,8 @@ module VCAP::CloudController
   class RoutesController < RestController::ModelController
     define_attributes do
       attribute :host, String, :default => ""
+      attribute :host_uniqueness, String, :default => ""
+      attribute :host_uniqueness2, String, :default => ""
       to_one    :domain
       to_one    :space
       to_many   :apps
