@@ -53,6 +53,11 @@ module VCAP::CloudController
           route.host = "a/b"
           route.should_not be_valid
         end
+        
+        it "should allow [index] in the hostname" do
+          route.host = "a-[index]"
+          route.should be_valid
+        end
 
         it "should not allow a nil host" do
           expect {
@@ -73,6 +78,49 @@ module VCAP::CloudController
                                :host => " ")
           }.to raise_error(Sequel::ValidationFailed)
         end
+        
+        it "should not allow an [index] hostname to conflict with a number" do
+          expect {
+            Route.make(:space => space,
+                               :domain => domain,
+                               :host => "app-a-1")
+            Route.make(:space => space,
+                               :domain => domain,
+                               :host => "app-a-[index]")
+          }.to raise_error(Sequel::ValidationFailed)
+        end
+        
+        it "should not allow an number hostname to conflict with a [index]" do
+          expect {
+            Route.make(:space => space,
+                               :domain => domain,
+                               :host => "app-b-[index]")
+            Route.make(:space => space,
+                               :domain => domain,
+                               :host => "app-b-1")
+          }.to raise_error(Sequel::ValidationFailed)
+        end
+        
+        it "should allow two numbers hostnames" do
+          Route.make(:space => space,
+                             :domain => domain,
+                             :host => "app-c-1")
+          Route.make(:space => space,
+                             :domain => domain,
+                             :host => "app-c-2")
+        end  
+        
+        it "should allow conflicting hostnames across domains" do
+          domain2 = PrivateDomain.make(owning_organization: space.organization)
+          
+          Route.make(:space => space,
+                              :domain => domain,
+                              :host => "app-d-1")
+          Route.make(:space => space,
+                              :domain => domain2,
+                              :host => "app-d-[index]")
+        end
+ 
       end
 
       describe "total allowed routes" do
