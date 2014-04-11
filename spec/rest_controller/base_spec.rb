@@ -9,9 +9,9 @@ describe VCAP::CloudController::RestController::Base, type: :controller do
   let(:env) { {} }
   let(:params) { {} }
 
-  subject {
+  subject do
     VCAP::CloudController::RestController::Base.new(double(:config), logger, env, params, double(:body))
-  }
+  end
 
   describe "#dispatch" do
     context "when the dispatch is succesful" do
@@ -132,7 +132,7 @@ describe VCAP::CloudController::RestController::Base, type: :controller do
       end
 
       it "should log an error for a Model error" do
-        subject.stub(:to_s).and_raise(VCAP::CloudController::InvalidRelation)
+        subject.stub(:to_s).and_raise(VCAP::Errors::InvalidRelation)
         expect {
           subject.dispatch(:to_s)
         }.to raise_error(VCAP::Errors::ApiError, /Invalid relation/)

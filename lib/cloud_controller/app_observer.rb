@@ -58,11 +58,12 @@ module VCAP::CloudController
           raise Errors::ApiError.new_from_details("AppPackageInvalid", "The app package hash is empty")
         end
 
-        if app.buildpack.custom? && !App.custom_buildpacks_enabled?
+        if app.buildpack.custom? && !app.custom_buildpacks_enabled?
           raise Errors::ApiError.new_from_details("CustomBuildpacksDisabled")
         end
 
-        if @config[:diego]
+
+        if @config[:diego] && (app.environment_json || {})["CF_DIEGO_BETA"] == "true"
           task = DiegoStagerTask.new(@config[:staging][:timeout_in_seconds], @message_bus, app, dependency_locator.blobstore_url_generator)
         else
           task = AppStagerTask.new(@config, @message_bus, app, @dea_pool, @stager_pool, dependency_locator.blobstore_url_generator)

@@ -132,7 +132,7 @@ module VCAP::CloudController
     name              { Sham.name }
     space             { Space.make }
     stack             { Stack.make }
-    instances         { 0 }
+    instances         { 1 }
   end
 
   ServiceBinding.blueprint do
@@ -150,8 +150,8 @@ module VCAP::CloudController
   end
 
   ServiceDashboardClient.blueprint do
-    uaa_id                { Sham.name }
-    service_id_on_broker  { SecureRandom.uuid }
+    uaa_id          { Sham.name }
+    service_broker  { ServiceBroker.make }
   end
 
   ServicePlan.blueprint do
@@ -252,7 +252,6 @@ module VCAP::CloudController
     total_services { 60 }
     total_routes { 1_000 }
     memory_limit { 20_480 } # 20 GB
-    trial_db_allowed { false }
   end
 
   Buildpack.blueprint do
@@ -270,5 +269,7 @@ module VCAP::CloudController
     org_guid { Sham.guid }
     space_guid { Sham.guid }
     space_name { Sham.name }
+    buildpack_guid { Sham.guid }
+    buildpack_name { Sham.name }
   end
 end

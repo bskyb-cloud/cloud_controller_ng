@@ -188,11 +188,26 @@ module VCAP::CloudController
       end
 
       let!(:service_binding_two) do
-        ServiceBinding.make(:app => app, :service_instance => service_instance_two, :credentials => {"uri" => "mysql://giraffes.rock"})
+        ServiceBinding.make(
+            :app => app,
+            :service_instance => service_instance_two,
+            :credentials => {"uri" => "mysql://giraffes.rock"})
       end
 
       before do
         app.add_route(route)
+      end
+
+      describe "limits" do
+        it "limits memory" do
+          expect(diego_stager_task.staging_request[:memory_mb]).to eq(259)
+        end
+        it "limits disk" do
+          expect(diego_stager_task.staging_request[:disk_mb]).to eq(799)
+        end
+        it "limits file descriptors" do
+          expect(diego_stager_task.staging_request[:file_descriptors]).to eq(1234)
+        end
       end
 
       describe "environment" do
@@ -200,25 +215,11 @@ module VCAP::CloudController
           expect(diego_stager_task.staging_request[:environment].last).to eq(["USER_DEFINED","OK"])
         end
 
-        it "contains VCAP_APPLICATION" do
-          expected_hash = {
-            limits: {
-              mem: 259,
-              disk: 799,
-              fds: 1234,
-            },
-            application_version: app.version,
-            application_name: "app-name",
-            application_uris: app.uris,
-            version: app.version,
-            name: "app-name",
-            uris: app.uris,
-            users: nil
-          }
-
+        it "contains VCAP_APPLICATION from application" do
+          expect(app.vcap_application).to be
           expect(
             diego_stager_task.staging_request[:environment]
-          ).to include(["VCAP_APPLICATION", expected_hash.to_json])
+          ).to include(["VCAP_APPLICATION", app.vcap_application.to_json])
         end
 
         it "contains VCAP_SERVICES" do
@@ -257,6 +258,19 @@ module VCAP::CloudController
           expect(
             diego_stager_task.staging_request[:environment]
           ).to include(["MEMORY_LIMIT", "259m"])
+        end
+
+        it "contains app build artifact cache download uri" do
+          blobstore_url_generator.should_receive(:buildpack_cache_download_url).with(app).and_return("http://buildpack-cache-download.uri")
+          blobstore_url_generator.should_receive(:buildpack_cache_upload_url).with(app).and_return("http://buildpack-cache-upload.uri")
+          staging_request = diego_stager_task.staging_request
+          expect(staging_request[:build_artifacts_cache_download_uri]).to eq("http://buildpack-cache-download.uri")
+          expect(staging_request[:build_artifacts_cache_upload_uri]).to eq("http://buildpack-cache-upload.uri")
+        end
+
+        it "contains app bits download uri" do
+          blobstore_url_generator.should_receive(:app_package_download_url).with(app).and_return("http:/app-bits-download.uri")
+          expect(diego_stager_task.staging_request[:app_bits_download_uri]).to eq("http:/app-bits-download.uri")
         end
       end
     end

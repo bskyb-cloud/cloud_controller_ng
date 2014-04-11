@@ -190,7 +190,7 @@ module VCAP::CloudController
           dea_pool.reserve_app_memory(dea_id, app.memory)
           stager_pool.reserve_app_memory(dea_id, app.memory)
         else
-          logger.error "dea-client.no-resources-available", message: message
+          logger.error "dea-client.no-resources-available", message: scrub_sensitive_fields(message)
         end
       end
 
@@ -327,13 +327,14 @@ module VCAP::CloudController
           debug: app.debug,
           start_command: app.command,
           health_check_timeout: app.health_check_timeout,
+          vcap_application: app.vcap_application,
         }
       end
 
       private
 
       def health_manager_client
-        @health_manager_client ||= CloudController::DependencyLocator.instance.health_manager_client
+        CloudController::DependencyLocator.instance.health_manager_client
       end
 
       # @param [Enumerable, #each] indices the range / sequence of instances to start
@@ -397,6 +398,14 @@ module VCAP::CloudController
       def dea_request_ssh_details(args, opts = {})
         logger.debug "sending dea.ssh.droplet with args: '#{args}' and opts: '#{opts}'"
         message_bus.synchronous_request("dea.ssh.droplet", args, opts)
+      end
+
+      def scrub_sensitive_fields(message)
+        scrubbed_message = message.dup
+        scrubbed_message.delete(:services)
+        scrubbed_message.delete(:executableUri)
+        scrubbed_message.delete(:env)
+        scrubbed_message
       end
 
       def logger

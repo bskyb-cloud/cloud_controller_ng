@@ -25,16 +25,22 @@ RSpec::Matchers.define :match_app do |app|
       state.app_name == app.name &&
       state.org_guid == app.space.organization_guid &&
       state.space_guid == app.space_guid &&
-      state.space_name == app.space.name
+      state.space_name == app.space.name &&
+      state.buildpack_name == (app.custom_buildpack_url || app.buildpack_name) &&
+      state.buildpack_guid == app.buildpack_guid
   end
 end
 
 RSpec::Matchers.define :have_status_code do |expected_code|
   match do |response|
-    response.code.to_i == expected_code
+    status_code_for(response) == expected_code
   end
 
   failure_message_for_should do |response|
-    "Expected #{expected_code} response, got:\n code: #{response.code.to_i}\n body: \"#{response.body}\""
+    "Expected #{expected_code} response, got:\n code: #{status_code_for(response)}\n body: \"#{response.body}\""
+  end
+
+  def status_code_for(response)
+    (response.respond_to?(:code) ? response.code : response.status).to_i
   end
 end

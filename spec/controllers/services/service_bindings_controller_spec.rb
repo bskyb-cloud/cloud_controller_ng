@@ -243,7 +243,6 @@ module VCAP::CloudController
           :service_instance_guid => instance.guid
         )
 
-        Controller.any_instance.stub(:in_test_mode?).and_return(false)
         ServiceBinding.any_instance.stub(:save).and_raise
 
         post "/v2/service_bindings", req, json_headers(headers_for(developer))
@@ -273,22 +272,97 @@ module VCAP::CloudController
         it 'does not send a bind request to broker' do
           expect(broker_client).to_not have_received(:bind)
         end
+
       end
 
-      context 'when the model save and the subsequent unbind both raise errors' do
-        it 'raises the original error' do
-          req = Yajl::Encoder.encode(
-            :app_guid => app_obj.guid,
-            :service_instance_guid => instance.guid
-          )
+      context 'when app_guid is invalid' do
+        let(:req) do
+          {
+            app_guid: 'THISISWRONG',
+            service_instance_guid: instance.guid
+          }.to_json
+        end
 
-          broker_client.stub(:unbind).and_raise(StandardError, 'unbind')
-          ServiceBinding.any_instance.stub(:save).and_raise(StandardError, 'save')
-          Controller.any_instance.stub(:in_test_mode?).and_return(true)
+        before do
+          service.save
+        end
 
-          expect {
-            post "/v2/service_bindings", req, json_headers(headers_for(developer))
-          }.to raise_error(StandardError, "save")
+        it 'returns CF-AppNotFound' do
+          post '/v2/service_bindings', req, json_headers(headers_for(developer))
+
+          hash_body = JSON.parse(last_response.body)
+          expect(hash_body['error_code']).to eq('CF-AppNotFound')
+          expect(last_response.status).to eq(404)
+        end
+      end
+
+      context 'when the app is destroyed after controller validation and before binding save' do
+        let(:req) do
+          {
+            app_guid: 'THISISWRONG',
+            service_instance_guid: instance.guid
+          }.to_json
+        end
+
+        before do
+          service.save
+          allow_any_instance_of(ServiceBindingsController).to receive(:validate_access).and_return(true)
+          allow_any_instance_of(ServiceBindingsController).to receive(:validate_app).and_return(true)
+        end
+
+        it 'returns CF-AppNotFound' do
+          post '/v2/service_bindings', req, json_headers(headers_for(developer))
+
+          hash_body = JSON.parse(last_response.body)
+          expect(hash_body['error_code']).to eq('CF-AppNotFound')
+          expect(last_response.status).to eq(404)
+        end
+      end
+
+      context 'when service_instance_guid is invalid' do
+        let(:req) do
+          {
+            app_guid: app_obj.guid,
+            service_instance_guid: 'THISISWRONG'
+          }.to_json
+        end
+
+        before do
+          service.save
+        end
+
+        it 'returns CF-ServiceInstanceNotFound error' do
+          post '/v2/service_bindings', req, json_headers(headers_for(developer))
+
+          hash_body = JSON.parse(last_response.body)
+          expect(hash_body['error_code']).to eq('CF-ServiceInstanceNotFound')
+          expect(last_response.status).to eq(404)
+        end
+      end
+
+      context 'when the service instance is destroyed after controller validation and before binding save' do
+        let(:req) do
+          {
+            app_guid: app_obj.guid,
+            service_instance_guid: 'THISISWRONG'
+          }.to_json
+        end
+
+        before do
+          service.save
+
+          allow(broker_client).to receive(:bind).and_return(true)
+          allow_any_instance_of(ServiceBinding).to receive(:client).and_return(broker_client)
+          allow_any_instance_of(ServiceBindingsController).to receive(:validate_access).and_return(true)
+          allow_any_instance_of(ServiceBindingsController).to receive(:validate_service_instance).and_return(true)
+        end
+
+        it 'returns CF-ServiceInstanceNotFound error' do
+          post '/v2/service_bindings', req, json_headers(headers_for(developer))
+
+          hash_body = JSON.parse(last_response.body)
+          expect(hash_body['error_code']).to eq('CF-ServiceInstanceNotFound')
+          expect(last_response.status).to eq(404)
         end
       end
     end

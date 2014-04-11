@@ -35,17 +35,15 @@ module Sinatra
         # use the env to flag this.
         unless request.env['vcap_exception_body_set']
           error = ::VCAP::Errors::ApiError.new_from_details("NotFound")
-          presenter = ErrorPresenter.new(error)
+          presenter = ErrorPresenter.new(error, in_test_mode?)
 
-          body Yajl::Encoder.encode(presenter.sanitized_hash)
+          body Yajl::Encoder.encode(presenter.error_hash)
         end
       end
 
       app.error do
         error = request.env['sinatra.error']
-        presenter = ErrorPresenter.new(error)
-
-        raise error if in_test_mode? && !presenter.api_error?
+        presenter = ErrorPresenter.new(error, in_test_mode?)
 
         status(presenter.response_code)
 
@@ -55,7 +53,7 @@ module Sinatra
           logger.error(presenter.log_message)
         end
 
-        payload = Yajl::Encoder.encode(presenter.sanitized_hash)
+        payload = Yajl::Encoder.encode(presenter.error_hash)
 
         ::VCAP::Component.varz.synchronize do
           varz[:recent_errors] << payload
@@ -103,8 +101,8 @@ module Sinatra
         logger_name = opts[:logger_name] || 'vcap.api'
         env['rack.logger'] = Steno.logger(logger_name)
 
-        @request_guid = env['X_VCAP_REQUEST_ID']
-        @request_guid ||= env['X_REQUEST_ID']
+        @request_guid = env['HTTP_X_VCAP_REQUEST_ID']
+        @request_guid ||= env['HTTP_X_REQUEST_ID']
 
         # we append a new guid to the request because we have no idea if the
         # caller is really going to be giving us a unique guid, i.e. they might

@@ -16,6 +16,10 @@ describe 'Sinatra::VCAP' do
 
     vcap_configure :logger_name => 'vcap_spec'
 
+    def in_test_mode?
+      false
+    end
+
     get '/' do
       'ok'
     end
@@ -131,7 +135,6 @@ describe 'Sinatra::VCAP' do
 
   describe 'accessing a route that throws a low level exception' do
     before do
-      TestApp.any_instance.stub(:in_test_mode?).and_return(false)
       Steno.logger('vcap_spec').should_receive(:error).once
       get '/div_0'
     end
@@ -165,7 +168,6 @@ describe 'Sinatra::VCAP' do
 
   describe 'accessing a route that throws a vcap error' do
     before do
-      TestApp.any_instance.stub(:in_test_mode?).and_return(false)
       Steno.logger('vcap_spec').should_receive(:info).once
       get '/vcap_error'
     end
@@ -185,7 +187,6 @@ describe 'Sinatra::VCAP' do
 
   describe 'accessing a route that throws a StructuredError' do
     before do
-      TestApp.any_instance.stub(:in_test_mode?).and_return(false)
       Steno.logger('vcap_spec').should_receive(:info).once
       get '/structured_error'
     end
@@ -216,7 +217,7 @@ describe 'Sinatra::VCAP' do
 
   describe 'caller provided x-vcap-request-id' do
     before do
-      get '/request_id', {}, {'X_VCAP_REQUEST_ID' => 'abcdef'}
+      get '/request_id', {}, {'HTTP_X_VCAP_REQUEST_ID' => 'abcdef'}
     end
 
     it 'should set the X-VCAP-Request-ID to the caller specified value' do
@@ -232,7 +233,7 @@ describe 'Sinatra::VCAP' do
 
   describe 'caller provided x-request-id' do
     before do
-      get '/request_id', {}, {'X_REQUEST_ID' => 'abcdef'}
+      get '/request_id', {}, {'HTTP_X_REQUEST_ID' => 'abcdef'}
     end
 
     it 'should set the X-VCAP-Request-ID to the caller specified value' do
@@ -248,10 +249,10 @@ describe 'Sinatra::VCAP' do
 
   describe 'caller provided x-request-id and x-vcap-request-id' do
     before do
-      get '/request_id', {}, {'X_REQUEST_ID' => 'abc', 'X_VCAP_REQUEST_ID' => 'def'}
+      get '/request_id', {}, {'HTTP_X_REQUEST_ID' => 'abc', 'HTTP_X_VCAP_REQUEST_ID' => 'def'}
     end
 
-    it 'should set the X-VCAP-Request-ID to the caller specified value of X_VCAP_REQUEST_ID' do
+    it 'should set the X-VCAP-Request-ID to the caller specified value of X-VCAP-Request-ID' do
       last_response.status.should == 200
       last_response.headers['X-VCAP-Request-ID'].should match /def::.*/
     end

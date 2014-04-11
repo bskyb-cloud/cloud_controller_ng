@@ -21,7 +21,7 @@ gem 'vcap-concurrency', git: 'https://github.com/cloudfoundry/vcap-concurrency.g
 gem 'cf-uaa-lib', '~> 1.3.7', git: 'https://github.com/cloudfoundry/cf-uaa-lib.git', ref: '8d34eede'
 gem 'cf-message-bus', git: 'https://github.com/cloudfoundry/cf-message-bus.git'
 gem 'vcap_common', '~> 4.0'
-gem 'cf-registrar', git: 'https://github.com/cloudfoundry/cf-registrar.git'
+gem 'cf-registrar', '~> 1.0.1', git: 'https://github.com/cloudfoundry/cf-registrar.git'
 gem 'allowy'
 gem 'loggregator_emitter', '~> 3.0'
 gem 'talentbox-delayed_job_sequel'
@@ -40,15 +40,15 @@ group :operations do
 end
 
 group :test do
-  gem 'rspec-instafail'
-  gem 'rubocop'
   gem 'debugger'
-  gem 'rspec'
-  gem 'rspec_api_documentation'
-  gem 'machinist', '~> 1.0.6'
-  gem 'webmock'
-  gem 'timecop'
-  gem 'rack-test'
-  gem 'parallel_tests'
   gem 'fakefs', require: 'fakefs/safe'
+  gem 'machinist', '~> 1.0.6'
+  gem 'parallel_tests'
+  gem 'rack-test'
+  gem 'rspec'
+  gem 'rspec-instafail'
+  gem 'rspec_api_documentation'
+  gem 'rubocop'
+  gem 'timecop'
+  gem 'webmock'
 end

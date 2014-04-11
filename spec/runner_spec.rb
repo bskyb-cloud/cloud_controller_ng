@@ -92,7 +92,7 @@ module VCAP::CloudController
 
         it "starts handling hm9000 requests" do
           hm9000respondent = double(:hm9000respondent)
-          expect(HM9000Respondent).to receive(:new).with(DeaClient, message_bus, true).and_return(hm9000respondent)
+          expect(HM9000Respondent).to receive(:new).with(DeaClient, message_bus).and_return(hm9000respondent)
           expect(hm9000respondent).to receive(:handle_requests)
           subject.run!
         end
@@ -227,6 +227,7 @@ module VCAP::CloudController
         subject.should_receive(:trap).with("TERM")
         subject.should_receive(:trap).with("INT")
         subject.should_receive(:trap).with("QUIT")
+        subject.should_receive(:trap).with("USR2")
         subject.trap_signals
       end
 
@@ -245,9 +246,18 @@ module VCAP::CloudController
           callbacks << blk
         end
 
+        subject.should_receive(:trap).with("USR2") do |_, &blk|
+          callbacks << blk
+        end
+
         subject.trap_signals
 
         subject.should_receive(:stop!).exactly(3).times
+
+        registrar = double(:registrar)
+        subject.should_receive(:router_registrar).and_return(registrar)
+        expect(registrar).to receive(:shutdown)
+
         callbacks.each(&:call)
       end
     end

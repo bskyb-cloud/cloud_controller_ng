@@ -267,7 +267,6 @@ module VCAP::CloudController
         )
 
         ManagedServiceInstance.any_instance.stub(:save).and_raise
-        Controller.any_instance.stub(:in_test_mode?).and_return(false)
 
         post "/v2/service_instances", req, json_headers(headers_for(developer))
 
@@ -276,20 +275,25 @@ module VCAP::CloudController
       end
 
       context 'when the model save and the subsequent deprovision both raise errors' do
-        it 'raises the original error' do
+        let(:save_error_text) { "InvalidRequest" }
+        let(:deprovision_error_text) { "NotAuthorized" }
+
+        before do
+          allow(client).to receive(:deprovision).and_raise(Errors::ApiError.new_from_details(deprovision_error_text))
+          allow_any_instance_of(ManagedServiceInstance).to receive(:save).and_raise(Errors::ApiError.new_from_details(save_error_text))
+        end
+
+        it 'raises the save error' do
           req = Yajl::Encoder.encode(
             :name => 'foo',
             :space_guid => space.guid,
             :service_plan_guid => plan.guid
           )
 
-          client.stub(:deprovision).and_raise(StandardError, 'deprovision')
-          ManagedServiceInstance.any_instance.stub(:save).and_raise(StandardError, 'save')
-          Controller.any_instance.stub(:in_test_mode?).and_return(true)
+          post "/v2/service_instances", req, json_headers(headers_for(developer))
 
-          expect {
-            post "/v2/service_instances", req, json_headers(headers_for(developer))
-          }.to raise_error(StandardError, "save")
+          expect(last_response.body).to_not match(deprovision_error_text)
+          expect(last_response.body).to match(save_error_text)
         end
       end
 
@@ -496,18 +500,13 @@ module VCAP::CloudController
         context 'when the service gateway returns a 409' do
           before do
             # Stub 409
-            VCAP::CloudController::ServiceBrokers::V1::HttpClient.unstub(:new)
+            VCAP::Services::ServiceBrokers::V1::HttpClient.unstub(:new)
 
             guid = service_instance.broker_provided_id
             path = "/gateway/v1/configurations/#{guid}"
             uri = URI(service.url + path)
-            #uri.user = service.service_broker.auth_username
-            #uri.password = service.service_broker.auth_password
 
             stub_request(:delete, uri.to_s).to_return(body: '{"description": "service gateway error"}', status: 409)
-
-            #fake_broker_client = VCAP::CloudController::Services::V1::HttpClient.new
-            #fake_broker_client.stub(:deprovision).and_raise
           end
 
           it 'forwards the error message from the service gateway' do
@@ -564,6 +563,13 @@ module VCAP::CloudController
         it 'returns an error saying that the user is not authenticated' do
           get "/v2/service_instances/#{instance.guid}/permissions", {}, json_headers(headers_for(developer))
           expect(last_response.status).to eq(401)
+        end
+      end
+
+      context 'when the service instance does not exist' do
+        it 'returns an error saying the instance was not found' do
+          get '/v2/service_instances/nonexistent_instance/permissions', {}, json_headers(headers_for(developer))
+          expect(last_response.status).to eql 404
         end
       end
     end
