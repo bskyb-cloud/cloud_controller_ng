@@ -8,6 +8,7 @@ module VCAP::CloudController
     define_schema do
       {
         :external_port => Integer,
+        :external_protocol => String,
         :info => {
           :name            => String,
           :build           => String,
@@ -72,6 +73,7 @@ module VCAP::CloudController
         :staging => {
           :timeout_in_seconds => Fixnum,
           optional(:minimum_staging_memory_mb) => Fixnum,
+          optional(:minimum_staging_disk_mb) => Fixnum,
           :auth => {
             :user => String,
             :password => String,
@@ -160,7 +162,8 @@ module VCAP::CloudController
             optional("locked") => bool,
             optional("position") => Integer,
           }
-        ]
+        ],
+        optional(:app_bits_upload_grace_period_in_seconds) => Integer
       }
     end
 
@@ -189,11 +192,14 @@ module VCAP::CloudController
         @message_bus = message_bus
         stager_pool = StagerPool.new(@config, message_bus)
         dea_pool = DeaPool.new(message_bus)
-
-        AppObserver.configure(@config, message_bus, dea_pool, stager_pool)
-
         blobstore_url_generator = CloudController::DependencyLocator.instance.blobstore_url_generator
+        diego_client = DiegoClient.new(message_bus, blobstore_url_generator)
+
         DeaClient.configure(@config, message_bus, dea_pool, stager_pool, blobstore_url_generator)
+
+        StagingCompletionHandler.new(message_bus, diego_client).subscribe!
+
+        AppObserver.configure(@config, message_bus, dea_pool, stager_pool,diego_client)
 
         LegacyBulk.configure(@config, message_bus)
       end
@@ -220,6 +226,15 @@ module VCAP::CloudController
         config[:directories] ||= {}
         config[:billing_event_writing_enabled] = true if config[:billing_event_writing_enabled].nil?
         config[:skip_cert_verify] = false if config[:skip_cert_verify].nil?
+        config[:app_bits_upload_grace_period_in_seconds] ||= 0
+        sanitize(config)
+      end
+
+      private
+
+      def sanitize(config)
+        grace_period = config[:app_bits_upload_grace_period_in_seconds]
+        config[:app_bits_upload_grace_period_in_seconds] = 0 if grace_period < 0
         config
       end
     end

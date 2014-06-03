@@ -30,13 +30,13 @@ module VCAP::CloudController
         it "maintains the after_guid in the next_url" do
           get "/v2/app_usage_events?after_guid=#{@event1.guid}&results-per-page=1", {}, admin_headers
           expect(last_response).to be_successful
-          expect(decoded_response.fetch("next_url")).to eql("/v2/app_usage_events?after_guid=#{@event1.guid}&page=2&results-per-page=1")
+          expect(decoded_response.fetch("next_url")).to eql("/v2/app_usage_events?after_guid=#{@event1.guid}&order-direction=asc&page=2&results-per-page=1")
         end
 
         it "maintains the after_guid in the prev_url" do
           get "/v2/app_usage_events?after_guid=#{@event1.guid}&results-per-page=1&page=2", {}, admin_headers
           expect(last_response).to be_successful
-          expect(decoded_response.fetch("prev_url")).to eql("/v2/app_usage_events?after_guid=#{@event1.guid}&page=1&results-per-page=1")
+          expect(decoded_response.fetch("prev_url")).to eql("/v2/app_usage_events?after_guid=#{@event1.guid}&order-direction=asc&page=1&results-per-page=1")
         end
 
         it "returns 400 when guid does not exist" do
@@ -81,9 +81,12 @@ module VCAP::CloudController
 
       it "returns 403 as a non-admin" do
         user = User.make
-        post "/v2/app_usage_events/destructively_purge_all_and_reseed_started_apps", {}, headers_for(user)
+        expect {
+          post "/v2/app_usage_events/destructively_purge_all_and_reseed_started_apps", {}, headers_for(user)
+        }.to_not change {
+          AppUsageEvent.count
+        }
         expect(last_response.status).to eq(403)
-        expect(AppUsageEvent.count).to eq(1)
       end
     end
   end

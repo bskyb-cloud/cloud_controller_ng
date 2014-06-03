@@ -13,12 +13,6 @@ module VCAP::CloudController
 
     query_parameters :name, :space_guid, :service_plan_guid, :service_binding_guid, :gateway_name
 
-    def requested_space
-      space = Space.filter(:guid => request_attrs['space_guid']).first
-      raise Errors::ApiError.new_from_details("ServiceInstanceInvalid", 'not a valid space') unless space
-      space
-    end
-
     def self.translate_validation_exception(e, attributes)
       space_and_name_errors = e.errors.on([:space_id, :name])
       quota_errors = e.errors.on(:org)
@@ -123,7 +117,7 @@ module VCAP::CloudController
 
     get '/v2/service_instances/:guid/permissions', :permissions
     def permissions(guid)
-      find_guid_and_validate_access(:create, guid, ServiceInstance)
+      find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
       [HTTP::OK, {}, JSON.generate({ manage: true })]
     rescue Errors::ApiError => e
       if e.name == "NotAuthorized"
@@ -142,6 +136,12 @@ module VCAP::CloudController
     define_routes
 
     private
+
+    def requested_space
+      space = Space.filter(:guid => request_attrs['space_guid']).first
+      raise Errors::ApiError.new_from_details("ServiceInstanceInvalid", 'not a valid space') unless space
+      space
+    end
 
     def current_user_can_manage_plan(plan_guid)
       ServicePlan.user_visible(SecurityContext.current_user, SecurityContext.admin?).filter(:guid => plan_guid).count > 0
