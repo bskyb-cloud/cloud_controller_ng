@@ -2,7 +2,6 @@ require "spec_helper"
 
 module VCAP::CloudController
   describe ServicePlansController, :services, type: :controller do
-    include_examples "uaa authenticated api", path: "/v2/service_plans"
     include_examples "enumerating objects", path: "/v2/service_plans", model: ServicePlan
     include_examples "reading a valid object", path: "/v2/service_plans", model: ServicePlan,
                      basic_attributes: %w(name free description service_guid extra unique_id)
@@ -162,10 +161,81 @@ module VCAP::CloudController
         expect(parse(last_response.body)["entity"]).to include("public" => true)
       end
     end
+
+    describe 'service plans active flag' do
+      let!(:active_plan) { ServicePlan.make(public: true, active: true) }
+      let!(:inactive_plan) { ServicePlan.make(public: true, active: false) }
+
+      context 'when the user is admin' do
+        it 'returns both active and inactive plans' do
+          get '/v2/service_plans', {}, admin_headers
+          last_response.status.should eq(200)
+          expect(parse(last_response.body)['total_results']).to eq(2)
+        end
+
+        it 'returns just the inactive plans when filtered for active:false' do
+          # Sequel stores 'true' and 'false' as 't' and 'f' in sqlite, so with
+          # sqlite, instead of 'true' or 'false', the parameter must be specified
+          # as 't' or 'f'. But in postgresql, either way is ok.
+          get '/v2/service_plans?q=active:f', {}, admin_headers
+          last_response.status.should eq(200)
+          expect(parse(last_response.body)['total_results']).to eq(1)
+          expect(parse(last_response.body)['resources'].first['entity']['active']).to eq(false)
+        end
+      end
+
+      it 'returns just the active plans when the user is not admin' do
+        get '/v2/service_plans', {}, headers_for(developer)
+        last_response.status.should eq(200)
+        expect(parse(last_response.body)['total_results']).to eq(1)
+        expect(parse(last_response.body)['resources'].first['entity']['active']).to eq(true)
+      end
+    end
+  end
+
+  describe "GET", "/v2/service_plans" do
+    before do
+      ServicePlan.make(active: true, public: true)
+      ServicePlan.make(active: false, public: true)
+      ServicePlan.make(active: true, public: false)
+      ServicePlan.make(active: false, public: false)
+    end
+
+    context 'when the user is not logged in' do
+      let(:headers) { headers_for(nil) }
+
+      it 'returns plans that are public and active' do
+        get "/v2/service_plans", {}, headers
+        expect(last_response.status).to eq 200
+
+        public_and_active_plans = ServicePlan.where(active: true, public: true).all
+        expected_guids = public_and_active_plans.map(&:guid)
+
+        returned_guids = decoded_response.fetch('resources').map do |res|
+          res['metadata']['guid']
+        end
+
+        expect(returned_guids).to eq expected_guids
+      end
+
+      it 'does not allow the unauthed user to use inline-relations-depth' do
+        get "/v2/service_plans?inline-relations-depth=1", {}, headers
+        plans = decoded_response.fetch('resources').map{ |plan| plan['entity'] }
+        plans.each do |plan|
+          expect(plan['service_instances']).to be_nil
+        end
+      end
+    end
   end
 
   describe "POST", "/v2/service_plans" do
     let(:service) { Service.make }
+
+    it 'requires authentication' do
+      post '/v2/service_plans', '{}', headers_for(nil)
+      expect(last_response.status).to eq 401
+    end
+
     it "accepts a request with unique_id" do
       payload = ServicePlansController::CreateMessage.new(
         :name => 'foo',
@@ -195,6 +265,12 @@ module VCAP::CloudController
   end
 
   describe "PUT", "/v2/service_plans/:guid" do
+    it 'requires authentication' do
+      plan = ServicePlan.make
+      put "/v2/service_plans/#{plan.guid}", '{}', headers_for(nil)
+      expect(last_response.status).to eq 401
+    end
+
     it "updates the unique_id attribute" do
       service_plan = ServicePlan.make
       old_unique_id = service_plan.unique_id
@@ -227,6 +303,11 @@ module VCAP::CloudController
   describe "DELETE", "/v2/service_plans/:guid" do
 
     let(:service_plan) { ServicePlan.make }
+
+    it 'requires authentication' do
+      delete "/v2/service_plans/#{service_plan.guid}", '{}', headers_for(nil)
+      expect(last_response.status).to eq 401
+    end
 
     it "should prevent recursive deletions if there are any instances" do
       ManagedServiceInstance.make(:service_plan => service_plan)

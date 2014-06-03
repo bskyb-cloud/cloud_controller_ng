@@ -2,6 +2,11 @@ require 'spec_helper'
 
 module VCAP::CloudController
   describe ServiceInstanceAccess, type: :access do
+    before do
+      token = {'scope' => 'cloud_controller.read cloud_controller.write'}
+      VCAP::CloudController::SecurityContext.stub(:token).and_return(token)
+    end
+
     subject(:access) { ServiceInstanceAccess.new(double(:context, user: user, roles: roles)) }
     let(:user) { VCAP::CloudController::User.make }
     let(:roles) { double(:roles, :admin? => false, :none? => false, :present? => true) }
@@ -86,6 +91,44 @@ module VCAP::CloudController
       let(:user) { nil }
       let(:roles) { double(:roles, :admin? => false, :none? => true, :present? => false) }
       it_behaves_like :no_access
+    end
+
+    describe 'a user with full org and space permissions using a client with limited scope' do
+      before do
+        token = { 'scope' => scope }
+        VCAP::CloudController::SecurityContext.stub(:token).and_return(token)
+        org.add_user(user)
+        org.add_manager(user)
+        org.add_billing_manager(user)
+        org.add_auditor(user)
+        space.add_manager(user)
+        space.add_developer(user)
+        space.add_auditor(user)
+      end
+
+      context 'with only cloud_controller.read scope' do
+        let(:scope) { 'cloud_controller.read' }
+        it_behaves_like :read_only
+        it { should allow_op_on_object(:read_permissions, object) }
+      end
+
+      context 'with only cloud_controller_service_permissions.read scope' do
+       let(:scope) { 'cloud_controller_service_permissions.read' }
+
+        it 'allows the user to read the permissions of the service instance' do
+          expect(subject).to allow_op_on_object(:read_permissions, object)
+        end
+
+        # All other actions are disallowed
+        it_behaves_like :no_access
+      end
+
+      context 'with no cloud_controller scopes' do
+        let(:scope) { '' }
+
+        it_behaves_like :no_access
+        it { should_not allow_op_on_object(:read_permissions, object) }
+      end
     end
   end
 end

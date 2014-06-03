@@ -528,12 +528,6 @@ module VCAP::CloudController::SpecHelper
   end
 end
 
-class CF::UAA::Misc
-  def self.validation_key(*args)
-    raise CF::UAA::TargetError.new('error' => 'unauthorized')
-  end
-end
-
 Dir[File.expand_path("../support/**/*.rb", __FILE__)].each { |file| require file }
 
 RSpec.configure do |rspec_config|
@@ -575,6 +569,7 @@ RSpec.configure do |rspec_config|
 
   rspec_config.before :all do
     VCAP::CloudController::SecurityContext.clear
+
     RspecApiDocumentation.configure do |c|
       c.format = [:html, :json]
       c.api_name = "Cloud Foundry API"
@@ -608,7 +603,7 @@ RSpec.configure do |rspec_config|
         $spec_env.reset_database_with_seeds
       end
     else
-      Sequel::Model.db.transaction(rollback: :always, savepoint: true) do
+      Sequel::Model.db.transaction(rollback: :always) do
         example.run
       end
     end
@@ -621,4 +616,33 @@ end
 # is de facto by id. In postgres the order is random unless specified.
 class VCAP::CloudController::App
   set_dataset dataset.order(:guid)
+end
+
+class VCAP::CloudController::ModelManager
+  def initialize(*models)
+    @models = models
+    @instances = []
+  end
+
+  def record
+    raise StandardError "Recording already enabled" if @models.nil?
+
+    @models.each do |model|
+      original_make = model.method(:make)
+      model.stub(:make) do |*args, &block|
+        result = original_make.call(*args, &block)
+        @instances << result unless result.nil?
+        result
+      end
+    end
+    @models = nil
+  end
+
+  def destroy
+    raise StandardError "Model instances already destroyed" if @instances.nil?
+    @instances.each do |instance|
+      instance.destroy
+    end
+    @instances = nil
+  end
 end
