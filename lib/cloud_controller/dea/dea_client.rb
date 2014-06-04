@@ -76,7 +76,7 @@ module VCAP::CloudController
           msg = "Request failed for app: #{app.name}, instance: #{index}"
           msg << " as the instance is out of range."
 
-          raise SshError.new(msg)
+          raise Errors::ApiError.new_from_details("SshError", msg)
         end
         
         message = {
