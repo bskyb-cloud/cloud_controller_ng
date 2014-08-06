@@ -65,6 +65,30 @@ module VCAP::Services::ServiceBrokers::V2
     rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
       raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
     end
+    
+    def get_schema(instance)
+      path = "/v2/service_instances/#{instance.guid}/schema"
+      
+      response = @http_client.get(path)
+      
+      parse_response(:get, path, response)
+      
+    rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
+      raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
+    end
+    
+    def apply_schema(instance, schema)
+      path = "/v2/service_instances/#{instance.guid}/schema"
+      
+      response = @http_client.put(path, {
+         schema: schema   
+      })
+      
+      parse_response(:delete, path, response)
+      
+    rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
+      raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
+    end
 
     private
 

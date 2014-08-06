@@ -115,6 +115,33 @@ module VCAP::CloudController
       object_renderer.render_json(self.class, service_instance, @opts)
     end
 
+    get "/v2/service_instances/:guid/schema", :get_schema
+    def get_schema(guid)
+      
+      service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
+      response = service_instance.client.get_schema(service_instance)
+      
+      [HTTP::OK, {}, response.to_json]
+    end
+
+    class ApplySchemaMessage < VCAP::RestAPI::Message
+      required :schema, String
+    end
+            
+    put "/v2/service_instances/:guid/schema", :apply_schema
+    def apply_schema(guid)
+      json_msg = self.class::ApplySchemaMessage.decode(body)
+      @request_attrs = json_msg.extract(:stringify_keys => true)
+      
+      raise Errors::ApiError.new_from_details("InvalidRequest") unless request_attrs
+      raise Errors::ApiError.new_from_details("InvalidRequest") unless request_attrs["schema"]
+      
+      service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
+      service_instance.client.apply_schema(service_instance, request_attrs["schema"])
+      
+      [HTTP::OK, {}, { }.to_json]
+    end
+
     get '/v2/service_instances/:guid/permissions', :permissions
     def permissions(guid)
       find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
