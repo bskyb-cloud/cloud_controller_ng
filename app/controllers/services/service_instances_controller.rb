@@ -124,20 +124,20 @@ module VCAP::CloudController
       [HTTP::OK, {}, response.to_json]
     end
 
-    class ApplySchemaMessage < VCAP::RestAPI::Message
+    class SetSchemaMessage < VCAP::RestAPI::Message
       required :schema, String
     end
             
-    put "/v2/service_instances/:guid/schema", :apply_schema
+    put "/v2/service_instances/:guid/schema", :set_schema
     def apply_schema(guid)
-      json_msg = self.class::ApplySchemaMessage.decode(body)
+      json_msg = self.class::SetSchemaMessage.decode(body)
       @request_attrs = json_msg.extract(:stringify_keys => true)
       
       raise Errors::ApiError.new_from_details("InvalidRequest") unless request_attrs
       raise Errors::ApiError.new_from_details("InvalidRequest") unless request_attrs["schema"]
       
       service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
-      service_instance.client.apply_schema(service_instance, request_attrs["schema"])
+      service_instance.client.set_schema(service_instance, request_attrs["schema"])
       
       [HTTP::OK, {}, { }.to_json]
     end

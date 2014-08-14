@@ -77,7 +77,7 @@ module VCAP::Services::ServiceBrokers::V2
       raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
     end
     
-    def apply_schema(instance, schema)
+    def set_schema(instance, schema)
       path = "/v2/service_instances/#{instance.guid}/schema"
       
       response = @http_client.put(path, {
