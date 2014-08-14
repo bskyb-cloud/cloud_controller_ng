@@ -422,6 +422,64 @@ module VCAP::Services::ServiceBrokers::V2
         end
       end
     end
+    
+    
+    
+    describe '#get_schema' do
+      let(:instance) { VCAP::CloudController::ManagedServiceInstance.make }
+
+      let(:response_data) { {} }
+
+      let(:path) { "/v2/service_instances/#{instance.guid}/schema" }
+      let(:response) { double('response') }
+      let(:response_body) { response_data.to_json }
+      let(:code) { '200' }
+      let(:message) { 'OK' }
+
+      before do
+        allow(http_client).to receive(:get).and_return(response)
+        allow(response).to receive(:body).and_return(response_body)
+        allow(response).to receive(:code).and_return(code)
+        allow(response).to receive(:message).and_return(message)
+      end
+
+      it 'makes a get schema request' do
+        client.get_schema(instance)
+        
+        expect(http_client).to have_received(:get).
+                                 with("/v2/service_instances/#{instance.guid}/schema")
+      end
+    end
+    
+    
+    describe '#set_schema' do
+      let(:instance) { VCAP::CloudController::ManagedServiceInstance.make }
+
+      let(:response_data) { {} }
+
+      let(:path) { "/v2/service_instances/#{instance.guid}/schema" }
+      let(:response) { double('response') }
+      let(:response_body) { response_data.to_json }
+      let(:code) { '200' }
+      let(:message) { 'OK' }
+
+      before do
+        allow(http_client).to receive(:put).and_return(response)
+
+        allow(response).to receive(:body).and_return(response_body)
+        allow(response).to receive(:code).and_return(code)
+        allow(response).to receive(:message).and_return(message)
+      end
+
+      it 'makes a set_schema request with correct data' do
+        client.set_schema(instance, "www.google.com")
+
+        expect(http_client).to have_received(:put).
+                                 with("/v2/service_instances/#{instance.guid}/schema", anything())
+      end
+    end
+    
+    
   end
 
 end
