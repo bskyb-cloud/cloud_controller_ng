@@ -84,7 +84,7 @@ module VCAP::Services::ServiceBrokers::V2
          schema: schema   
       })
       
-      parse_response(:delete, path, response)
+      parse_response(:put, path, response)
       
     rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
       raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
