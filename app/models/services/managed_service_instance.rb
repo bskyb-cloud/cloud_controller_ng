@@ -47,8 +47,6 @@ module VCAP::CloudController
       end
     end
 
-    default_order_by  :id
-
     many_to_one :service_plan
 
     export_attributes :name, :credentials, :service_plan_guid,
@@ -68,10 +66,23 @@ module VCAP::CloudController
 
     add_association_dependencies :service_bindings => :destroy
 
+    def validation_policies
+      if space
+        [
+          MaxServiceInstancePolicy.new(self, organization.managed_service_instances.count, organization.quota_definition, :service_instance_quota_exceeded),
+          MaxServiceInstancePolicy.new(self, space.managed_service_instances.count, space.space_quota_definition, :service_instance_space_quota_exceeded),
+          PaidServiceInstancePolicy.new(self, organization.quota_definition, :paid_services_not_allowed_by_quota),
+          PaidServiceInstancePolicy.new(self, space.space_quota_definition, :paid_services_not_allowed_by_space_quota)
+        ]
+      else
+        []
+      end
+    end
+
     def validate
       super
       validates_presence :service_plan
-      check_quota
+      validation_policies.map(&:validate)
     end
 
     def after_create
@@ -108,25 +119,14 @@ module VCAP::CloudController
       )
     end
 
-    def check_quota
-      if space
-        unless service_plan
-          errors.add(:space, :quota_exceeded)
-          return
-        end
-
-        MaxServiceInstancePolicy.new(organization, self).check_quota
-      end
-    end
-
     def gateway_data=(val)
-      str = Yajl::Encoder.encode(val)
+      str = MultiJson.dump(val)
       super(str)
     end
 
     def gateway_data
       val = super
-      val = Yajl::Parser.parse(val) if val
+      val = MultiJson.load(val) if val
       val
     end
 

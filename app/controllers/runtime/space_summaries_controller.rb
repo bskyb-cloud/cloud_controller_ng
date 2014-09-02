@@ -7,54 +7,49 @@ module VCAP::CloudController
     def summary(guid)
       space = find_guid_and_validate_access(:read, guid)
 
-      apps = {}
-      space.apps.each do |app|
-        apps[app.guid] = app_summary(app)
-      end
+      MultiJson.dump(space_summary(space), pretty: true)
+    end
 
-      started_apps = space.apps.select(&:started?)
-      unless started_apps.empty?
-        health_manager_client.healthy_instances(started_apps).each do |app_guid, num|
-          apps[app_guid][:running_instances] = num
-        end
-      end
+    protected
 
-      space.apps.each do |app|
-        if app.stopped?
-          apps[app.guid][:running_instances] = 0
-        end
-      end
+    attr_reader :instances_reporter
 
-      services_summary = space.service_instances.map do |instance|
-        instance.as_summary_json
-      end
-
-      Yajl::Encoder.encode(
-        guid: space.guid,
-        name: space.name,
-        apps: apps.values,
-        services: services_summary,
-      )
+    def inject_dependencies(dependencies)
+      super
+      @instances_reporter = dependencies[:instances_reporter]
     end
 
     private
 
-    attr_reader :health_manager_client
-
-    def inject_dependencies(dependencies)
-      super
-      @health_manager_client = dependencies[:health_manager_client]
+    def space_summary(space)
+      {
+        guid:     space.guid,
+        name:     space.name,
+        apps:     app_summary(space),
+        services: services_summary(space),
+      }
     end
 
-    def app_summary(app)
-      {
-        guid: app.guid,
-        urls: app.routes.map(&:fqdn),
-        routes: app.routes.map(&:as_summary_json),
-        service_count: app.service_bindings_dataset.count,
-        service_names: app.service_bindings_dataset.map(&:service_instance).map(&:name),
-        running_instances: nil,
-      }.merge(app.to_hash)
+    def app_summary(space)
+      instances = instances_reporter.number_of_starting_and_running_instances_for_apps(space.apps)
+      space.apps.collect do |app|
+        {
+          guid:              app.guid,
+          urls:              app.routes.map(&:fqdn),
+          routes:            app.routes.map(&:as_summary_json),
+          service_count:     app.service_bindings_dataset.count,
+          service_names:     app.service_bindings_dataset.map(&:service_instance).map(&:name),
+          running_instances: instances[app.guid],
+        }.merge(app.to_hash)
+      end
+    rescue Errors::InstancesUnavailable => e
+      raise VCAP::Errors::ApiError.new_from_details("InstancesUnavailable", e.to_s)
+    end
+
+    def services_summary(space)
+      space.service_instances.map do |instance|
+        instance.as_summary_json
+      end
     end
   end
 end

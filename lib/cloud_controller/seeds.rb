@@ -3,7 +3,8 @@ module VCAP::CloudController
     class << self
       def write_seed_data(config)
         create_seed_quota_definitions(config)
-        create_seed_stacks(config)
+        create_seed_stacks
+        create_seed_security_groups(config)
         system_org = create_seed_organizations(config)
         create_seed_domains(config, system_org)
       end
@@ -23,7 +24,7 @@ module VCAP::CloudController
         end
       end
 
-      def create_seed_stacks(_)
+      def create_seed_stacks
         Stack.populate
       end
 
@@ -70,8 +71,26 @@ module VCAP::CloudController
               Steno.logger("cc.seeds").warn("seeds.system-domain.collision", organization: domain.owning_organization)
             end
           else
-            Domain.create(desired_attrs.merge(:name => config[:system_domain]))
+            PrivateDomain.create(desired_attrs.merge(:name => config[:system_domain]))
           end
+        end
+      end
+
+      def create_seed_security_groups(config)
+        return unless config[:security_group_definitions] && SecurityGroup.count == 0
+
+        config[:security_group_definitions].each do |security_group|
+          seed_security_group = security_group.dup
+
+          if config[:default_staging_security_groups].include?(security_group["name"])
+            seed_security_group["staging_default"] = true
+          end
+
+          if config[:default_running_security_groups].include?(security_group["name"])
+            seed_security_group["running_default"] = true
+          end
+
+          SecurityGroup.create(seed_security_group)
         end
       end
     end

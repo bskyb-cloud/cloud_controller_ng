@@ -39,6 +39,9 @@ module VCAP::Services::ServiceBrokers::V2
       parsed_response = parse_response(:put, path, response)
 
       binding.credentials = parsed_response['credentials']
+      if parsed_response.has_key?('syslog_drain_url')
+        binding.syslog_drain_url = parsed_response['syslog_drain_url']
+      end
     end
 
     def unbind(binding)
@@ -107,8 +110,8 @@ module VCAP::Services::ServiceBrokers::V2
 
         when 200..299
           begin
-            response_hash = Yajl::Parser.parse(response.body)
-          rescue Yajl::ParseError
+            response_hash = MultiJson.load(response.body)
+          rescue MultiJson::ParseError
           end
 
           unless response_hash.is_a?(Hash)

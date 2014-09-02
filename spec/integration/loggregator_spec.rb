@@ -2,7 +2,7 @@ require "spec_helper"
 require "securerandom"
 
 
-describe "Cloud controller Loggregator Integration", :type => :integration do
+describe "Cloud controller Loggregator Integration", type: :integration do
   before(:all) do
     @loggregator_server = FakeLoggregatorServer.new(12345)
     @loggregator_server.start
@@ -50,7 +50,7 @@ describe "Cloud controller Loggregator Integration", :type => :integration do
     app_id = app.json_body["metadata"]["guid"]
     messages = @loggregator_server.messages
 
-    expect(messages).to have(1).item
+    expect(messages.size).to eq(1)
 
     message = messages.first
     expect(message.message).to eq "Created app with guid #{app_id}"

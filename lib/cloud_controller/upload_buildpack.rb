@@ -6,29 +6,42 @@ module VCAP::CloudController
       @buildpack_blobstore = blobstore
     end
 
-    def upload_bits(buildpack, bits_file, new_filename)
+    def upload_buildpack(buildpack, bits_file, new_filename)
       return false if buildpack.locked
 
       sha1 = File.new(bits_file).hexdigest
       new_key = "#{buildpack.guid}_#{sha1}"
+      missing_bits = buildpack.key && !buildpack_blobstore.exists?(buildpack.key)
 
-      return false if !new_bits?(buildpack, new_key) && !new_filename?(buildpack, new_filename)
+      return false if !new_bits?(buildpack, new_key) && !new_filename?(buildpack, new_filename) && !missing_bits
 
       # replace blob if new
-      if new_bits?(buildpack, new_key)
+      if missing_bits || new_bits?(buildpack, new_key)
         buildpack_blobstore.cp_to_blobstore(bits_file, new_key)
-        old_buildpack_key = buildpack.key
       end
 
-      Buildpack.db.transaction(savepoint: true) do
-        buildpack.lock!
-        buildpack.update_from_hash(key: new_key, filename: new_filename)
+      old_buildpack_key = nil
+
+      begin
+        Buildpack.db.transaction do
+          buildpack.lock!
+          old_buildpack_key = buildpack.key
+          buildpack.update_from_hash(key: new_key, filename: new_filename)
+        end
+      rescue Sequel::Error
+        BuildpackBitsDelete.delete_when_safe(new_key, 0)
+        return false
       end
 
-      staging_timeout = VCAP::CloudController::Config.config[:staging][:timeout_in_seconds]
-      BuildpackBitsDelete.delete_when_safe(old_buildpack_key, :buildpack_blobstore, staging_timeout)
-      return true
+      if !missing_bits && old_buildpack_key
+        staging_timeout = VCAP::CloudController::Config.config[:staging][:timeout_in_seconds]
+        BuildpackBitsDelete.delete_when_safe(old_buildpack_key, staging_timeout)
+      end
+
+      true
     end
+
+    private
 
     def new_bits?(buildpack, key)
       return buildpack.key != key
@@ -37,6 +50,5 @@ module VCAP::CloudController
     def new_filename?(buildpack, filename)
       return buildpack.filename != filename
     end
-
   end
 end

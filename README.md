@@ -1,5 +1,6 @@
 [![Build Status](https://travis-ci.org/cloudfoundry/cloud_controller_ng.png)](https://travis-ci.org/cloudfoundry/cloud_controller_ng)
 [![Code Climate](https://codeclimate.com/github/cloudfoundry/cloud_controller_ng.png)](https://codeclimate.com/github/cloudfoundry/cloud_controller_ng)
+[![Test Coverage](https://codeclimate.com/repos/51c3523bf3ea005a650124e6/badges/da59f8dc2c9862d749c6/coverage.png)](https://codeclimate.com/repos/51c3523bf3ea005a650124e6/feed)
 
 # cloud_controller_ng
 
@@ -19,7 +20,7 @@ tables for orgs, spaces, apps, services, service instances, user roles, and more
 
 ### Database (CC_DB)
 
-The Cloud Controller database has been tested with Postgres, Mysql, and Sqlite.
+The Cloud Controller database has been tested with Postgres and Mysql.
 
 ### Blob Store
 
@@ -49,17 +50,44 @@ platform using the NATS message bus. For example, it performs the following usin
 
 ## Testing
 
+**TLDR:** Always run `bundle exec rake` before committing
+
 To maintain a consistent and effective approach to testing, please refer to `spec/README.md` and
 keep it up to date, documenting the purpose of the various types of tests.
 
-By default `rspec` will run test suite with sqlite3 in-memory database;
-however, you can specify connection string via `DB_CONNECTION` environment
-variable to test against postgres and mysql. Examples:
+By default `rspec` will randomly pick between postgres and mysql.
 
-    DB_CONNECTION="postgres://postgres@localhost:5432" rspec
-    DB_CONNECTION="mysql2://root:password@localhost:3306/ccng" rspec
+It will try to connect to those databases with the following connection string:
+postgres: postgres://postgres@localhost:5432/cc_test
+mysql: mysql2://root:password@localhost:3306/cc_test
 
-Travis currently runs 3 build jobs against sqlite, postgres, and mysql.
+rake db:create will create the above database when the `DB` environment variable is set to postgres or mysql.
+You should run this before running rake in order to ensure that the `cc_test` database exists.
+
+You can specify a connection string via `DB_CONNECTION` environment variable to test against postgres
+or mysql. You will need to have a database with `cc_test` as the name. Examples:
+
+    DB_CONNECTION="postgres://postgres@localhost:5432" rake
+    DB_CONNECTION="mysql2://root:password@localhost:3306" rake
+
+You can also specify the full connection string via the `DB_CONNECTION_STRING`
+environment variable. Examples:
+
+    DB_CONNECTION_STRING="postgres://postgres@localhost:5432/cc_test" rake
+    DB_CONNECTION_STRING="mysql2://root:password@localhost:3306/cc_test" rake
+
+If you are running the integration specs (which are included in the full rake),
+and you are specifying DB_CONNECTION or DB_CONNECTION_STRING, you will also
+need to have a second test database with `_integration_cc` as the name suffix.
+
+For example, if you are using:
+
+    DB_CONNECTION_STRING="postgres://postgres@localhost:5432/cc_test"
+
+You will also need a database called:
+
+    `cc_test_integration_cc`
+
 
 ### Running tests on a single file
 
@@ -71,10 +99,6 @@ The development team typically will run the specs to a single file as (e.g.)
 
     bundle exec rake spec
 
-Due to the large number of tests, the rake spec task is configured to run in parallel using [parallel_rspec](https://github.com/grosser/parallel_tests).
-
-Integration and acceptance tests, however, do not support concurrent testing (e.g. starting NATS on the same port at the same time), and are thus run serially.
-
 ## Static Analysis
 
 To help maintain code consistency, rubocop is used to enforce code conventions and best practices.
@@ -83,14 +107,9 @@ To help maintain code consistency, rubocop is used to enforce code conventions a
 
     bundle exec rubocop
 
-Travis currently runs rubocop as part of the CI process.
-
 ## API documentation
 
-To genenerate the API documentation
-
-    bundle exec rspec spec/api/documentation --format RspecApiDocumentation::ApiFormatter
-    open doc/api/index.html
+API documentation for the latest build of master can be found here: http://apidocs.cloudfoundry.org
 
 ## Logs
 

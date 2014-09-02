@@ -22,6 +22,12 @@ app_events:
 app_usage_events:
   cutoff_age_in_days: 31
 
+audit_events:
+  cutoff_age_in_days: 31
+
+failed_jobs:
+  cutoff_age_in_days: 31
+
 default_app_memory: 1024 #mb
 maximum_health_check_timeout: 180
 
@@ -35,9 +41,6 @@ logging:
 message_bus_servers:
   - nats://127.0.0.1:4222
 pid_filename: /tmp/cloud_controller.pid
-
-db:
-  database: "sqlite:///tmp/cloud_controller.db"
 
 bulk_api:
   auth_user: bulk_user
@@ -93,6 +96,7 @@ renderer:
   default_results_per_page: 50
 
 stacks_file: "/tmp/foo"
+default_app_disk_in_mb: 512
 maximum_app_disk_in_mb: 3
 directories:
   some: "value"
@@ -100,3 +104,12 @@ billing_event_writing_enabled: false
 request_timeout_in_seconds: 600
 skip_cert_verify: true
 app_bits_upload_grace_period_in_seconds: 600
+
+security_group_definitions:
+- name: non_allowed
+  rules: []
+
+default_staging_security_groups:
+- non_allowed
+default_running_security_groups:
+- non_allowed

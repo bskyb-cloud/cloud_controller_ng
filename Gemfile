@@ -7,12 +7,15 @@ gem 'rake'
 gem 'bcrypt-ruby'
 gem 'eventmachine', '~> 1.0.0'
 gem 'fog'
+gem 'i18n'
 gem 'nokogiri', '~> 1.6.2'
 gem 'unf'
+gem 'netaddr'
 gem 'rfc822'
-gem 'sequel', '~> 3.48'
+gem 'sequel'
 gem 'sinatra', '~> 1.4'
 gem 'sinatra-contrib'
+gem 'multi_json'
 gem 'yajl-ruby'
 gem 'membrane', '~> 1.0'
 gem 'httpclient'
@@ -26,14 +29,13 @@ gem 'cf-registrar', '~> 1.0.1', git: 'https://github.com/cloudfoundry/cf-registr
 gem 'allowy'
 gem 'loggregator_emitter', '~> 3.0'
 gem 'talentbox-delayed_job_sequel'
-gem 'thin', '~> 1.5.1'
+gem 'thin', '~> 1.6.0'
 gem 'newrelic_rpm'
 gem 'clockwork', require: false
 
 group :db do
   gem 'mysql2'
   gem 'pg'
-  gem 'sqlite3'
 end
 
 group :operations do
@@ -41,15 +43,22 @@ group :operations do
 end
 
 group :test do
+  gem 'codeclimate-test-reporter', require: false
   gem 'debugger'
   gem 'fakefs', require: 'fakefs/safe'
   gem 'machinist', '~> 1.0.6'
   gem 'parallel_tests'
   gem 'rack-test'
-  gem 'rspec'
+  gem 'rspec', '~> 3.0'
   gem 'rspec-instafail'
-  gem 'rspec_api_documentation'
+  gem 'rspec_api_documentation', git: 'https://github.com/zipmark/rspec_api_documentation.git'
+  gem 'rspec-collection_matchers'
+  gem 'rspec-its'
   gem 'rubocop'
   gem 'timecop'
   gem 'webmock'
+end
+
+group :development do
+  gem 'roodi'
 end

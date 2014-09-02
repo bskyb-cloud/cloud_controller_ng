@@ -6,23 +6,27 @@ require "cloud_controller/upload_handler"
 require "cloud_controller/blob_sender/ngx_blob_sender"
 require "cloud_controller/blob_sender/default_blob_sender"
 require "cloud_controller/blob_sender/missing_blob_handler"
+require "cloud_controller/diego/client"
+require "cloud_controller/diego/messenger"
+require "cloud_controller/diego/traditional/protocol"
 
 module CloudController
   class DependencyLocator
     include Singleton
     include VCAP::CloudController
 
-    def initialize(config = VCAP::CloudController::Config.config, message_bus = VCAP::CloudController::Config.message_bus)
+    attr_reader :backends
+
+    def initialize(config = VCAP::CloudController::Config.config,
+                   message_bus = VCAP::CloudController::Config.message_bus,
+                  backends=VCAP::CloudController::Config.backends)
       @config = config
       @message_bus = message_bus
+      @backends = backends
     end
 
     def health_manager_client
-      @health_manager_client ||= HM9000Client.new(@message_bus, @config)
-    end
-
-    def task_client
-      @task_client ||= TaskClient.new(message_bus, blobstore_url_generator)
+      @health_manager_client ||= Dea::HM9000::Client.new(@message_bus, @config)
     end
 
     def droplet_blobstore
@@ -155,6 +159,15 @@ module CloudController
       else
         CloudController::BlobSender::DefaultLocalBlobSender.new(missing_blob_handler)
       end
+    end
+
+    def diego_client
+      @diego_client ||= Diego::Client.new(Diego::ServiceRegistry.new(message_bus))
+    end
+
+
+    def instances_reporter
+      @instances_reporter ||= VCAP::CloudController::CompositeInstancesReporter.new(diego_client, health_manager_client)
     end
 
     private

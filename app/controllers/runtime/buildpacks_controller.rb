@@ -9,6 +9,11 @@ module VCAP::CloudController
 
     query_parameters :name
 
+    def initialize(*args)
+      super
+      @opts.merge!(order_by: :position)
+    end
+
     def self.translate_validation_exception(e, attributes)
       buildpack_errors = e.errors.on(:name)
       if buildpack_errors && buildpack_errors.include?(:unique)
@@ -22,14 +27,8 @@ module VCAP::CloudController
       buildpack = find_guid_and_validate_access(:delete, guid)
       response = do_delete(buildpack)
 
-      BuildpackBitsDelete.delete_when_safe(buildpack.key, :buildpack_blobstore, @config[:staging][:timeout_in_seconds])
+      BuildpackBitsDelete.delete_when_safe(buildpack.key, @config[:staging][:timeout_in_seconds])
       response
-    end
-
-    def update(guid)
-      obj = find_for_update(guid)
-      model.update(obj, @request_attrs)
-      [HTTP::CREATED, object_renderer.render_json(self.class, obj, @opts)]
     end
 
     private

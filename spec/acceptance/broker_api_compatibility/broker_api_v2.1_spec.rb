@@ -2,9 +2,9 @@ require 'spec_helper'
 
 describe 'Service Broker API integration' do
   describe 'v2.1' do
+    include VCAP::CloudController::BrokerApiHelper
 
-    before(:all) { setup_cc }
-    after(:all) { $spec_env.reset_database_with_seeds }
+    before { setup_cc }
 
     describe 'Binding' do
       let(:space_guid) { @space_guid }
@@ -32,9 +32,9 @@ describe 'Service Broker API integration' do
         end
 
         it 'sends the app_guid as part of the request' do
-          a_request(:put, %r(broker-url/v2/service_instances/#{service_instance_guid}/service_bindings/.*$)).
-            with(body: hash_including(app_guid: app_guid)).
-            should have_been_made
+          expect(a_request(:put, %r(broker-url/v2/service_instances/#{service_instance_guid}/service_bindings/.*$)).
+            with(body: hash_including(app_guid: app_guid))).
+            to have_been_made
         end
       end
     end

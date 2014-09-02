@@ -2,14 +2,12 @@ module VCAP::CloudController::RestController
   # Auto generation of Message classes based on the attributes
   # exposed by a rest endpoint.
   module Messages
-    def self.included(base)
-      base.extend(ClassMethods)
-    end
+    extend ActiveSupport::Concern
 
     module ClassMethods
       # Define the messages exposed by a rest endpoint.
       def define_messages
-        [:response, :create, :update].each do |type|
+        [:create, :update].each do |type|
           define_message(type)
         end
       end
@@ -41,25 +39,17 @@ module VCAP::CloudController::RestController
               else
                 required "#{name}_guid", String
               end
-
-              if type == :response
-                optional "#{name}_url", VCAP::RestAPI::Message::HTTPS_URL
-              end
             end
           end
 
           to_many.each do |name, relation|
             unless relation.exclude_in?(type)
-              if type == :response
-                optional "#{name}_url", VCAP::RestAPI::Message::HTTPS_URL
-              else
-                optional "#{name.to_s.singularize}_guids", [String]
-              end
+              optional "#{name.to_s.singularize}_guids", [String]
             end
           end
         end
 
-        # grep-friendly location where CreateMessage, ResponseMessage, and UpdateMessage are declared
+        # grep-friendly location where CreateMessage and UpdateMessage are declared
         self.const_set "#{type.to_s.camelize}Message", klass
       end
     end

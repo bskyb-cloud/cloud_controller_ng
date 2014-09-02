@@ -1,12 +1,14 @@
 require "steno"
 require "optparse"
+require "i18n"
+require "i18n/backend/fallbacks"
 require "vcap/uaa_token_decoder"
 require "vcap/uaa_verification_key"
 require "cf_message_bus/message_bus"
 require "cf/registrar"
 require "loggregator_emitter"
 require "loggregator"
-require "cloud_controller/globals"
+require "cloud_controller/dea/sub_system"
 require "cloud_controller/rack_app_builder"
 require "cloud_controller/varz"
 
@@ -20,14 +22,20 @@ module VCAP::CloudController
     def initialize(argv)
       @argv = argv
 
-      # default to production. this may be overriden during opts parsing
+      # default to production. this may be overridden during opts parsing
       ENV["RACK_ENV"] ||= "production"
 
       @config_file = File.expand_path("../../../config/cloud_controller.yml", __FILE__)
       parse_options!
       parse_config
+      
+      setup_i18n
 
       @log_counter = Steno::Sink::Counter.new
+    end
+
+    def setup_i18n
+      Errors::ApiError.setup_i18n(Dir[File.expand_path("../../../vendor/errors/i18n/*.yml", __FILE__)], @config[:default_locale])
     end
 
     def logger
@@ -74,24 +82,28 @@ module VCAP::CloudController
 
     def run!
       EM.run do
-        message_bus = MessageBus::Configurer.new(servers: @config[:message_bus_servers], logger: logger).go
+        begin
+          message_bus = MessageBus::Configurer.new(servers: @config[:message_bus_servers], logger: logger).go
 
-        start_cloud_controller(message_bus)
+          start_cloud_controller(message_bus)
 
-        Seeds.write_seed_data(@config) if @insert_seed_data
-        register_with_collector(message_bus)
+          Seeds.write_seed_data(@config) if @insert_seed_data
+          register_with_collector(message_bus)
 
-        globals = Globals.new(@config, message_bus)
-        globals.setup!
+          Dea::SubSystem.setup!(message_bus)
 
-        builder = RackAppBuilder.new
-        app = builder.build(@config)
+          builder = RackAppBuilder.new
+          app     = builder.build(@config)
 
-        start_thin_server(app)
+          start_thin_server(app)
 
-        router_registrar.register_with_router
+          router_registrar.register_with_router
 
-        VCAP::CloudController::Varz.setup_updates
+          VCAP::CloudController::Varz.setup_updates
+        rescue Exception => e
+          logger.error "Encountered error: #{e}\n#{e.backtrace.join("\n")}"
+          raise e
+        end
       end
     end
 
@@ -101,6 +113,11 @@ module VCAP::CloudController
           logger.warn("Caught signal #{signal}")
           stop!
         end
+      end
+
+      trap('USR1') do
+        logger.warn("Collecting diagnostics")
+        collect_diagnostics
       end
 
       trap('USR2') do
@@ -174,7 +191,7 @@ module VCAP::CloudController
       if @config[:nginx][:use_nginx]
         @thin_server = Thin::Server.new(@config[:nginx][:instance_socket], signals: false)
       else
-        @thin_server = Thin::Server.new(@config[:external_host], @config[:external_port])
+        @thin_server = Thin::Server.new(@config[:external_host], @config[:external_port], signals: false)
       end
 
       @thin_server.app = app
@@ -215,6 +232,15 @@ module VCAP::CloudController
           :logger => logger,
           :log_counter => @log_counter
       )
+    end
+
+    def collect_diagnostics
+      @diagnostics_dir ||= @config[:directories][:diagnostics]
+      @diagnostics_dir ||= Dir.mktmpdir
+      file = VCAP::CloudController::Diagnostics.collect(@diagnostics_dir)
+      logger.warn("Diagnostics written to #{file}")
+    rescue => e
+      logger.warn("Failed to capture diagnostics: #{e}")
     end
   end
 end

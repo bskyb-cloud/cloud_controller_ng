@@ -1,8 +1,8 @@
 require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 
-resource "ServiceAuthTokens", :type => :api do
-  let(:admin_auth_header) { headers_for(admin_user, :admin_scope => true)["HTTP_AUTHORIZATION"] }
+resource "ServiceAuthTokens (deprecated)", :type => :api do
+  let(:admin_auth_header) { admin_headers["HTTP_AUTHORIZATION"] }
   let(:guid) { VCAP::CloudController::ServiceAuthToken.first.guid }
   let!(:service_auth_tokens) { 3.times { VCAP::CloudController::ServiceAuthToken.make } }
 
@@ -30,11 +30,11 @@ resource "ServiceAuthTokens", :type => :api do
       example "Filtering the result set by label" do
         client.get "/v2/service_auth_tokens", params, headers
 
-        status.should == 200
+        expect(status).to eq(200)
 
         standard_paginated_response_format? parsed_response
 
-        parsed_response["resources"].size.should == 1
+        expect(parsed_response["resources"].size).to eq(1)
 
         standard_entity_response(
           parsed_response["resources"].first,
@@ -53,11 +53,11 @@ resource "ServiceAuthTokens", :type => :api do
       example "Filtering the result set by provider" do
         client.get "/v2/service_auth_tokens", params, headers
 
-        status.should == 200
+        expect(status).to eq(200)
 
         standard_paginated_response_format? parsed_response
 
-        parsed_response["resources"].size.should == 1
+        expect(parsed_response["resources"].size).to eq(1)
 
         standard_entity_response(
           parsed_response["resources"].first,

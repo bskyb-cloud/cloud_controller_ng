@@ -1,6 +1,7 @@
 require 'spec_helper'
 
 describe 'Service Broker' do
+  include VCAP::CloudController::BrokerApiHelper
 
   let(:catalog_with_no_plans) {{
     services:
@@ -245,8 +246,8 @@ describe 'Service Broker' do
         not_free_plan = resources.find { |plan| plan['entity']['name'] == 'not-free-plan' }
         free_plan     = resources.find { |plan| plan['entity']['name'] == 'free-plan' }
 
-        expect(free_plan['entity']['free']).to be_true
-        expect(not_free_plan['entity']['free']).to be_false
+        expect(free_plan['entity']['free']).to be true
+        expect(not_free_plan['entity']['free']).to be false
       end
     end
 
@@ -299,7 +300,7 @@ describe 'Service Broker' do
       before do
         # set up a fake broker catalog that includes dashboard_client for services
         stub_catalog_fetch(200, services: [service_1, service_2, service_3, service_4, service_5, service_6])
-        setup_uaa_stubs_to_add_new_client
+        UAARequests.stub_all
         stub_request(:get, %r{http://localhost:8080/uaa/oauth/clients/.*}).to_return(status: 404)
 
         # add that broker to the CC
@@ -317,7 +318,7 @@ describe 'Service Broker' do
 
         WebMock.reset!
 
-        setup_uaa_stubs_to_add_new_client
+        UAARequests.stub_all
         stub_request(:get, %r{http://localhost:8080/uaa/oauth/clients/.*}).to_return(status: 404)
         stub_request(:get, %r{http://localhost:8080/uaa/oauth/clients/client-1}).to_return(
           body:    { client_id: 'client-1' }.to_json,
@@ -371,7 +372,7 @@ describe 'Service Broker' do
             'client_id'              => 'client-1',
             'client_secret'          => nil,
             'redirect_uri'           => nil,
-            'scope'                  => ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            'scope'                  => ['openid', 'cloud_controller_service_permissions.read'],
             'authorized_grant_types' => ['authorization_code'],
             'action'                 => 'delete'
           },
@@ -379,7 +380,7 @@ describe 'Service Broker' do
             'client_id'              => 'client-2',
             'client_secret'          => nil,
             'redirect_uri'           => nil,
-            'scope'                  => ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            'scope'                  => ['openid', 'cloud_controller_service_permissions.read'],
             'authorized_grant_types' => ['authorization_code'],
             'action'                 => 'delete'
           },
@@ -387,7 +388,7 @@ describe 'Service Broker' do
             'client_id'              => 'different-client',
             'client_secret'          => service_2[:dashboard_client][:secret],
             'redirect_uri'           => service_2[:dashboard_client][:redirect_uri],
-            'scope'                  => ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            'scope'                  => ['openid', 'cloud_controller_service_permissions.read'],
             'authorized_grant_types' => ['authorization_code'],
             'action'                 => 'add'
           },
@@ -395,7 +396,7 @@ describe 'Service Broker' do
             'client_id'              => service_3[:dashboard_client][:id],
             'client_secret'          => 'SUPERsecret',
             'redirect_uri'           => service_3[:dashboard_client][:redirect_uri],
-            'scope'                  => ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            'scope'                  => ['openid', 'cloud_controller_service_permissions.read'],
             'authorized_grant_types' => ['authorization_code'],
             'action'                 => 'update,secret'
           },
@@ -403,7 +404,7 @@ describe 'Service Broker' do
             'client_id'              => service_4[:dashboard_client][:id],
             'client_secret'          => service_4[:dashboard_client][:secret],
             'redirect_uri'           => service_4[:dashboard_client][:redirect_uri],
-            'scope'                  => ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            'scope'                  => ['openid', 'cloud_controller_service_permissions.read'],
             'authorized_grant_types' => ['authorization_code'],
             'action'                 => 'add'
           },
@@ -411,7 +412,7 @@ describe 'Service Broker' do
             'client_id'              => service_5[:dashboard_client][:id],
             'client_secret'          => service_5[:dashboard_client][:secret],
             'redirect_uri'           => 'http://nowhere.net',
-            'scope'                  => ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            'scope'                  => ['openid', 'cloud_controller_service_permissions.read'],
             'authorized_grant_types' => ['authorization_code'],
             'action'                 => 'update,secret'
           },
@@ -419,16 +420,16 @@ describe 'Service Broker' do
             'client_id'              => service_6[:dashboard_client][:id],
             'client_secret'          => service_6[:dashboard_client][:secret],
             'redirect_uri'           => service_6[:dashboard_client][:redirect_uri],
-            'scope'                  => ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            'scope'                  => ['openid', 'cloud_controller_service_permissions.read'],
             'authorized_grant_types' => ['authorization_code'],
             'action'                 => 'update,secret'
           }
         ]
 
-        a_request(:post, 'http://localhost:8080/uaa/oauth/clients/tx/modify').with do |req|
+        expect(a_request(:post, 'http://localhost:8080/uaa/oauth/clients/tx/modify').with do |req|
           client_modifications = JSON.parse(req.body)
           expect(client_modifications).to match_array(expected_client_modifications)
-        end.should have_been_made
+        end).to have_been_made
 
       end
 
@@ -509,8 +510,8 @@ describe 'Service Broker' do
         no_longer_not_free_plan = resources.find { |plan| plan['entity']['name'] == 'not-free-plan' }
         no_longer_free_plan     = resources.find { |plan| plan['entity']['name'] == 'free-plan' }
 
-        expect(no_longer_free_plan['entity']['free']).to be_false
-        expect(no_longer_not_free_plan['entity']['free']).to be_true
+        expect(no_longer_free_plan['entity']['free']).to be false
+        expect(no_longer_not_free_plan['entity']['free']).to be true
       end
     end
 
@@ -528,7 +529,22 @@ describe 'Service Broker' do
           update_broker(catalog_with_large_plan)
           expect(last_response).to have_status_code(200)
 
-          expect(VCAP::CloudController::ServicePlan.find(unique_id: 'plan1-guid-here')[:active]).to be_false
+          expect(VCAP::CloudController::ServicePlan.find(unique_id: 'plan1-guid-here')[:active]).to be false
+        end
+
+        it 'returns a warning to the operator' do
+          update_broker(catalog_with_large_plan)
+          expect(last_response).to have_status_code(200)
+
+          warning = CGI.unescape(last_response.headers['X-Cf-Warnings'])
+
+# rubocop:disable LineLength
+          expect(warning).to eq(<<HEREDOC)
+Warning: Service plans are missing from the broker's catalog (http://#{stubbed_broker_host}/v2/catalog) but can not be removed from Cloud Foundry while instances exist. The plans have been deactivated to prevent users from attempting to provision new instances of these plans. The broker should continue to support bind, unbind, and delete for existing instances; if these operations fail contact your broker provider.
+#{service_name}
+  small
+HEREDOC
+# rubocop:enable LineLength
         end
       end
 
@@ -572,7 +588,7 @@ describe 'Service Broker' do
 
         # set up a fake broker catalog that includes dashboard_client for services
         stub_catalog_fetch(200, services: [service_1, service_2, service_3])
-        setup_uaa_stubs_to_add_new_client
+        UAARequests.stub_all
         stub_request(:get, %r{http://localhost:8080/uaa/oauth/clients/.*}).to_return(status: 404)
 
         # add that broker to the CC
@@ -614,7 +630,7 @@ describe 'Service Broker' do
             client_id:              service_1[:dashboard_client][:id],
             client_secret:          nil,
             redirect_uri:           nil,
-            scope:                  ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read'],
+            scope:                  ['openid', 'cloud_controller_service_permissions.read'],
             authorized_grant_types: ['authorization_code'],
             action:                 'delete'
           },
@@ -622,15 +638,15 @@ describe 'Service Broker' do
             client_id:              service_2[:dashboard_client][:id],
             client_secret:          nil,
             redirect_uri:           nil,
-            scope:                  ['openid', 'cloud_controller.read', 'cloud_controller.write', 'cloud_controller_service_permissions.read' ],
+            scope:                  ['openid', 'cloud_controller_service_permissions.read'],
             authorized_grant_types: ['authorization_code'],
             action:                 'delete'
           }
         ].to_json
 
-        a_request(:post, 'http://localhost:8080/uaa/oauth/clients/tx/modify').with(
+        expect(a_request(:post, 'http://localhost:8080/uaa/oauth/clients/tx/modify').with(
           body:  expected_json_body
-        ).should have_been_made
+        )).to have_been_made
       end
     end
 
@@ -645,7 +661,8 @@ describe 'Service Broker' do
         delete_broker
       end
 
-      it 'does not delete the broker', non_transactional: true do
+      it 'does not delete the broker', isolation: :truncation do # Can't use transactions for isolation because we're
+                                                                 # testing a rollback
         delete_broker
         expect(last_response).to have_status_code(400)
 

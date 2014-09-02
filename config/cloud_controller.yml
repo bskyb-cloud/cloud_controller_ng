@@ -27,9 +27,13 @@ app_usage_events:
 audit_events:
   cutoff_age_in_days: 31
 
+failed_jobs:
+  cutoff_age_in_days: 31
+
 billing_event_writing_enabled: true
 
 default_app_memory: 1024 #mb
+default_app_disk_in_mb: 1024
 maximum_app_disk_in_mb: 2048
 
 info:
@@ -53,7 +57,6 @@ loggregator:
   url: "ws://loggregator.vcap.me:80"
 
 db:
-  database: "sqlite:///tmp/cloud_controller.db"
   max_connections: 32
   pool_timeout: 10
 
@@ -117,8 +120,6 @@ buildpacks:
 
 db_encryption_key: "asdfasdfasdf"
 
-tasks_disabled: false
-
 varz_port: 7800
 varz_user: varz
 varz_password: password
@@ -130,8 +131,9 @@ flapping_crash_count_threshold: 3
 disable_custom_buildpacks: false
 broker_client_timeout_seconds: 60
 
-uaa_client_name: 'cc_service_broker_client'
+uaa_client_name: 'cc-service-dashboards'
 uaa_client_secret: 'some-sekret'
+uaa_client_scope: openid,cloud_controller_service_permissions.read
 
 diego: false
 
@@ -148,3 +150,13 @@ install_buildpacks:
   - name: node_buildpack
     package: buildpack_node
 
+security_group_definitions:
+- name: dummy1
+  rules: []
+- name: dummy2
+  rules: []
+
+default_staging_security_groups:
+- dummy3
+default_running_security_groups:
+- dummy4

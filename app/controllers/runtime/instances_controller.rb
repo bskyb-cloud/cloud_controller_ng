@@ -8,7 +8,8 @@ module VCAP::CloudController
       app = find_guid_and_validate_access(:read, guid)
 
       if app.staging_failed?
-        raise VCAP::Errors::ApiError.new_from_details("StagingError", "cannot get instances since staging failed")
+        reason = app.staging_failed_reason || "StagingError"
+        raise VCAP::Errors::ApiError.new_from_details(reason, "cannot get instances since staging failed")
       elsif app.pending?
         raise VCAP::Errors::ApiError.new_from_details("NotStaged")
       end
@@ -20,8 +21,27 @@ module VCAP::CloudController
         raise VCAP::Errors::ApiError.new_from_details("InstancesError", msg)
       end
 
-      instances = DeaClient.find_all_instances(app)
-      Yajl::Encoder.encode(instances)
+      instances = instances_reporter.all_instances_for_app(app)
+      MultiJson.dump(instances)
+    rescue Errors::InstancesUnavailable => e
+      raise VCAP::Errors::ApiError.new_from_details("InstancesUnavailable", e.to_s)
+    end
+
+    delete "#{path_guid}/instances/:index", :kill_instance
+    def kill_instance(guid, index)
+      app = find_guid_and_validate_access(:update, guid)
+
+      Dea::Client.stop_indices(app, [index.to_i])
+      [HTTP::NO_CONTENT, nil]
+    end
+
+    protected
+
+    attr_reader :instances_reporter
+
+    def inject_dependencies(dependencies)
+      super
+      @instances_reporter = dependencies.fetch(:instances_reporter)
     end
   end
 end

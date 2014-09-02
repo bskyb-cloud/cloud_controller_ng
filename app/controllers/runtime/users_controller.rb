@@ -1,7 +1,8 @@
 module VCAP::CloudController
   class UsersController < RestController::ModelController
     define_attributes do
-      attribute :guid, String
+      attribute :guid, String, exclude_in: :update
+      attribute :admin, Message::Boolean, :default => false
       to_many   :spaces
       to_many   :organizations
       to_many   :managed_organizations
@@ -9,7 +10,6 @@ module VCAP::CloudController
       to_many   :audited_organizations
       to_many   :managed_spaces
       to_many   :audited_spaces
-      attribute :admin, Message::Boolean, :default => false
       to_one    :default_space, :optional_in => [:create]
     end
 
@@ -27,19 +27,6 @@ module VCAP::CloudController
       else
         Errors::ApiError.new_from_details("UserInvalid", e.errors.full_messages)
       end
-    end
-
-    def read(guid)
-      # only admins should have unfettered access to all users
-      # UserAccess allows all to read so org and space user lists show all users in those lists
-      raise Errors::ApiError.new_from_details("NotAuthorized") unless roles.admin?
-      super
-    end
-
-    def enumerate
-      raise Errors::ApiError.new_from_details("NotAuthenticated") unless user
-      raise Errors::ApiError.new_from_details("NotAuthorized") unless roles.admin?
-      super
     end
 
     def delete(guid)

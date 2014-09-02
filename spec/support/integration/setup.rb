@@ -27,14 +27,13 @@ module IntegrationSetup
 
     FileUtils.rm(config['pid_filename']) if File.exists?(config['pid_filename'])
 
-    database_file = config["db"]["database"].gsub('sqlite://', '')
-    if !opts[:preserve_database] && File.file?(database_file)
-      run_cmd("rm -f #{database_file}", wait: true)
+    db_connection_string = "#{TestConfig.config[:db][:database]}_integration_cc"
+    if !opts[:preserve_database]
+      run_cmd("bundle exec rake db:recreate db:migrate", wait: true, env: {"DB_CONNECTION_STRING" => db_connection_string}.merge(opts[:env] || {}))
     end
 
-    run_cmd("bundle exec rake db:migrate", wait: true)
     @cc_pids ||= []
-    @cc_pids << run_cmd("bin/cloud_controller -s -c #{config_file}", opts)
+    @cc_pids << run_cmd("bin/cloud_controller -s -c #{config_file}", opts.merge(env: {"DB_CONNECTION_STRING" => db_connection_string}.merge(opts[:env] || {})))
 
     info_endpoint = "http://localhost:#{config["external_port"]}/info"
 
@@ -67,27 +66,6 @@ module IntegrationSetup
     end
   rescue NATS::ConnectError
     nil
-  end
-
-  def start_fake_service_broker
-    kill_existing_fake_broker
-    fake_service_broker_path = File.expand_path(File.join(File.dirname(__FILE__), 'fake_service_broker.rb'))
-    @fake_service_broker_pid = run_cmd("ruby #{fake_service_broker_path}")
-  end
-
-  def kill_existing_fake_broker
-    existing_broker_process = `ps -o pid,command`.split("\n").find { |s| s[/\d+.*fake_service_broker/] }
-    if existing_broker_process
-      Process.kill('KILL', existing_broker_process[/\d+/].to_i)
-    end
-  end
-
-  def fake_service_broker_is_running?
-    @fake_service_broker_pid && process_alive?(@fake_service_broker_pid)
-  end
-
-  def stop_fake_service_broker
-    Process.kill("KILL", @fake_service_broker_pid) if fake_service_broker_is_running?
   end
 end
 
@@ -128,19 +106,5 @@ module IntegrationSetupHelpers
     true
   rescue Errno::ESRCH
     false
-  end
-end
-
-RSpec.configure do |rspec_config|
-  rspec_config.include(IntegrationSetupHelpers, :type => :integration)
-  rspec_config.include(IntegrationSetup, :type => :integration)
-
-  rspec_config.before(:all, :type => :integration) do
-    WebMock.allow_net_connect!
-  end
-
-  rspec_config.after(:all, :type => :integration) do
-    WebMock.disable_net_connect!
-    $spec_env.reset_database_with_seeds
   end
 end

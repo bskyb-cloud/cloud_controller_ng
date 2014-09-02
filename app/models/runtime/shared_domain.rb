@@ -4,8 +4,6 @@ module VCAP::CloudController
   class SharedDomain < Domain
     set_dataset(shared_domains)
 
-    default_order_by  :name
-
     add_association_dependencies routes: :destroy
 
     export_attributes :name
@@ -23,7 +21,7 @@ module VCAP::CloudController
       logger = Steno.logger("cc.db.domain")
       domain = nil
 
-      Domain.db.transaction(savepoint: true) do
+      Domain.db.transaction do
         domain = SharedDomain[name: name]
 
         if domain

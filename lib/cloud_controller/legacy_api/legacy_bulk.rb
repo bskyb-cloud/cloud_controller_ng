@@ -1,5 +1,5 @@
 require "sinatra"
-require "cloud_controller/rest_controller/base"
+require "controllers/base/base_controller"
 
 module VCAP::CloudController
   class BulkResponse < JsonMessage
@@ -28,7 +28,7 @@ module VCAP::CloudController
     end
   end
 
-  class LegacyBulk < RestController::Base
+  class LegacyBulk < RestController::BaseController
     # Endpoint does its own (non-standard) auth
     allow_unauthenticated_access
 
@@ -69,7 +69,7 @@ module VCAP::CloudController
 
     def bulk_apps
       batch_size = Integer(params.fetch("batch_size"))
-      bulk_token = Yajl::Parser.parse(params.fetch("bulk_token"))
+      bulk_token = MultiJson.load(params.fetch("bulk_token"))
       last_id = Integer(bulk_token["id"] || 0)
       id_for_next_token = nil
 
@@ -77,7 +77,7 @@ module VCAP::CloudController
       App.where(
           ["id > ?", last_id],
           "deleted_at IS NULL"
-      ).order(:id).limit(batch_size).each do |app|
+      ).where(diego: false).order(:id).limit(batch_size).each do |app|
         hash = {}
         export_attributes = [
           :instances,

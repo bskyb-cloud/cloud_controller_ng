@@ -7,7 +7,7 @@ namespace :jobs do
 
   desc "Start a delayed_job worker that works on jobs that require access to local resources."
   task :local do
-    CloudController::DelayedWorker.new(queues: [LocalQueue.new(config).to_s]).start_working
+    CloudController::DelayedWorker.new(queues: [VCAP::CloudController::Jobs::LocalQueue.new(config).to_s]).start_working
   end
 
   desc "Start a delayed_job worker."
@@ -28,6 +28,7 @@ namespace :jobs do
     def start_working
       BackgroundJobEnvironment.new(config).setup_environment
       Delayed::Worker.destroy_failed_jobs = false
+      Delayed::Worker.max_attempts = 3
       logger = Steno.logger("cc-worker")
       logger.info("Starting job with options #{@queue_options}")
       Delayed::Worker.new(@queue_options).start

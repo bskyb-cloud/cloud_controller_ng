@@ -1,16 +1,19 @@
 class MaxMemoryPolicy
-  def initialize(app)
+  attr_reader :policy_target
+  
+  def initialize(app, policy_target, error_name)
     @app = app
     @errors = app.errors
+    @policy_target = policy_target
+    @error_name = error_name
   end
 
   def validate
-    organization = @app.organization
-    return unless organization
-
+    return unless @policy_target
     return unless @app.scaling_operation?
-    if organization.memory_remaining < @app.additional_memory_requested
-      @errors.add(:memory, :quota_exceeded)
+
+    unless @policy_target.has_remaining_memory(@app.additional_memory_requested)
+      @errors.add(:memory, @error_name)
     end
   end
 end

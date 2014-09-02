@@ -2,9 +2,9 @@ require 'spec_helper'
 
 describe 'Service Broker API integration' do
   describe 'v2.3' do
+    include VCAP::CloudController::BrokerApiHelper
 
-    before(:all) { setup_cc }
-    after(:all) { $spec_env.reset_database_with_seeds }
+    before { setup_cc }
 
     let(:broker_url) { stubbed_broker_url }
     let(:broker_name) { 'broker-name' }
@@ -45,7 +45,7 @@ describe 'Service Broker API integration' do
         context 'when create-service-broker' do
           after { delete_broker }
           before do
-            setup_uaa_stubs_to_add_new_client
+            UAARequests.stub_all
 
             stub_catalog_fetch(broker_response_status, catalog)
 
@@ -91,11 +91,11 @@ describe 'Service Broker API integration' do
 
           after { delete_broker }
           before do
-            setup_uaa_stubs_to_add_new_client
+            UAARequests.stub_all
             setup_broker(catalog)
 
             # stub uaa token request
-            stub_request(:post, 'http://cc_service_broker_client:some-sekret@localhost:8080/uaa/oauth/token').to_return(
+            stub_request(:post, 'http://cc-service-dashboards:some-sekret@localhost:8080/uaa/oauth/token').to_return(
               status: 200,
               body: {token_type: 'token-type', access_token: 'access-token'}.to_json,
               headers: {'content-type' => 'application/json'})

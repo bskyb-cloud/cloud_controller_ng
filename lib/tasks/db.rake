@@ -38,4 +38,48 @@ end
     desc "Rollback the most recent migration and remigrate to current"
     task :redo => [:rollback, :migrate]
   end
+
+  task :pick do
+    unless ENV["DB_CONNECTION_STRING"] || ENV["DB_CONNECTION"]
+      ENV["DB"] ||= %w[mysql postgres].sample
+      puts "Using #{ENV["DB"]}"
+    end
+  end
+
+  task :create do
+    require_relative "../../spec/support/bootstrap/db_config"
+
+    case ENV["DB"]
+      when "postgres"
+        sh "psql -U postgres -c 'create database #{DbConfig.name};'"
+        sh "psql -U postgres -d #{DbConfig.name} -c 'CREATE EXTENSION IF NOT EXISTS citext'"
+      when "mysql"
+        if ENV["TRAVIS"] == "true"
+          sh "mysql -e 'create database #{DbConfig.name};' -u root"
+        else
+          sh "mysql -e 'create database #{DbConfig.name};' -u root --password=password"
+        end
+      else
+        puts "rake db:create requires DB to be set to create a database"
+    end
+  end
+
+  task :drop do
+    require_relative "../../spec/support/bootstrap/db_config"
+
+    case ENV["DB"]
+      when "postgres"
+        sh "psql -U postgres -c 'drop database if exists #{DbConfig.name};'"
+      when "mysql"
+        if ENV["TRAVIS"] == "true"
+          sh "mysql -e 'drop database if exists #{DbConfig.name};' -u root"
+        else
+          sh "mysql -e 'drop database if exists #{DbConfig.name};' -u root --password=password"
+        end
+      else
+        puts "rake db:drop requires DB to be set to create a database"
+    end
+  end
+
+  task recreate: %w[drop create]
 end

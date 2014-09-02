@@ -8,9 +8,12 @@ module VCAP::CloudController
       attribute :binding_options, Hash, :default => {}
     end
 
+    get path,      :enumerate
+    get path_guid, :read
+
     query_parameters :app_guid, :service_instance_guid
 
-    post '/v2/service_bindings', :create
+    post path, :create
     def create
       json_msg = self.class::CreateMessage.decode(body)
 
@@ -28,15 +31,26 @@ module VCAP::CloudController
       validate_app(app_guid)
 
       binding = ServiceBinding.new(@request_attrs)
-      validate_access(:create, binding, user, roles)
+      validate_access(:create, binding)
 
-      binding.bind!
+      if binding.valid?
+        binding.bind!
+      else
+        raise Sequel::ValidationFailed.new(binding)
+      end
 
       [ HTTP::CREATED,
         { "Location" => "#{self.class.path}/#{binding.guid}" },
         object_renderer.render_json(self.class, binding, @opts)
       ]
     end
+
+    delete path_guid, :delete    
+    def delete(guid)
+      do_delete(find_guid_and_validate_access(:delete, guid))
+    end
+
+    private
 
     def validate_app(app_guid)
       app = App.find(guid: app_guid)
@@ -49,12 +63,6 @@ module VCAP::CloudController
       raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceNotFound', instance_guid) unless service_instance
       raise VCAP::Errors::ApiError.new_from_details('UnbindableService') unless service_instance.bindable?
     end
-
-    def delete(guid)
-      do_delete(find_guid_and_validate_access(:delete, guid))
-    end
-
-    private
 
     def self.translate_validation_exception(e, attributes)
       unique_errors = e.errors.on([:app_id, :service_instance_id])
@@ -70,6 +78,5 @@ module VCAP::CloudController
     end
 
     define_messages
-    define_routes
   end
 end

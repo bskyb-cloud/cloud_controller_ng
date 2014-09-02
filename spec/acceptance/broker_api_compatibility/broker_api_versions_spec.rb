@@ -1,14 +1,12 @@
 require 'spec_helper'
 
 describe 'Broker API Versions' do
-
   let(:spec_sha) do
     {
-      'broker_api_v2.0_spec.rb' => 'a9f0666cd4eabeb1b9c79351ebb1a923',
-      'broker_api_v2.1_spec.rb' => '7f5ba19d05150295bb957d82d3b7bee5',
-      'broker_api_v2.2_spec.rb' => '8da95b39b66e8ae03a403294640ad1d0',
-      'broker_api_v2.3_spec.rb' => 'ad8eb3cf0859c52a92879c5953a79d96',
-      'broker_api_v2.4_spec.rb' => 'asdf',
+      'broker_api_v2.0_spec.rb' => 'a49243c40c479a11a4a9e5b57d1df57f',
+      'broker_api_v2.1_spec.rb' => '79cb09f2525a4006c8da0c6eb9ad9322',
+      'broker_api_v2.2_spec.rb' => 'e2828295dd36f93462a537a7c0f5fd57',
+      'broker_api_v2.3_spec.rb' => '4b1b24cc22887fc4ad8868359148f9df',
     }
   end
 
@@ -32,18 +30,17 @@ describe 'Broker API Versions' do
     current_directory = File.dirname(__FILE__)
     current_directory_list = Dir.entries(current_directory)
 
+    actual_checksums = {}
     broker_api_specs.each do |spec|
       expect(current_directory_list).to include(spec)
 
       filename = "#{current_directory}/#{spec}"
-      actual_checksum = Digest::MD5.hexdigest(File.read(filename))
-
-      expect(actual_checksum).to eq(spec_sha[spec]), <<-MESSAGE.gsub(/\s+/,' ')
-        You have made changes to the Service Broker API compatibility test: #{spec}. These tests are not meant to be
-        changed since they help ensure backwards compatibility. If you do need to update this test, you can update the
-        expected sha to #{actual_checksum}.
-      MESSAGE
+      actual_checksums[spec] = Digest::MD5.hexdigest(File.read(filename))
     end
+
+
+    # These tests are not meant to be changed since they help ensure backwards compatibility.
+    # If you do need to update this test, you can update the expected sha
+    expect(actual_checksums).to eq(spec_sha)
   end
 end
-

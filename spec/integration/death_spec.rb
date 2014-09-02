@@ -1,7 +1,7 @@
 require "spec_helper"
 require "thread"
 
-describe "Cloud controller", :type => :integration do
+describe "Cloud controller", type: :integration do
   before(:all) do
     start_nats
     start_cc
@@ -55,7 +55,7 @@ describe "Cloud controller", :type => :integration do
         "private_instance_id" => nil,
       }
 
-      received.should json_match(include(expected))
+      expect(received).to match_json(include(expected))
     end
   end
 end

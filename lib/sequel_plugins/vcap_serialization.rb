@@ -1,4 +1,4 @@
-require "yajl"
+require "multi_json"
 
 module Sequel::Plugins::VcapSerialization
   # This plugin implements serialization and deserialization of
@@ -26,7 +26,7 @@ module Sequel::Plugins::VcapSerialization
             hash[k.to_s] = nil
           else
             if !redact_vals.nil? && redact_vals.include?(k.to_s)
-              hash[k.to_s] = '[PRIVATE DATA HIDDEN]'
+              hash[k.to_s] = {redacted_message: '[PRIVATE DATA HIDDEN]'}
             else
               hash[k.to_s] = value
             end
@@ -34,19 +34,6 @@ module Sequel::Plugins::VcapSerialization
         end
       end
       hash
-    end
-
-    # Return a json serialization of the model instance containing only
-    # the parameters specified by export_attributes.
-    #
-    # @option opts [Array<String>] :only Only export an attribute if it is both
-    # included in export_attributes and in the :only option.
-    #
-    # @return [String] The json serialization of the instance only containing
-    # the attributes specified by export_attributes and the optional :only
-    # parameter.
-    def to_json(opts = {})
-      Yajl::Encoder.encode(to_hash(opts))
     end
 
     # Update the model instance from the supplied json string.  Only update
@@ -57,7 +44,7 @@ module Sequel::Plugins::VcapSerialization
     # @option opts [Array<String>] :only Only import an attribute if it is both
     # included in import_attributes and in the :only option.
     def update_from_json(json, opts = {})
-      parsed = Yajl::Parser.new.parse(json)
+      parsed = MultiJson.load(json)
       update_from_hash(parsed, opts)
     end
 
@@ -80,22 +67,6 @@ module Sequel::Plugins::VcapSerialization
   end
 
   module ClassMethods
-    # Return a json serialization of data set containing only
-    # the parameters specified by export_attributes.
-    #
-    # @option opts [Array<String>] :only Only export an attribute if it is both
-    # included in export_attributes and in the :only option.
-    #
-    # @return [String] The json serialization of the data set only containing
-    # the attributes specified by export_attributes and the optional :only
-    # parameter.  The resulting data set is sorted by :id unless an order
-    # is set via default_order_by.
-    def to_json(opts = {})
-      order_attr = @default_order_by || :id
-      elements = order_by(Sequel.asc(order_attr)).map { |e| e.to_hash(opts) }
-      Yajl::Encoder.encode(elements)
-    end
-
     # Create a new model instance from the supplied json string.  Only include
     # attributes specified by import_attributes.
     #
@@ -106,7 +77,7 @@ module Sequel::Plugins::VcapSerialization
     #
     # @return [Sequel::Model] The created model.
     def create_from_json(json, opts = {})
-      hash = Yajl::Parser.new.parse(json)
+      hash = MultiJson.load(json)
       create_from_hash(hash, opts)
     end
 
@@ -122,28 +93,6 @@ module Sequel::Plugins::VcapSerialization
     def create_from_hash(hash, opts = {})
       create_opts = update_or_create_options(hash, opts)
       create {|instance| instance.set_all(create_opts) }
-    end
-
-    # Instantiates, but does not save, a new model instance from the
-    # supplied json string.  Only include # attributes specified by
-    # import_attributes.
-    #
-    # @param [Hash] Hash of the attributes.
-    #
-    # @option opts [Array<String>] :only Only include an attribute if it is
-    # both included in import_attributes and in the :only option.
-    #
-    # @return [Sequel::Model] The created model.
-    def new_from_hash(hash, opts = {})
-      create_opts = update_or_create_options(hash, opts)
-      new(create_opts)
-    end
-
-    # Set the default order during a to_json on the model class.
-    #
-    # @param [Symbol] Name of the attribute to order by.
-    def default_order_by(attribute)
-      @default_order_by = attribute
     end
 
     # Set the default order during a to_json on the model class.

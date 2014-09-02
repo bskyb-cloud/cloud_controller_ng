@@ -1,4 +1,4 @@
-require "cloud_controller/dea/dea_client"
+require "cloud_controller/dea/client"
 
 module VCAP::CloudController
   class Route < Sequel::Model
@@ -6,11 +6,11 @@ module VCAP::CloudController
     class InvalidAppRelation < VCAP::Errors::InvalidRelation; end
 
     many_to_one :domain
-    many_to_one :space
+    many_to_one :space, after_set: :validate_changed_space
 
     many_to_many :apps,
-      before_add: :validate_app,
-      after_add: :mark_app_routes_changed,
+      before_add:   :validate_app,
+      after_add:    :mark_app_routes_changed,
       after_remove: :mark_app_routes_changed
 
     add_association_dependencies apps: :nullify
@@ -24,8 +24,8 @@ module VCAP::CloudController
 
     def as_summary_json
       {
-        guid: guid,
-        host: host,
+        guid:   guid,
+        host:   host,
         domain: {
           guid: domain.guid,
           name: domain.name
@@ -106,6 +106,11 @@ module VCAP::CloudController
       end
     end
 
+    def validate_changed_space(new_space)
+      apps.each{ |app| validate(app) }
+      domain && domain.addable_to_organization!(new_space.organization)
+    end
+
     def self.user_visibility_filter(user)
       orgs = Organization.filter(Sequel.or(
         managers: [user],
@@ -113,13 +118,13 @@ module VCAP::CloudController
       ))
 
       spaces = Space.filter(Sequel.or(
-        developers: [user],
-        auditors: [user],
-        managers: [user],
+        developers:   [user],
+        auditors:     [user],
+        managers:     [user],
         organization: orgs,
       ))
 
-      {:space => spaces}
+      { :space => spaces }
     end
 
     def in_suspended_org?
@@ -138,25 +143,35 @@ module VCAP::CloudController
     end
 
     def mark_app_routes_changed(app)
-      app.routes_changed = true
-      if app.dea_update_pending?
-        VCAP::CloudController::DeaClient.update_uris(app)
-      end
+      app.mark_routes_changed
     end
 
     def validate_domain
-      return unless domain
+        errors.add(:domain, :invalid_relation) if !valid_domain
+    end
+
+    def valid_domain
+      return true unless domain
 
       if (domain.shared? && !host.present?) ||
-            (space && !domain.usable_by_organization?(space.organization))
-        errors.add(:domain, :invalid_relation)
+        (space && !domain.usable_by_organization?(space.organization))
+        return false
       end
+
+      true
     end
 
     def validate_total_routes
       return unless new? && space
 
-      unless MaxRoutesPolicy.new(space.organization).allow_more_routes?(1)
+      space_routes_policy = MaxRoutesPolicy.new(space.space_quota_definition, SpaceRoutes.new(space))
+      org_routes_policy   = MaxRoutesPolicy.new(space.organization.quota_definition, OrganizationRoutes.new(space.organization))
+
+      if space.space_quota_definition && !space_routes_policy.allow_more_routes?(1)
+        errors.add(:space, :total_routes_exceeded)
+      end
+
+      if !org_routes_policy.allow_more_routes?(1)
         errors.add(:organization, :total_routes_exceeded)
       end
     end

@@ -2,9 +2,9 @@ require 'spec_helper'
 
 describe 'Service Broker API integration' do
   describe 'v2.2' do
+    include VCAP::CloudController::BrokerApiHelper
 
-    before(:all) { setup_cc }
-    after(:all) { $spec_env.reset_database_with_seeds }
+    before { setup_cc }
 
     let(:broker_url) { stubbed_broker_url }
     let(:broker_name) { 'broker-name' }

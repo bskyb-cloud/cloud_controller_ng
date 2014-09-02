@@ -9,15 +9,25 @@ module VCAP::CloudController
       to_one    :service
       to_many   :service_instances
       attribute :public, Message::Boolean, default: true
-      #attribute :active, Message::Boolean, default: true
     end
 
-    query_parameters :active, :service_guid, :service_instance_guid
+    query_parameters :active, :service_guid, :service_instance_guid, :service_broker_guid
+    # added :service_broker_guid here for readability, it is actually implemented as a search filter
+    # in the #get_filtered_dataset_for_enumeration method because ModelControl does not support
+    # searching on parameters that are not directly associated with the model
 
     allow_unauthenticated_access only: :enumerate
     def enumerate
       return super if SecurityContext.valid_token?
+
+      single_filter = @opts[:q]
+      service_guid = single_filter.split(':')[1] if single_filter && single_filter.start_with?('service_guid')
+
       plans = ServicePlan.where(active: true, public: true)
+      if (service_guid.present?)
+        services = Service.where(guid: service_guid)
+        plans = plans.where(service_id: services.select(:id))
+      end
 
       @opts.delete(:inline_relations_depth)
       collection_renderer.render_json(
@@ -29,12 +39,6 @@ module VCAP::CloudController
       )
     end
 
-    # Override this method because we want to enable the concept of
-    # deleted apps. This is necessary because we have an app events table
-    # which is a foreign key constraint on apps. Thus, we can't actually delete
-    # the app itself, but instead mark it as deleted.
-    #
-    # @param [String] guid The GUID of the object to delete.
     def delete(guid)
       plan = find_guid_and_validate_access(:delete, guid)
 
@@ -53,6 +57,23 @@ module VCAP::CloudController
         Errors::ApiError.new_from_details("ServicePlanNameTaken", "#{attributes["service_id"]}-#{attributes["name"]}")
       else
         Errors::ApiError.new_from_details("ServicePlanInvalid", e.errors.full_messages)
+      end
+    end
+
+    def get_filtered_dataset_for_enumeration(model, ds, qp, opts)
+      single_filter = opts[:q]
+
+      if single_filter && single_filter.start_with?('service_broker_guid')
+        service_broker_guid = single_filter.split(':')[1]
+
+        Query.
+          filtered_dataset_from_query_params(model, ds, qp, { q: '' }).
+          select_all(:service_plans).
+          left_join(:services, id: :service_plans__service_id).
+          left_join(:service_brokers, id: :services__service_broker_id).
+          where(:service_brokers__guid => service_broker_guid)
+      else
+        super(model, ds, qp, opts)
       end
     end
 

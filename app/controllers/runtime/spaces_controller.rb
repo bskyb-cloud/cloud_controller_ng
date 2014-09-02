@@ -11,13 +11,15 @@ module VCAP::CloudController
       to_many    :routes
       to_many    :domains
       to_many    :service_instances
-      to_many    :app_events,        :link_only => true
-      to_many    :events,            :link_only => true
+      to_many    :app_events,              link_only: true
+      to_many    :events,                  link_only: true
+      to_many    :security_groups
+      to_one     :space_quota_definition,  exclude_in: [:create, :update]
     end
 
     query_parameters :name, :organization_guid, :developer_guid, :app_guid
 
-    deprecated_endpoint "#{path_guid}/domains/*"
+    deprecated_endpoint "#{path_guid}/domains"
 
     def self.translate_validation_exception(e, attributes)
       name_errors = e.errors.on([:organization_id, :name])
@@ -105,25 +107,6 @@ module VCAP::CloudController
 
     def after_update(space)
       @space_event_repository.record_space_update(space, SecurityContext.current_user, SecurityContext.current_user_email, request_attrs)
-    end
-
-    module ServiceSerialization
-      def self.to_hash(controller, service, opts)
-        entity_hash = service.to_hash.merge({
-          "service_plans" => service.service_plans_dataset.organization_visible(opts[:organization]).map do |service_plan|
-            RestController::ObjectSerialization.to_hash(ServicePlansController, service_plan, opts)
-          end
-        })
-
-        metadata_hash = {
-          "guid" => service.guid,
-          "url" => controller.url_for_guid(service.guid),
-          "created_at" => service.created_at,
-          "updated_at" => service.updated_at
-        }
-
-        {"metadata" => metadata_hash, "entity" => entity_hash}
-      end
     end
 
     define_messages

@@ -2,11 +2,11 @@ require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 
 resource 'Apps', :type => :api do
-  let(:admin_auth_header) { headers_for(admin_user, :admin_scope => true)['HTTP_AUTHORIZATION'] }
+  let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let(:tmpdir) { Dir.mktmpdir }
   let(:valid_zip) {
     zip_name = File.join(tmpdir, 'file.zip')
-    create_zip(zip_name, 1)
+    TestZip.create(zip_name, 1, 1024)
     zip_file = File.new(zip_name)
     Rack::Test::UploadedFile.new(zip_file)
   }
@@ -23,7 +23,7 @@ resource 'Apps', :type => :api do
 
   authenticated_request
 
-  field :guid, 'The guid of the app.', required: true
+  parameter :guid, "The guid of the App"
   let(:async) { true }
   let(:app_bits_put_params) do
     {
@@ -47,7 +47,7 @@ resource 'Apps', :type => :api do
       If false, the request will block until the bits are persisted synchronously.
       Defaults to false.
     eos
-    field :async, async_description, required: false, example_values: [true]
+    parameter :async, async_description
 
     resources_desc = <<-eos
       Fingerprints of the application bits that have previously been pushed to Cloud Foundry.
@@ -65,7 +65,7 @@ resource 'Apps', :type => :api do
 
     field :application, 'A binary zip file containing the application bits.', required: true
 
-    example 'Uploads the bits for an app' do
+    example 'Uploads the bits for an App' do |example|
       explanation <<-eos
         Defines and uploads the bits (artifacts and dependencies) that this application needs to run, using a multipart PUT request.
         Bits that have already been uploaded can be referenced by their resource fingerprint(s).
@@ -96,14 +96,14 @@ resource 'Apps', :type => :api do
         req[:request_body] = request_body_example
         req[:curl] = nil
       end
-      status.should == 201
+      expect(status).to eq(201)
     end
   end
 
   get '/v2/apps/:guid/download' do
     let(:async) { false }
 
-    example 'Downloads the bits for an app' do
+    example 'Downloads the bits for an App' do
       explanation <<-eos
         When using a remote blobstore, such as AWS, the response is a redirect to the actual location of the bits.
       eos
@@ -111,7 +111,7 @@ resource 'Apps', :type => :api do
       no_doc { client.put "/v2/apps/#{app_obj.guid}/bits", app_bits_put_params, headers }
       client.get "/v2/apps/#{app_obj.guid}/download", {}, headers
       expect(response_headers["Location"]).to include("cc-packages.s3.amazonaws.com")
-      status.should == 302
+      expect(status).to eq(302)
     end
   end
 end

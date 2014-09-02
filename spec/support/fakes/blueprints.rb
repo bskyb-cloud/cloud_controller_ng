@@ -1,5 +1,6 @@
 require "securerandom"
 require_relative "app_factory"
+require_relative "../test_models"
 
 Sham.define do
   email               { |index| "email-#{index}@somedomain.com" }
@@ -24,6 +25,7 @@ Sham.define do
   instance_index      { |index| index }
   unique_id           { |index| "unique-id-#{index}" }
   status              { |_| %w[active suspended cancelled].sample(1).first }
+  error_message       { |index| "error-message-#{index}" }
 end
 
 module VCAP::CloudController
@@ -35,6 +37,15 @@ module VCAP::CloudController
     name              { Sham.name }
     quota_definition  { QuotaDefinition.make }
     status            { "active" }
+  end
+
+  Domain.blueprint do
+    name                { Sham.domain }
+  end
+
+  Droplet.blueprint do
+    app { App.make }
+    droplet_hash { Sham.guid }
   end
 
   PrivateDomain.blueprint do
@@ -163,6 +174,15 @@ module VCAP::CloudController
     active            { true }
   end
 
+  ServicePlan.blueprint(:v2) do
+    name              { Sham.name }
+    free              { false }
+    description       { Sham.description }
+    service           { Service.make(:v2) }
+    unique_id         { SecureRandom.uuid }
+    active            { true }
+  end
+
   ServicePlanVisibility.blueprint do
     service_plan { ServicePlan.make }
     organization { Organization.make }
@@ -220,10 +240,6 @@ module VCAP::CloudController
     timestamp         { Time.now }
   end
 
-  Task.blueprint do
-    app         { AppFactory.make }
-  end
-
   ServiceCreateEvent.blueprint do
     BillingEvent.blueprint
     space_guid        { Sham.guid }
@@ -258,6 +274,9 @@ module VCAP::CloudController
     name { Sham.name }
     key { Sham.guid }
     position { 0 }
+    enabled { true }
+    filename { Sham.name }
+    locked { false }
   end
 
   AppUsageEvent.blueprint do
@@ -287,4 +306,55 @@ module VCAP::CloudController
     service_label { Sham.label }
   end
 
+  SecurityGroup.blueprint do
+    name { Sham.name }
+    rules do
+      [
+        {
+          "protocol" => "udp",
+          "ports" => "8080",
+          "destination" => "198.41.191.47/1",
+        }
+      ]
+    end
+    staging_default { false }
+  end
+
+  SpaceQuotaDefinition.blueprint do
+    name { Sham.name }
+    non_basic_services_allowed { true }
+    total_services { 60 }
+    total_routes { 1_000 }
+    memory_limit { 20_480 } # 20 GB
+    organization { Organization.make }
+  end
+
+  EnvironmentVariableGroup.blueprint do
+    name { "runtime" }
+    environment_json do
+      {
+        "MOTD" => "Because of your smile, you make life more beautiful.",
+        "COROPRATE_PROXY_SERVER" => "abc:8080",
+      }
+    end
+  end
+
+  FeatureFlag.blueprint do
+    name { 'user_org_creation' }
+    enabled { false }
+    error_message { Sham.error_message }
+  end
+
+  TestModel.blueprint do
+    required_attr true
+  end
+
+  TestModelManyToOne.blueprint do
+  end
+
+  TestModelManyToMany.blueprint do
+  end
+
+  TestModelSecondLevel.blueprint do
+  end
 end

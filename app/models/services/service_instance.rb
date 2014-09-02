@@ -17,7 +17,7 @@ module VCAP::CloudController
            }
 
     one_to_many :service_bindings, :before_add => :validate_service_binding
-    many_to_one :space
+    many_to_one :space, :after_set => :validate_space
 
     many_to_one :service_plan_sti_eager_load,
                 class: "VCAP::CloudController::ServicePlan",
@@ -58,7 +58,11 @@ module VCAP::CloudController
     def validate
       validates_presence :name
       validates_presence :space
-      validates_unique [:space_id, :name]
+      validates_unique [:space_id, :name], where: (proc do |_, obj, arr|
+          vals = arr.map{|x| obj.send(x)}
+          next if vals.any?{|v| v.nil?}
+          ServiceInstance.where(arr.zip(vals))
+        end)
       validates_max_length 50, :name
     end
 
@@ -88,7 +92,7 @@ module VCAP::CloudController
 
     def credentials=(val)
       if val
-        json = Yajl::Encoder.encode(val)
+        json = MultiJson.dump(val)
         generate_salt
         encrypted_string = VCAP::CloudController::Encryptor.encrypt(json, salt)
         super(encrypted_string)
@@ -101,7 +105,7 @@ module VCAP::CloudController
     def credentials
       return if super.blank?
       json = VCAP::CloudController::Encryptor.decrypt(super, salt)
-      Yajl::Parser.parse(json) if json
+      MultiJson.load(json) if json
     end
 
     def in_suspended_org?
@@ -128,6 +132,10 @@ module VCAP::CloudController
       if service_binding && service_binding.app.space != space
         raise InvalidServiceBinding.new(service_binding.id)
       end
+    end
+
+    def validate_space(space)
+       service_bindings.each{ |binding| validate_service_binding(binding) }
     end
 
     def service_instance_usage_event_repository

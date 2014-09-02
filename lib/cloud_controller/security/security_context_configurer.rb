@@ -31,8 +31,11 @@ module VCAP::CloudController
       def user_from_token(token)
         user_guid = token && token['user_id']
         return unless user_guid
-        admin = VCAP::CloudController::Roles.new(token).admin?
-        User.find(guid: user_guid.to_s) || User.create(guid: user_guid, admin: admin, active: true)
+        User.find(guid: user_guid.to_s) || User.create(guid: user_guid, active: true)
+      rescue Sequel::ValidationFailed
+        User.find(guid: user_guid.to_s)
+      rescue Sequel::UniqueConstraintViolation
+        User.find(guid: user_guid.to_s)
       end
     end
   end

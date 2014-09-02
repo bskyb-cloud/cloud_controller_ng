@@ -73,7 +73,10 @@ module VCAP::RestAPI
     end
 
     def parse
+      v = SecureRandom.uuid
+      query.gsub!(";;", v)
       segments = query.split(";")
+      segments.each {|segment| segment.gsub!(v, ";")}
 
       segments.collect do |segment|
         key, comparison, value = segment.split(/(:|>=|<=|<|>| IN )/, 2)
@@ -89,25 +92,34 @@ module VCAP::RestAPI
     end
 
     def query_filter(key, comparison, val)
-      case column_type(key)
-      when :foreign_key
-        return clean_up_foreign_key(key, val)
-      when :integer
-        val = clean_up_integer(val)
-      when :boolean
-        val = clean_up_boolean(key, val)
-      when :datetime
-        val = clean_up_datetime(val)
-      end
+      col_type = column_type(key)
+      return clean_up_foreign_key(key, val) if col_type == :foreign_key
 
       if comparison == " IN "
-        val = val.split(",")
+        val = val.split(",").collect { |value| cast_query_value(col_type, key, value) }
+      else
+        val = cast_query_value(col_type, key, val)
       end
 
       if val.nil?
         { key => nil }
       else
         ["#{key} #{comparison} ?", val]
+      end
+    end
+
+    def cast_query_value(col_type, key, value)
+      case col_type
+      when :foreign_key
+        return clean_up_foreign_key(col_type, value)
+      when :integer
+        clean_up_integer(value)
+      when :boolean
+        clean_up_boolean(key, value)
+      when :datetime
+        clean_up_datetime(value)
+      else
+        value
       end
     end
 
@@ -143,10 +155,10 @@ module VCAP::RestAPI
       column = model.db_schema[q_key.to_sym]
 
       if column[:db_type] == TINYINT_TYPE
-        q_val = TINYINT_FROM_TRUE_FALSE.fetch(q_val, q_val)
+        TINYINT_FROM_TRUE_FALSE.fetch(q_val, q_val)
+      else
+        q_val == "t"
       end
-
-      q_val
     end
 
     def clean_up_datetime(q_val)

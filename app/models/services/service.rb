@@ -8,8 +8,6 @@ module VCAP::CloudController
 
     add_association_dependencies :service_plans => :destroy
 
-    default_order_by  :label
-
     export_attributes :label, :provider, :url, :description, :long_description,
                       :version, :info_url, :active, :bindable,
                       :unique_id, :extra, :tags, :requires, :documentation_url, :service_broker_guid
@@ -60,6 +58,10 @@ module VCAP::CloudController
       {id: plans_I_can_see.map(&:service_id).uniq}
     end
 
+    def self.unauthenticated_visibility_filter
+      {id: self.public_visible.map(&:id)}
+    end
+
     def provider
       provider = self[:provider]
       provider.blank? ? nil : provider
@@ -99,7 +101,7 @@ module VCAP::CloudController
     end
 
     def purge
-      db.transaction(savepoint: true) do
+      db.transaction do
         self.update(purging: true)
         service_plans.each do |plan|
           plan.service_instances_dataset.destroy
