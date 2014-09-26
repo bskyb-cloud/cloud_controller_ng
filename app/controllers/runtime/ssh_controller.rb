@@ -10,7 +10,7 @@ module VCAP::CloudController
     def ssh(guid, instance, opts = {})
       app = find_guid_and_validate_access(:read, guid)
      
-      response=DeaClient.ssh_instance(app, instance.to_i)
+      response=Dea::Client.ssh_instance(app, instance.to_i)
       
       logger.debug "Getting SSH info #{Yajl::Encoder.encode(response)}"
       [HTTP::OK, Yajl::Encoder.encode(response)]
