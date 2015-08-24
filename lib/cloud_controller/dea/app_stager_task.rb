@@ -89,6 +89,7 @@ module VCAP::CloudController
       def staging_request
         {
             app_id:                       @app.guid,
+	    stack:		          @app.stack.name
             task_id:                      task_id,
             properties:                   staging_task_properties(@app),
             # All url generation should go to blobstore_url_generator

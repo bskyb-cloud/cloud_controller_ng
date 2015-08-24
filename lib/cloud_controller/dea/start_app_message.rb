@@ -6,6 +6,7 @@ module VCAP::CloudController
 
         self[:droplet]        = app.guid
         self[:name]           = app.name
+	self[:stack]	      = app.stack.name
         self[:uris]           = app.uris
         self[:prod]           = app.production
         self[:sha1]           = app.droplet_hash
