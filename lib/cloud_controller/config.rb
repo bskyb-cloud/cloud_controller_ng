@@ -110,6 +110,7 @@ module VCAP::CloudController
 
         optional(:index)       => Integer,    # Component index (cc-0, cc-1, etc)
         optional(:name)        => String,     # Component name (api_z1, api_z2)
+        optional(:zone)        => String,     # Site (datacenter name)
         optional(:local_route) => String,     # If set, use this to determine the IP address that is returned in discovery messages
 
         :nginx => {
