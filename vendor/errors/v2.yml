@@ -818,3 +818,7 @@
   http_code: 400
   message: "%s"
 
+500006:
+  name: SshError
+  http_code: 400
+  message: "Ssh error: %s"
