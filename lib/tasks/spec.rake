@@ -30,9 +30,11 @@ namespace :spec do
   namespace :unit do
     fast_suites = %w[
         access
+        actions
         jobs
         models
         presenters
+        queries
         repositories
       ]
 

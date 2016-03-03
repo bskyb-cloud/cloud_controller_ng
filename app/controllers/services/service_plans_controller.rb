@@ -6,8 +6,8 @@ module VCAP::CloudController
       attribute :description,       String
       attribute :extra,             String,           default: nil
       attribute :unique_id,         String,           default: nil
-      to_one    :service
-      to_many   :service_instances
+      to_one :service
+      to_many :service_instances
       attribute :public, Message::Boolean, default: true
     end
 
@@ -18,50 +18,54 @@ module VCAP::CloudController
 
     allow_unauthenticated_access only: :enumerate
     def enumerate
-      return super if SecurityContext.valid_token?
+      if SecurityContext.missing_token?
+        single_filter = @opts[:q][0] if @opts[:q]
+        service_guid = single_filter.split(':')[1] if single_filter && single_filter.start_with?('service_guid')
 
-      single_filter = @opts[:q]
-      service_guid = single_filter.split(':')[1] if single_filter && single_filter.start_with?('service_guid')
+        plans = ServicePlan.where(active: true, public: true)
+        if service_guid.present?
+          services = Service.where(guid: service_guid)
+          plans = plans.where(service_id: services.select(:id))
+        end
 
-      plans = ServicePlan.where(active: true, public: true)
-      if (service_guid.present?)
-        services = Service.where(guid: service_guid)
-        plans = plans.where(service_id: services.select(:id))
+        @opts.delete(:inline_relations_depth)
+        collection_renderer.render_json(
+          self.class,
+          plans,
+          self.class.path,
+          @opts,
+          {}
+        )
+      elsif SecurityContext.invalid_token?
+        raise VCAP::Errors::ApiError.new_from_details('InvalidAuthToken')
+      else
+        super
       end
-
-      @opts.delete(:inline_relations_depth)
-      collection_renderer.render_json(
-        self.class,
-        plans,
-        self.class.path,
-        @opts,
-        {}
-      )
     end
 
     def delete(guid)
       plan = find_guid_and_validate_access(:delete, guid)
 
       if plan.service_instances.present?
-        raise VCAP::Errors::ApiError.new_from_details("AssociationNotEmpty", "service_instances", plan.class.table_name)
+        raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', 'service_instances', plan.class.table_name)
       end
 
       plan.destroy
 
-      [ HTTP::NO_CONTENT, nil ]
+      [HTTP::NO_CONTENT, nil]
     end
 
     def self.translate_validation_exception(e, attributes)
       name_errors = e.errors.on([:service_id, :name])
       if name_errors && name_errors.include?(:unique)
-        Errors::ApiError.new_from_details("ServicePlanNameTaken", "#{attributes["service_id"]}-#{attributes["name"]}")
+        Errors::ApiError.new_from_details('ServicePlanNameTaken', "#{attributes['service_id']}-#{attributes['name']}")
       else
-        Errors::ApiError.new_from_details("ServicePlanInvalid", e.errors.full_messages)
+        Errors::ApiError.new_from_details('ServicePlanInvalid', e.errors.full_messages)
       end
     end
 
     def get_filtered_dataset_for_enumeration(model, ds, qp, opts)
-      single_filter = opts[:q]
+      single_filter = opts[:q][0] if opts[:q]
 
       if single_filter && single_filter.start_with?('service_broker_guid')
         service_broker_guid = single_filter.split(':')[1]
@@ -71,7 +75,7 @@ module VCAP::CloudController
           select_all(:service_plans).
           left_join(:services, id: :service_plans__service_id).
           left_join(:service_brokers, id: :services__service_broker_id).
-          where(:service_brokers__guid => service_broker_guid)
+          where(service_brokers__guid: service_broker_guid)
       else
         super(model, ds, qp, opts)
       end

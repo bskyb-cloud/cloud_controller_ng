@@ -1,10 +1,16 @@
 module VCAP::CloudController
   module Jobs
     module Runtime
-      class EventsCleanup < Struct.new(:cutoff_age_in_days)
+      class EventsCleanup < VCAP::CloudController::Jobs::CCJob
+        attr_accessor :cutoff_age_in_days
+
+        def initialize(cutoff_age_in_days)
+          @cutoff_age_in_days = cutoff_age_in_days
+        end
+
         def perform
-          old_events = Event.where("created_at < CURRENT_TIMESTAMP - INTERVAL '? DAY'", cutoff_age_in_days)
-          logger = Steno.logger("cc.background")
+          old_events = Event.where("created_at < CURRENT_TIMESTAMP - INTERVAL '?' DAY", cutoff_age_in_days.to_i)
+          logger = Steno.logger('cc.background')
           logger.info("Cleaning up #{old_events.count} Event rows")
           old_events.delete
         end

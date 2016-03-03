@@ -2,9 +2,8 @@
 source 'http://rubygems.org'
 
 gem 'addressable'
-gem 'activesupport', '~> 3.0' # It looks like this is required for DelayedJob, even with the DJ-Sequel extension
+gem 'activesupport'
 gem 'rake'
-gem 'bcrypt-ruby'
 gem 'eventmachine', '~> 1.0.0'
 gem 'fog'
 gem 'i18n'
@@ -21,30 +20,34 @@ gem 'membrane', '~> 1.0'
 gem 'httpclient'
 gem 'steno'
 gem 'cloudfront-signer'
-gem 'vcap-concurrency', git: 'https://github.com/cloudfoundry/vcap-concurrency.git', ref: '2a5b0179'
-gem 'cf-uaa-lib', '~> 2.1.0', git: 'https://github.com/cloudfoundry/cf-uaa-lib.git', ref: '81e5e4d6'
-gem 'cf-message-bus', git: 'https://github.com/cloudfoundry/cf-message-bus.git'
 gem 'vcap_common', '~> 4.0'
-gem 'cf-registrar', '~> 1.0.1', git: 'https://github.com/cloudfoundry/cf-registrar.git'
 gem 'allowy'
-gem 'loggregator_emitter', '~> 3.0'
-gem 'talentbox-delayed_job_sequel'
+gem 'loggregator_emitter', '~> 4.0'
+gem 'delayed_job_sequel', git: 'https://github.com/cloudfoundry/delayed_job_sequel.git'
 gem 'thin', '~> 1.6.0'
-gem 'newrelic_rpm'
+gem 'newrelic_rpm', '3.7.3.204'
 gem 'clockwork', require: false
+gem 'activemodel'
+
+# We need to use https for git urls as the git protocol is blocked by various
+# firewalls
+gem 'vcap-concurrency', git: 'https://github.com/cloudfoundry/vcap-concurrency.git', ref: '2a5b0179'
+gem 'cf-uaa-lib', '~> 3.1.0', git: 'https://github.com/cloudfoundry/cf-uaa-lib.git', ref: 'b1e11235dc6cd7d8d4680e005526de37201305ea'
+gem 'cf-message-bus', '~> 0.3.0'
+gem 'cf-registrar', '~> 1.0.2', git: 'https://github.com/cloudfoundry/cf-registrar.git'
 
 group :db do
-  gem 'mysql2'
-  gem 'pg'
+  gem 'mysql2', '0.3.13'
+  gem 'pg', '0.16.0'
 end
 
 group :operations do
-  gem 'pry'
+  gem 'pry-byebug'
+  gem 'awesome_print'
 end
 
 group :test do
   gem 'codeclimate-test-reporter', require: false
-  gem 'debugger'
   gem 'fakefs', require: 'fakefs/safe'
   gem 'machinist', '~> 1.0.6'
   gem 'parallel_tests'
@@ -55,10 +58,12 @@ group :test do
   gem 'rspec-collection_matchers'
   gem 'rspec-its'
   gem 'rubocop'
+  gem 'astrolabe'
   gem 'timecop'
   gem 'webmock'
 end
 
 group :development do
   gem 'roodi'
+  gem 'byebug'
 end

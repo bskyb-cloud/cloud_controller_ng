@@ -2,7 +2,7 @@ module VCAP::CloudController
   class Event < Sequel::Model
     plugin :serialization
 
-    many_to_one :space, :without_guid_generation => true
+    many_to_one :space, without_guid_generation: true
 
     def validate
       validates_presence :type
@@ -11,7 +11,7 @@ module VCAP::CloudController
       validates_presence :actor_type
       validates_presence :actee
       validates_presence :actee_type
-      validates_presence :actee_name
+      validates_not_null :actee_name
     end
 
     serialize_attributes :json, :metadata
@@ -38,7 +38,8 @@ module VCAP::CloudController
     def self.user_visibility_filter(user)
       Sequel.or([
         [:space, user.audited_spaces_dataset],
-        [:space, user.spaces_dataset]
+        [:space, user.spaces_dataset],
+        [:organization_guid, user.audited_organizations_dataset.map(&:guid)]
       ])
     end
   end

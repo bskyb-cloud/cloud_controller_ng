@@ -37,14 +37,12 @@ module Sequel::Plugins::VcapRelations
     #
     # See the default many_to_one implementation for a description of the args
     # and return values.
-    def many_to_one(name, opts = {})
+    def many_to_one(name, opts={})
       unless opts.fetch(:without_guid_generation, false)
         define_guid_accessors(name)
       end
 
-      opts[:reciprocal] ||=
-        self.name.split("::").last.underscore.pluralize.to_sym
-
+      opts[:reciprocal] ||= self.name.split('::').last.underscore.pluralize.to_sym
       super
     end
 
@@ -55,7 +53,7 @@ module Sequel::Plugins::VcapRelations
     #
     # See the default many_to_many implementation for a description of the args
     # and return values.
-    def many_to_many(name, opts = {})
+    def many_to_many(name, opts={})
       singular_name = name.to_s.singularize
       ids_attr = "#{singular_name}_ids"
       guids_attr = "#{singular_name}_guids"
@@ -64,7 +62,7 @@ module Sequel::Plugins::VcapRelations
         # sequel is not capable of merging adds to a many_to_many association
         # like it is for a one_to_many and nds up throwing a db exception,
         # so lets squash the add
-        if other.kind_of?(Integer)
+        if other.is_a?(Integer)
           super(other) unless send(ids_attr).include? other
         else
           super(other) unless send(name).include? other
@@ -72,7 +70,7 @@ module Sequel::Plugins::VcapRelations
       end
 
       opts[:reciprocal] ||=
-        self.name.split("::").last.underscore.pluralize.to_sym
+        self.name.split('::').last.underscore.pluralize.to_sym
 
       define_to_many_methods(name, singular_name, ids_attr, guids_attr)
       super
@@ -85,12 +83,12 @@ module Sequel::Plugins::VcapRelations
     #
     # See the default one_to_many implementation for a description of the args
     # and return values.
-    def one_to_many(name, opts = {})
+    def one_to_many(name, opts={})
       singular_name = name.to_s.singularize
       ids_attr = "#{singular_name}_ids"
       guids_attr = "#{singular_name}_guids"
 
-      opts[:reciprocal] ||= self.name.split("::").last.underscore.to_sym
+      opts[:reciprocal] ||= self.name.split('::').last.underscore.to_sym
 
       define_to_many_methods(name, singular_name, ids_attr, guids_attr)
       super
@@ -107,9 +105,13 @@ module Sequel::Plugins::VcapRelations
       end
 
       define_method("#{guid_attr}=") do |val|
-        ar = self.class.association_reflection(name)
-        other = ar.associated_class[:guid => val]
-        return if (other.nil? && !val.nil?)
+        other = nil
+
+        if !val.nil?
+          ar = self.class.association_reflection(name)
+          other = ar.associated_class[guid: val]
+          raise VCAP::Errors::ApiError.new_from_details('InvalidRelation', "Could not find #{ar.associated_class.name} with guid: #{val}") if other.nil?
+        end
         send("#{name}=", other)
       end
     end
@@ -127,14 +129,14 @@ module Sequel::Plugins::VcapRelations
       end
 
       define_method(ids_attr) do
-        send(name).collect { |o| o.id }
+        send(name).collect(&:id)
       end
 
       # greppable: add_domain_by_guid
       define_method("add_#{singular_name}_by_guid") do |guid|
         ar = self.class.association_reflection(name)
-        other = ar.associated_class[:guid => guid]
-        return if other.nil?
+        other = ar.associated_class[guid: guid]
+        raise VCAP::Errors::ApiError.new_from_details('InvalidRelation', "Could not find #{ar.associated_class.name} with guid: #{guid}") if other.nil?
         if pk
           send("add_#{singular_name}", other)
         else
@@ -150,12 +152,12 @@ module Sequel::Plugins::VcapRelations
       end
 
       define_method("#{guids_attr}") do
-        send(name).collect { |o| o.guid }
+        send(name).collect(&:guid)
       end
 
       define_method("#{guids_attr}=") do |guids|
         return unless guids
-        current_guids = send(name).map { |o| o.guid }
+        current_guids = send(name).map(&:guid)
         (added, removed) = diff_collections.call(current_guids, guids)
         added.each { |g| send("add_#{singular_name}_by_guid", g) }
         removed.each { |g| send("remove_#{singular_name}_by_guid", g) }
@@ -163,19 +165,18 @@ module Sequel::Plugins::VcapRelations
 
       define_method("remove_#{singular_name}_by_guid") do |guid|
         ar = self.class.association_reflection(name)
-        other = ar.associated_class[:guid => guid]
-        return if other.nil?
+        other = ar.associated_class[guid: guid]
+        raise VCAP::Errors::ApiError.new_from_details('InvalidRelation', "Could not find #{ar.associated_class.name} with guid: #{guid}") if other.nil?
         send("remove_#{singular_name}", other)
       end
 
       define_method("remove_#{singular_name}") do |other|
-        if other.kind_of?(Integer)
+        if other.is_a?(Integer)
           super(other) if send(ids_attr).include? other
         else
           super(other) if send(name).include? other
         end
       end
     end
-
   end
 end

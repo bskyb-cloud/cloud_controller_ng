@@ -1,19 +1,19 @@
 module VCAP::Services::ServiceBrokers
   class ServiceManager
-    attr_reader :catalog, :warnings
+    attr_reader :warnings
 
-    def initialize(catalog)
-      @catalog = catalog
+    def initialize(service_event_repository)
+      @services_event_repository = service_event_repository
       @warnings = []
     end
 
-    def sync_services_and_plans
-      update_or_create_services
-      deactivate_services
-      update_or_create_plans
-      deactivate_plans
-      delete_plans
-      delete_services
+    def sync_services_and_plans(catalog)
+      update_or_create_services(catalog)
+      deactivate_services(catalog)
+      update_or_create_plans(catalog)
+      deactivate_plans(catalog)
+      delete_plans(catalog)
+      delete_services(catalog)
     end
 
     def has_warnings?
@@ -22,58 +22,71 @@ module VCAP::Services::ServiceBrokers
 
     private
 
-    def update_or_create_services
+    def update_or_create_services(catalog)
       catalog.services.each do |catalog_service|
-        service_id = catalog_service.broker_provided_id
+        cond = {
+          service_broker: catalog_service.service_broker,
+          unique_id:      catalog_service.broker_provided_id,
+        }
+        obj = find_or_new_model(VCAP::CloudController::Service, cond)
 
-        VCAP::CloudController::Service.update_or_create(
-          service_broker: catalog.service_broker,
-          unique_id:      service_id
-        ) do |service|
-          service.set(
-            label:       catalog_service.name,
-            description: catalog_service.description,
-            bindable:    catalog_service.bindable,
-            tags:        catalog_service.tags,
-            extra:       catalog_service.metadata ? catalog_service.metadata.to_json : nil,
-            active:      catalog_service.plans_present?,
-            requires:    catalog_service.requires,
-          )
+        obj.set(
+          label:       catalog_service.name,
+          description: catalog_service.description,
+          bindable:    catalog_service.bindable,
+          tags:        catalog_service.tags,
+          extra:       catalog_service.metadata ? catalog_service.metadata.to_json : nil,
+          active:      catalog_service.plans_present?,
+          requires:    catalog_service.requires,
+          plan_updateable: catalog_service.plan_updateable,
+        )
+
+        @services_event_repository.with_service_event(obj) do
+          obj.save(changed: true)
         end
       end
     end
 
-    def deactivate_services
+    def update_or_create_plans(catalog)
+      catalog.plans.each do |catalog_plan|
+        cond = {
+          unique_id: catalog_plan.broker_provided_id,
+          service: catalog_plan.catalog_service.cc_service,
+        }
+        plan = find_or_new_model(VCAP::CloudController::ServicePlan, cond)
+        if plan.new?
+          plan.public = false
+        end
+
+        plan.set({
+          name:        catalog_plan.name,
+          description: catalog_plan.description,
+          free:        catalog_plan.free,
+          active:      true,
+          extra:       catalog_plan.metadata ? catalog_plan.metadata.to_json : nil
+        })
+        @services_event_repository.with_service_plan_event(plan) do
+          plan.save(changed: true)
+        end
+      end
+    end
+
+    def find_or_new_model(model_class, cond)
+      obj = model_class.first(cond)
+      unless obj
+        obj = model_class.new(cond)
+      end
+      obj
+    end
+
+    def deactivate_services(catalog)
       services_in_db_not_in_catalog = catalog.service_broker.services_dataset.where('unique_id NOT in ?', catalog.services.map(&:broker_provided_id))
       services_in_db_not_in_catalog.each do |service|
         service.update(active: false)
       end
     end
 
-    def update_or_create_plans
-      catalog.plans.each do |catalog_plan|
-        attrs = {
-          name:        catalog_plan.name,
-          description: catalog_plan.description,
-          free:        catalog_plan.free,
-          active:      true,
-          extra:       catalog_plan.metadata ? catalog_plan.metadata.to_json : nil
-        }
-        if catalog_plan.cc_plan
-          catalog_plan.cc_plan.update(attrs)
-        else
-          VCAP::CloudController::ServicePlan.create(
-            attrs.merge(
-              service:   catalog_plan.catalog_service.cc_service,
-              unique_id: catalog_plan.broker_provided_id,
-              public:    false,
-            )
-          )
-        end
-      end
-    end
-
-    def deactivate_plans
+    def deactivate_plans(catalog)
       plan_ids_in_broker_catalog = catalog.plans.map(&:broker_provided_id)
       plans_in_db_not_in_catalog = catalog.service_broker.service_plans.reject { |p| plan_ids_in_broker_catalog.include?(p.broker_provided_id) }
       deactivated_plans_warning  = DeactivatedPlansWarning.new
@@ -82,27 +95,29 @@ module VCAP::Services::ServiceBrokers
         plan_to_deactivate.active = false
         plan_to_deactivate.save
 
-        deactivated_plans_warning.add(plan_to_deactivate)
+        deactivated_plans_warning.add(plan_to_deactivate) if plan_to_deactivate.service_instances.count >= 1
       end
 
       @warnings << deactivated_plans_warning.message if deactivated_plans_warning.message
     end
 
-    def delete_plans
+    def delete_plans(catalog)
       plan_ids_in_broker_catalog = catalog.plans.map(&:broker_provided_id)
       plans_in_db_not_in_catalog = catalog.service_broker.service_plans.reject { |p| plan_ids_in_broker_catalog.include?(p.broker_provided_id) }
       plans_in_db_not_in_catalog.each do |plan_to_deactivate|
         if plan_to_deactivate.service_instances.count < 1
           plan_to_deactivate.destroy
+          @services_event_repository.record_service_plan_event(:delete, plan_to_deactivate)
         end
       end
     end
 
-    def delete_services
+    def delete_services(catalog)
       services_in_db_not_in_catalog = catalog.service_broker.services_dataset.where('unique_id NOT in ?', catalog.services.map(&:broker_provided_id))
       services_in_db_not_in_catalog.each do |service|
         if service.service_plans.count < 1
           service.destroy
+          @services_event_repository.record_service_event(:delete, service)
         end
       end
     end
@@ -132,9 +147,10 @@ module VCAP::Services::ServiceBrokers
       def format_message
         warning_msg = ''
 
-        @nested_warnings.each_pair do |service, plans|
+        @nested_warnings.sort.each do |pair|
+          service, plans = pair
           warning_msg += "#{service}\n"
-          plans.each do |plan|
+          plans.sort.each do |plan|
             warning_msg += "#{INDENT}#{plan}\n"
           end
         end

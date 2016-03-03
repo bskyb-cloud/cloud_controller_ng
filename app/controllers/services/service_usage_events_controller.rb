@@ -2,9 +2,9 @@ require 'services/api'
 
 module VCAP::CloudController
   class ServiceUsageEventsController < RestController::ModelController
-    query_parameters :service_instance_type
+    query_parameters :service_instance_type, :service_guid
 
-    preserve_query_parameters :after_guid, :service_instance_type
+    preserve_query_parameters :after_guid
 
     get '/v2/service_usage_events', :enumerate
 
@@ -32,7 +32,7 @@ module VCAP::CloudController
         repository = Repositories::Services::ServiceUsageEventRepository.new
         previous_event = repository.find(after_guid)
         raise Errors::ApiError.new_from_details('BadQueryParameter', after_guid) unless previous_event
-        ds = ds.filter{ id > previous_event.id }
+        ds = ds.filter { id > previous_event.id }
       end
       super(model, ds, qp, opts)
     end

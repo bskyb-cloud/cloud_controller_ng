@@ -3,16 +3,16 @@ require 'spec_helper'
 module VCAP::CloudController
   describe ServiceBindingAccess, type: :access do
     subject(:access) { ServiceBindingAccess.new(Security::AccessContext.new) }
-    let(:token) {{ 'scope' => ['cloud_controller.read', 'cloud_controller.write'] }}
+    let(:token) { { 'scope' => ['cloud_controller.read', 'cloud_controller.write'] } }
 
     let(:user) { VCAP::CloudController::User.make }
     let(:service) { VCAP::CloudController::Service.make }
     let(:org) { VCAP::CloudController::Organization.make }
-    let(:space) { VCAP::CloudController::Space.make(:organization => org) }
-    let(:app) { VCAP::CloudController::AppFactory.make(:space => space) }
-    let(:service_instance) { VCAP::CloudController::ManagedServiceInstance.make(:space => space) }
+    let(:space) { VCAP::CloudController::Space.make(organization: org) }
+    let(:app) { VCAP::CloudController::AppFactory.make(space: space) }
+    let(:service_instance) { VCAP::CloudController::ManagedServiceInstance.make(space: space) }
 
-    let(:object) { VCAP::CloudController::ServiceBinding.make(:app => app, :service_instance => service_instance) }
+    let(:object) { VCAP::CloudController::ServiceBinding.make(app: app, service_instance: service_instance) }
 
     before do
       SecurityContext.set(user, token)
@@ -68,7 +68,7 @@ module VCAP::CloudController
         space.add_manager(user)
       end
 
-      it_behaves_like :no_access
+      it_behaves_like :read_only
     end
 
     context 'space developer' do
@@ -89,7 +89,7 @@ module VCAP::CloudController
     end
 
     context 'any user using client without cloud_controller.write' do
-      let(:token) {{'scope' => ['cloud_controller.read']}}
+      let(:token) { { 'scope' => ['cloud_controller.read'] } }
       before do
         org.add_user(user)
         org.add_manager(user)
@@ -104,7 +104,7 @@ module VCAP::CloudController
     end
 
     context 'any user using client without cloud_controller.read' do
-      let(:token) {{'scope' => []}}
+      let(:token) { { 'scope' => [] } }
       before do
         org.add_user(user)
         org.add_manager(user)

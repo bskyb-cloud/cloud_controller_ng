@@ -4,6 +4,8 @@ require 'repositories/services/service_usage_event_repository'
 module VCAP::CloudController
   module Repositories::Services
     describe ServiceUsageEventRepository do
+      let(:guid_pattern) { '[[:alnum:]-]+' }
+
       subject(:repository) do
         ServiceUsageEventRepository.new
       end
@@ -46,7 +48,6 @@ module VCAP::CloudController
           end
 
           context 'fails to create the event' do
-
             context 'if service instance does not have a space' do
               before do
                 service_instance.space = nil
@@ -58,7 +59,6 @@ module VCAP::CloudController
                 }.to raise_error
               end
             end
-
           end
         end
 
@@ -72,7 +72,6 @@ module VCAP::CloudController
             expect(event).to match_service_instance(service_instance)
           end
         end
-
       end
 
       describe '#purge_and_reseed_started_apps!' do
@@ -88,10 +87,18 @@ module VCAP::CloudController
           allow(ServiceUsageEvent.dataset).to receive(:truncate) do
             ServiceUsageEvent.dataset.destroy
           end
+
+          ManagedServiceInstance.each do |service_instance|
+            service_broker = service_instance.service.service_broker
+            uri = URI(service_broker.broker_url)
+            broker_url = uri.host + uri.path
+            stub_request(:delete, %r{https://#{service_broker.auth_username}:#{service_broker.auth_password}@#{broker_url}/v2/service_instances/#{guid_pattern}}).
+              to_return(status: 200, body: '{}')
+          end
         end
 
         it 'will purge all existing events' do
-          ServiceInstance.each { |instance| instance.destroy }
+          ServiceInstance.each(&:destroy)
 
           expect {
             repository.purge_and_reseed_service_instances!

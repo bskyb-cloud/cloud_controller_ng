@@ -10,10 +10,10 @@ module VCAP::CloudController
     def after_destroy
       super
       droplet_deletion_job = Jobs::Runtime::DropletDeletion.new(new_blobstore_key, old_blobstore_key)
-      Jobs::Enqueuer.new(droplet_deletion_job, queue: "cc-generic").enqueue()
+      Jobs::Enqueuer.new(droplet_deletion_job, queue: 'cc-generic').enqueue
     end
 
-    #privatize?
+    # privatize?
     def file
       if app.staged?
         blob
@@ -43,11 +43,20 @@ module VCAP::CloudController
       blobstore.blob(new_blobstore_key) || blobstore.blob(old_blobstore_key)
     end
 
-    def update_start_command(detected_start_command)
-      update(detected_start_command: detected_start_command)
+    def update_execution_metadata(metadata)
+      update(execution_metadata: metadata)
+    end
+
+    def update_detected_start_command(metadata)
+      update(detected_start_command: metadata)
+    end
+
+    def update_cached_docker_image(image)
+      update(cached_docker_image: image)
     end
 
     private
+
     def blobstore
       CloudController::DependencyLocator.instance.droplet_blobstore
     end

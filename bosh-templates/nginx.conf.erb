@@ -38,8 +38,10 @@ http {
     listen    <%= p("cc.external_port") %>;
     server_name  _;
     server_name_in_redirect off;
-    proxy_send_timeout          <%= p("request_timeout_in_seconds") %>;
-    proxy_read_timeout          <%= p("request_timeout_in_seconds") %>;
+    <% if p("request_timeout_in_seconds").to_i > 0 %>
+      proxy_send_timeout          <%= p("request_timeout_in_seconds") %>;
+      proxy_read_timeout          <%= p("request_timeout_in_seconds") %>;
+    <% end %>
 
     # proxy and log all CC traffic
     location / {
@@ -80,7 +82,16 @@ http {
     }
 <% end %>
 
-    location ~ (/apps/.*/application|/v2/apps/.*/bits|/services/v\d+/configurations/.*/serialized/data|/v2/buildpacks/.*/bits) {
+<% if p("cc.buildpacks.fog_connection.provider", "local").downcase == "local" %>
+    # used for x-accel-redirect uri://location/foo.txt
+    # nginx will serve the file root || location || foo.txt
+    location <%= "/#{p('cc.buildpacks.buildpack_directory_key')}/" %> {
+      internal;
+      root   <%= p(["cc.buildpacks.fog_connection.local_root", "cc.default_fog_connection.local_root"]) %>;
+    }
+<% end %>
+
+    location ~ (/apps/.*/application|/v2/apps/.*/bits|/services/v\d+/configurations/.*/serialized/data|/v2/buildpacks/.*/bits|/v3/packages/.*/upload) {
       # Pass altered request body to this location
       upload_pass   @cc_uploads;
       upload_pass_args on;
@@ -106,8 +117,7 @@ http {
       upload_cleanup 400-505;
     }
 
-    location ~ /staging/(buildpack_cache|droplets)/.*/upload {
-
+    location ~ /staging/(v3/)?(droplets|buildpack_cache)/.*/upload {
       # Allow download the droplets and buildpacks
       if ($request_method = GET){
         proxy_pass http://cloud_controller;
@@ -152,14 +162,12 @@ http {
       proxy_pass $download_url;
     }
 
-    <% if_p("cc.newrelic.license_key") do %>
     location /nginx_status {
       stub_status on;
-      access_log  /var/vcap/sys/log/nginx_newrelic_plugin/nginx_newrelic_plugin.access.log main;
+      access_log  /var/vcap/sys/log/nginx_cc/nginx_status.access.log main;
       allow 127.0.0.1;
       deny all;
     }
-    <% end %>
 
   }
 }

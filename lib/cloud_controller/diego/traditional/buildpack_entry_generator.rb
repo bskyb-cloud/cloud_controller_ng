@@ -11,9 +11,9 @@ module VCAP::CloudController
 
           case buildpack
           when VCAP::CloudController::CustomBuildpack
-            [custom_buildpack_entry(buildpack)]
+            [custom_buildpack_entry(buildpack).merge(skip_detect: true)]
           when VCAP::CloudController::Buildpack
-            [admin_buildpack_entry(buildpack)]
+            [admin_buildpack_entry(buildpack).merge(skip_detect: true)]
           when VCAP::CloudController::AutoDetectionBuildpack
             default_admin_buildpacks
           else
@@ -24,7 +24,7 @@ module VCAP::CloudController
         private
 
         def custom_buildpack_entry(buildpack)
-          {name: "custom", key: buildpack.url, url: buildpack.url}
+          { name: 'custom', key: buildpack.url, url: buildpack.url }
         end
 
         def default_admin_buildpacks

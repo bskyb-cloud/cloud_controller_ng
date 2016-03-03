@@ -4,8 +4,9 @@ module VCAP::CloudController
   describe ServiceUsageEventsController do
     let(:event_guid1) { SecureRandom.uuid }
 
-    describe "Query Parameters" do
+    describe 'Query Parameters' do
       it { expect(described_class).to be_queryable_by(:service_instance_type) }
+      it { expect(described_class).to be_queryable_by(:service_guid) }
     end
 
     before do
@@ -16,7 +17,7 @@ module VCAP::CloudController
     end
 
     after do
-      ServiceUsageEvent.each { |event| event.delete }
+      ServiceUsageEvent.each(&:delete)
     end
 
     describe 'GET /v2/service_usage_events' do
@@ -106,33 +107,67 @@ module VCAP::CloudController
           end
 
           it 'maintains the service_instance_type in the next_url' do
-            get "/v2/service_usage_events?service_instance_type=managed_service_instance&results-per-page=1", {}, admin_headers
+            get '/v2/service_usage_events?q=service_instance_type:managed_service_instance&results-per-page=1', {}, admin_headers
             expect(last_response).to be_successful
-            expect(decoded_response.fetch('next_url')).to include("/v2/service_usage_events")
-            expect(decoded_response.fetch('next_url')).to include("service_instance_type=managed_service_instance")
-            expect(decoded_response.fetch('next_url')).to include("order-direction=asc")
-            expect(decoded_response.fetch('next_url')).to include("results-per-page=1")
+            expect(decoded_response.fetch('resources')).to have(1).item
+            expect(decoded_response.fetch('next_url')).to include('/v2/service_usage_events')
+            expect(decoded_response.fetch('next_url')).to include('service_instance_type:managed_service_instance')
+            expect(decoded_response.fetch('next_url')).to include('order-direction=asc')
+            expect(decoded_response.fetch('next_url')).to include('results-per-page=1')
           end
 
           it 'maintains the service_instance_type in the prev_url' do
-            get "/v2/service_usage_events?service_instance_type=managed_service_instance&results-per-page=1&page=2", {}, admin_headers
+            get '/v2/service_usage_events?q=service_instance_type:managed_service_instance&results-per-page=1&page=2', {}, admin_headers
             expect(last_response).to be_successful
-            expect(decoded_response.fetch('prev_url')).to include("/v2/service_usage_events")
-            expect(decoded_response.fetch('prev_url')).to include("service_instance_type=managed_service_instance")
-            expect(decoded_response.fetch('prev_url')).to include("order-direction=asc")
-            expect(decoded_response.fetch('prev_url')).to include("results-per-page=1")
+            expect(decoded_response.fetch('prev_url')).to include('/v2/service_usage_events')
+            expect(decoded_response.fetch('prev_url')).to include('service_instance_type:managed_service_instance')
+            expect(decoded_response.fetch('prev_url')).to include('order-direction=asc')
+            expect(decoded_response.fetch('prev_url')).to include('results-per-page=1')
+          end
+        end
+      end
+
+      context 'when filtering by service guid' do
+        let(:service) { Service.make(:v2) }
+        let!(:event) { ServiceUsageEvent.make(service_guid: service.guid) }
+
+        it 'can filter by service_guid' do
+          get "/v2/service_usage_events?q=service_guid:#{service.guid}", {}, admin_headers
+          expect(last_response).to have_status_code 200
+          expect(decoded_response.fetch('resources')).to have(1).item
+          expect(decoded_response.fetch('resources').first['metadata']['guid']).to eq event.guid
+        end
+
+        context 'when the response is multiple pages' do
+          let!(:event2) { ServiceUsageEvent.make(service_guid: service.guid) }
+
+          it 'includes service_guid in the next_url' do
+            get "/v2/service_usage_events?q=service_guid:#{service.guid}&results-per-page=1", {}, admin_headers
+            expect(last_response).to have_status_code 200
+            expect(decoded_response.fetch('resources')).to have(1).item
+            expect(decoded_response.fetch('resources').first['metadata']['guid']).to eq event.guid
+
+            expect(decoded_response['next_url']).to include("service_guid:#{service.guid}")
+          end
+
+          it 'includes service_guid in the prev_url' do
+            get "/v2/service_usage_events?q=service_guid:#{service.guid}&results-per-page=1&page=2", {}, admin_headers
+            expect(last_response).to have_status_code 200
+            expect(decoded_response.fetch('resources')).to have(1).item
+            expect(decoded_response.fetch('resources').first['metadata']['guid']).to eq event2.guid
+
+            expect(decoded_response['prev_url']).to include("service_guid:#{service.guid}")
           end
         end
       end
 
       context 'when the user is not an admin (i.e. is not authorized)' do
         it 'returns 403' do
-          user_headers = headers_for(VCAP::CloudController::User.make(:admin => false))
+          user_headers = headers_for(VCAP::CloudController::User.make(admin: false))
           get '/v2/service_usage_events', {}, json_headers(user_headers)
           expect(last_response.status).to eq(403)
         end
       end
-
     end
 
     describe 'GET /v2/service_usage_events/:guid' do
@@ -147,7 +182,7 @@ module VCAP::CloudController
 
     describe 'POST /v2/service_usage_events/destructively_purge_all_and_reseed_existing_instance' do
       let(:user) { User.make }
-      let(:instance) { ManagedServiceInstance.make}
+      let(:instance) { ManagedServiceInstance.make }
 
       before do
         allow(ServiceUsageEvent.dataset).to receive(:truncate) do

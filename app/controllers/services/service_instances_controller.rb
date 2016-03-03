@@ -1,16 +1,23 @@
 require 'services/api'
+require 'jobs/audit_event_job'
+require 'actions/services/service_instance_create'
+require 'actions/services/service_instance_update'
+require 'controllers/services/lifecycle/service_instance_deprovisioner'
+require 'queries/service_instance_fetcher'
 
 module VCAP::CloudController
   class ServiceInstancesController < RestController::ModelController
     model_class_name :ManagedServiceInstance # Must do this to be backwards compatible with actions other than enumerate
     define_attributes do
-      attribute :name,  String
-      to_one    :space
-      to_one    :service_plan
-      to_many   :service_bindings
+      attribute :name, String
+      attribute :parameters, Hash, default: nil
+      to_one :space
+      to_one :service_plan
+      to_many :service_bindings
+      to_many :service_keys
     end
 
-    query_parameters :name, :space_guid, :service_plan_guid, :service_binding_guid, :gateway_name, :organization_guid
+    query_parameters :name, :space_guid, :service_plan_guid, :service_binding_guid, :gateway_name, :organization_guid, :service_key_guid
     # added :organization_guid here for readability, it is actually implemented as a search filter
     # in the #get_filtered_dataset_for_enumeration method because ModelControl does not support
     # searching on parameters that are not directly associated with the model
@@ -21,94 +28,183 @@ module VCAP::CloudController
       service_plan_errors = e.errors.on(:service_plan)
       service_instance_name_errors = e.errors.on(:name)
       if space_and_name_errors && space_and_name_errors.include?(:unique)
-        return Errors::ApiError.new_from_details("ServiceInstanceNameTaken", attributes["name"])
+        return Errors::ApiError.new_from_details('ServiceInstanceNameTaken', attributes['name'])
       elsif quota_errors
         if quota_errors.include?(:service_instance_space_quota_exceeded)
-          return Errors::ApiError.new_from_details("ServiceInstanceSpaceQuotaExceeded")
+          return Errors::ApiError.new_from_details('ServiceInstanceSpaceQuotaExceeded')
         elsif quota_errors.include?(:service_instance_quota_exceeded)
-          return Errors::ApiError.new_from_details("ServiceInstanceQuotaExceeded")
+          return Errors::ApiError.new_from_details('ServiceInstanceQuotaExceeded')
         end
       elsif service_plan_errors
         if service_plan_errors.include?(:paid_services_not_allowed_by_space_quota)
-          return Errors::ApiError.new_from_details("ServiceInstanceServicePlanNotAllowedBySpaceQuota")
+          return Errors::ApiError.new_from_details('ServiceInstanceServicePlanNotAllowedBySpaceQuota')
         elsif service_plan_errors.include?(:paid_services_not_allowed_by_quota)
-          return Errors::ApiError.new_from_details("ServiceInstanceServicePlanNotAllowed")
+          return Errors::ApiError.new_from_details('ServiceInstanceServicePlanNotAllowed')
         end
       elsif service_instance_name_errors
         if service_instance_name_errors.include?(:max_length)
-          return Errors::ApiError.new_from_details("ServiceInstanceNameTooLong")
+          return Errors::ApiError.new_from_details('ServiceInstanceNameTooLong')
         else
-          return Errors::ApiError.new_from_details("ServiceInstanceNameEmpty", attributes['name'])
+          return Errors::ApiError.new_from_details('ServiceInstanceNameEmpty', attributes['name'])
         end
       end
 
-      Errors::ApiError.new_from_details("ServiceInstanceInvalid", e.errors.full_messages)
+      Errors::ApiError.new_from_details('ServiceInstanceInvalid', e.errors.full_messages)
     end
 
-    def self.not_found_exception(guid)
-      Errors::ApiError.new_from_details("ServiceInstanceNotFound", guid)
+    def self.dependencies
+      [:services_event_repository]
+    end
+
+    def inject_dependencies(dependencies)
+      super
+      @services_event_repository = dependencies.fetch(:services_event_repository)
     end
 
     def create
-      json_msg = self.class::CreateMessage.decode(body)
+      @request_attrs = validate_create_request
+      accepts_incomplete = convert_flag_to_bool(params['accepts_incomplete'])
+
+      service_plan = ServicePlan.first(guid: request_attrs['service_plan_guid'])
+      space = Space.filter(guid: request_attrs['space_guid']).first
+      organization = space.organization if space
+
+      service_plan_not_found! unless service_plan
+
+      service_instance = ManagedServiceInstance.new(request_attrs.except('parameters'))
+      validate_access(:create, service_instance)
+
+      invalid_service_instance!(service_instance) unless service_instance.valid?
+      space_not_found! unless space
+      org_not_authorized! unless plan_visible_to_org?(organization, service_plan)
+
+      service_instance = ServiceInstanceCreate.new(@services_event_repository, logger).
+                             create(request_attrs, accepts_incomplete)
+
+      [status_from_operation_state(service_instance),
+       { 'Location' => "#{self.class.path}/#{service_instance.guid}" },
+       object_renderer.render_json(self.class, service_instance, @opts)
+      ]
+    end
+
+    def update(guid)
+      @request_attrs = validate_update_request(guid)
+      accepts_incomplete = convert_flag_to_bool(params['accepts_incomplete'])
+
+      service_instance, related_objects = ServiceInstanceFetcher.new.fetch(guid)
+      validate_access(:read_for_update, service_instance)
+      validate_access(:update, service_instance)
+
+      validate_space_update(related_objects[:space])
+      validate_plan_update(related_objects[:plan], related_objects[:service])
+
+      update = ServiceInstanceUpdate.new(accepts_incomplete: accepts_incomplete, services_event_repository: @services_event_repository)
+      update.update_service_instance(service_instance, request_attrs)
+
+      status_code = status_from_operation_state(service_instance)
+      if status_code == HTTP::ACCEPTED
+        headers = { 'Location' => "#{self.class.path}/#{service_instance.guid}" }
+      end
+
+      [
+        status_code,
+        headers,
+        object_renderer.render_json(self.class, service_instance, @opts)
+      ]
+    end
+
+    def read(guid)
+      logger.debug 'cc.read', model: :ServiceInstance, guid: guid
+
+      service_instance = find_guid_and_validate_access(:read, guid, ServiceInstance)
+      object_renderer.render_json(self.class, service_instance, @opts)
+    end
+
+    def delete(guid)
+      accepts_incomplete = convert_flag_to_bool(params['accepts_incomplete'])
+      async = convert_flag_to_bool(params['async'])
+
+      service_instance = find_guid(guid, ServiceInstance)
+
+      validate_access(:delete, service_instance)
+      association_not_empty!(:service_bindings) if has_bindings?(service_instance) && !recursive?
+      association_not_empty!(:service_keys) if has_keys?(service_instance) && !recursive?
+
+      deprovisioner = ServiceInstanceDeprovisioner.new(@services_event_repository, self, logger)
+      delete_job = deprovisioner.deprovision_service_instance(service_instance, accepts_incomplete, async)
+
+      if delete_job
+        [
+          HTTP::ACCEPTED,
+          { 'Location' => "/v2/jobs/#{delete_job.guid}" },
+          JobPresenter.new(delete_job).to_json
+        ]
+      elsif service_instance.exists?
+        [
+          HTTP::ACCEPTED,
+          { 'Location' => "#{self.class.path}/#{service_instance.guid}" },
+          object_renderer.render_json(self.class, service_instance.refresh, @opts)
+        ]
+      else
+        [HTTP::NO_CONTENT, nil]
+      end
+    end
+
+    get '/v2/service_instances/:guid/schema', :get_schema
+    def get_schema(guid)
+      service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
+      response = service_instance.client.get_schema(service_instance)
+
+      [HTTP::OK, {}, response.to_json]
+    end
+
+    class SetSchemaMessage < VCAP::RestAPI::Message
+      required :schema, String
+    end
+
+    put '/v2/service_instances/:guid/schema', :set_schema
+    def set_schema(guid)
+
+      json_msg = self.class::SetSchemaMessage.decode(body)
 
       @request_attrs = json_msg.extract(:stringify_keys => true)
 
-      service_plan_guid = request_attrs['service_plan_guid']
+      raise Errors::ApiError.new_from_details('InvalidRequest') unless request_attrs
+      raise Errors::ApiError.new_from_details('InvalidRequest') unless request_attrs['schema']
 
-      logger.debug "cc.create", :model => self.class.model_class_name,
-        :attributes => request_attrs
+      service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
+      service_instance.client.set_schema(service_instance, request_attrs['schema'])
 
-      raise Errors::ApiError.new_from_details("InvalidRequest") unless request_attrs
-
-      # Make sure the service plan exists before checking permissions
-      find_guid(service_plan_guid, ServicePlan)
-
-      raise Errors::ApiError.new_from_details("NotAuthorized") unless current_user_can_manage_plan(service_plan_guid)
-
-      organization = requested_space.organization
-
-      unless ServicePlan.organization_visible(organization).filter(:guid => request_attrs['service_plan_guid']).count > 0
-        raise Errors::ApiError.new_from_details("ServiceInstanceOrganizationNotAuthorized")
-      end
-
-      service_instance = ManagedServiceInstance.new(request_attrs)
-      validate_access(:create, service_instance)
-
-      unless service_instance.valid?
-        raise Sequel::ValidationFailed.new(service_instance)
-      end
-
-      service_instance.client.provision(service_instance)
-
-      begin
-        service_instance.save
-      rescue => e
-        safe_deprovision_instance(service_instance)
+      [HTTP::OK, {}, { }.to_json]
+    end
+    
+    get '/v2/service_instances/:guid/permissions', :permissions
+    def permissions(guid)
+      find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
+      [HTTP::OK, {}, JSON.generate({ manage: true })]
+    rescue Errors::ApiError => e
+      if e.name == 'NotAuthorized'
+        [HTTP::OK, {}, JSON.generate({ manage: false })]
+      else
         raise e
       end
-
-      [ HTTP::CREATED,
-        { "Location" => "#{self.class.path}/#{service_instance.guid}" },
-        object_renderer.render_json(self.class, service_instance, @opts)
-      ]
     end
 
     class BulkUpdateMessage < VCAP::RestAPI::Message
       required :service_plan_guid, String
     end
 
-    put "/v2/service_plans/:service_plan_guid/service_instances", :bulk_update
+    put '/v2/service_plans/:service_plan_guid/service_instances', :bulk_update
     def bulk_update(existing_service_plan_guid)
-      raise Errors::ApiError.new_from_details("NotAuthorized") unless SecurityContext.admin?
+      raise Errors::ApiError.new_from_details('NotAuthorized') unless SecurityContext.admin?
 
-      @request_attrs = self.class::BulkUpdateMessage.decode(body).extract(:stringify_keys => true)
+      @request_attrs = self.class::BulkUpdateMessage.decode(body).extract(stringify_keys: true)
 
-      existing_plan = ServicePlan.filter(:guid => existing_service_plan_guid).first
-      new_plan = ServicePlan.filter(:guid => request_attrs['service_plan_guid']).first
+      existing_plan = ServicePlan.filter(guid: existing_service_plan_guid).first
+      new_plan = ServicePlan.filter(guid: request_attrs['service_plan_guid']).first
 
       if existing_plan && new_plan
-        changed_count = existing_plan.service_instances_dataset.update(:service_plan_id => new_plan.id)
+        changed_count = existing_plan.service_instances_dataset.update(service_plan_id: new_plan.id)
         [HTTP::OK, {}, { changed_count: changed_count }.to_json]
       else
         [HTTP::BAD_REQUEST, {}, '']
@@ -126,59 +222,12 @@ module VCAP::CloudController
       end
     end
 
-    def read(guid)
-      logger.debug "cc.read", model: :ServiceInstance, guid: guid
-
-      service_instance = find_guid_and_validate_access(:read, guid, ServiceInstance)
-      object_renderer.render_json(self.class, service_instance, @opts)
-    end
-
-    get "/v2/service_instances/:guid/schema", :get_schema
-    def get_schema(guid)
-      service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
-      response = service_instance.client.get_schema(service_instance)
-      
-      [HTTP::OK, {}, response.to_json]
-    end
-
-    class SetSchemaMessage < VCAP::RestAPI::Message
-      required :schema, String
-    end
-            
-    put "/v2/service_instances/:guid/schema", :set_schema
-    def set_schema(guid)
-      
-      json_msg = self.class::SetSchemaMessage.decode(body)
-      
-      @request_attrs = json_msg.extract(:stringify_keys => true)
-       
-      raise Errors::ApiError.new_from_details("InvalidRequest") unless request_attrs
-      raise Errors::ApiError.new_from_details("InvalidRequest") unless request_attrs["schema"]
-      
-      service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
-      service_instance.client.set_schema(service_instance, request_attrs["schema"])
-      
-      [HTTP::OK, {}, { }.to_json]
-    end
-
-    get '/v2/service_instances/:guid/permissions', :permissions
-    def permissions(guid)
-      find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
-      [HTTP::OK, {}, JSON.generate({ manage: true })]
-    rescue Errors::ApiError => e
-      if e.name == "NotAuthorized"
-        [HTTP::OK, {}, JSON.generate({ manage: false })]
-      else
-        raise e
-      end
-    end
-
-    def delete(guid)
-      do_delete(find_guid_and_validate_access(:delete, guid, ServiceInstance))
+    def self.not_found_exception(guid)
+      Errors::ApiError.new_from_details('ServiceInstanceNotFound', guid)
     end
 
     def get_filtered_dataset_for_enumeration(model, ds, qp, opts)
-      single_filter = opts[:q]
+      single_filter = opts[:q][0] if opts[:q]
 
       if single_filter && single_filter.start_with?('organization_guid')
         org_guid = single_filter.split(':')[1]
@@ -188,7 +237,7 @@ module VCAP::CloudController
           select_all(:service_instances).
           left_join(:spaces, id: :service_instances__space_id).
           left_join(:organizations, id: :spaces__organization_id).
-          where(:organizations__guid => org_guid)
+          where(organizations__guid: org_guid)
       else
         super(model, ds, qp, opts)
       end
@@ -199,21 +248,117 @@ module VCAP::CloudController
 
     private
 
-    def requested_space
-      space = Space.filter(:guid => request_attrs['space_guid']).first
-      raise Errors::ApiError.new_from_details("ServiceInstanceInvalid", 'not a valid space') unless space
-      space
+    def validate_create_request
+      request_attrs = self.class::CreateMessage.decode(body).extract(stringify_keys: true)
+      logger.debug('cc.create', model: self.class.model_class_name, attributes: request_attrs)
+      invalid_request! unless request_attrs
+      request_attrs
     end
 
-    def current_user_can_manage_plan(plan_guid)
-      ServicePlan.user_visible(SecurityContext.current_user, SecurityContext.admin?).filter(:guid => plan_guid).count > 0
+    def validate_update_request(guid)
+      request_attrs = self.class::UpdateMessage.decode(body).extract(stringify_keys: true)
+      logger.debug('cc.update', guid: guid, attributes: request_attrs)
+      invalid_request! unless request_attrs
+      request_attrs
     end
 
-    def safe_deprovision_instance(service_instance)
-      # this needs to go into a retry queue
-      service_instance.client.deprovision(service_instance)
-    rescue => e
-      logger.error "Unable to deprovision #{service_instance}: #{e}"
+    def validate_plan_update(current_plan, service)
+      requested_plan_guid = request_attrs['service_plan_guid']
+      if plan_update_requested?(requested_plan_guid, current_plan)
+        plan_not_updateable! if service_disallows_plan_update?(service)
+        invalid_relation! if invalid_plan?(requested_plan_guid, service)
+      end
+    end
+
+    def validate_space_update(space)
+      space_change_not_allowed! if space_change_requested?(request_attrs['space_guid'], space)
+    end
+
+    def invalid_service_instance!(service_instance)
+      raise Sequel::ValidationFailed.new(service_instance)
+    end
+
+    def org_not_authorized!
+      raise Errors::ApiError.new_from_details('ServiceInstanceOrganizationNotAuthorized')
+    end
+
+    def space_not_found!
+      raise Errors::ApiError.new_from_details('ServiceInstanceInvalid', 'not a valid space')
+    end
+
+    def service_plan_not_found!
+      raise Errors::ApiError.new_from_details('ServiceInstanceInvalid', 'not a valid service plan')
+    end
+
+    def plan_not_updateable!
+      raise Errors::ApiError.new_from_details('ServicePlanNotUpdateable')
+    end
+
+    def invalid_relation!
+      raise Errors::ApiError.new_from_details('InvalidRelation', 'Plan')
+    end
+
+    def invalid_request!
+      raise Errors::ApiError.new_from_details('InvalidRequest')
+    end
+
+    def association_not_empty!(association)
+      raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', association, :service_instances)
+    end
+
+    def space_change_not_allowed!
+      raise Errors::ApiError.new_from_details('ServiceInstanceSpaceChangeNotAllowed')
+    end
+
+    def plan_visible_to_org?(organization, service_plan)
+      ServicePlan.organization_visible(organization).filter(guid: service_plan.guid).count > 0
+    end
+
+    def invalid_plan?(requested_plan_guid, service)
+      requested_plan = ServicePlan.find(guid: requested_plan_guid)
+      plan_not_found?(requested_plan) || plan_in_different_service?(requested_plan, service)
+    end
+
+    def plan_update_requested?(requested_plan_guid, old_plan)
+      requested_plan_guid && requested_plan_guid != old_plan.guid
+    end
+
+    def has_bindings?(service_instance)
+      !service_instance.service_bindings.empty?
+    end
+
+    def has_keys?(service_instance)
+      !service_instance.service_keys.empty?
+    end
+
+    def space_change_requested?(requested_space_guid, current_space)
+      requested_space_guid && requested_space_guid != current_space.guid
+    end
+
+    def plan_not_found?(service_plan)
+      !service_plan
+    end
+
+    def plan_in_different_service?(service_plan, service)
+      service_plan.service.guid != service.guid
+    end
+
+    def service_disallows_plan_update?(service)
+      !service.plan_updateable
+    end
+
+    def status_from_operation_state(service_instance)
+      if service_instance.last_operation.state == 'in progress'
+        state = HTTP::ACCEPTED
+      else
+        state = HTTP::CREATED
+      end
+      state
+    end
+
+    def convert_flag_to_bool(flag)
+      raise Errors::ApiError.new_from_details('InvalidRequest') unless ['true', 'false', nil].include? flag
+      flag == 'true'
     end
   end
 end

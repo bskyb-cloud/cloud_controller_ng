@@ -1,6 +1,6 @@
-require "securerandom"
-require_relative "app_factory"
-require_relative "../test_models"
+require 'securerandom'
+require_relative 'app_factory'
+require_relative '../test_models'
 
 Sham.define do
   email               { |index| "email-#{index}@somedomain.com" }
@@ -13,7 +13,7 @@ Sham.define do
   url                 { |index| "https://foo.com/url-#{index}" }
   type                { |index| "type-#{index}" }
   description         { |index| "desc-#{index}" }
-  long_description    { |index| "long description-#{index} over 255 characters #{"-"*255}"}
+  long_description    { |index| "long description-#{index} over 255 characters #{'-' * 255}" }
   version             { |index| "version-#{index}" }
   service_credentials { |index| { "creds-key-#{index}" => "creds-val-#{index}" } }
   binding_options     { |index| { "binding-options-#{index}" => "value-#{index}" } }
@@ -21,14 +21,33 @@ Sham.define do
   domain              { |index| "domain-#{index}.example.com" }
   host                { |index| "host-#{index}" }
   guid                { |_| "guid-#{SecureRandom.uuid}" }
-  extra               { |index| "extra-#{index}"}
+  extra               { |index| "extra-#{index}" }
   instance_index      { |index| index }
   unique_id           { |index| "unique-id-#{index}" }
-  status              { |_| %w[active suspended cancelled].sample(1).first }
+  status              { |_| %w(active suspended cancelled).sample(1).first }
   error_message       { |index| "error-message-#{index}" }
 end
 
 module VCAP::CloudController
+  AppModel.blueprint do
+    guid       { Sham.guid }
+    name       { Sham.name }
+    space_guid { Space.make.guid }
+  end
+
+  PackageModel.blueprint do
+    guid     { Sham.guid }
+    state    { VCAP::CloudController::PackageModel::CREATED_STATE }
+    type     { 'bits' }
+    app_guid { AppModel.make.guid }
+  end
+
+  DropletModel.blueprint do
+    guid     { Sham.guid }
+    state    { VCAP::CloudController::DropletModel::STAGING_STATE }
+    app_guid { AppModel.make.guid }
+  end
+
   User.blueprint do
     guid              { Sham.uaa_id }
   end
@@ -36,7 +55,7 @@ module VCAP::CloudController
   Organization.blueprint do
     name              { Sham.name }
     quota_definition  { QuotaDefinition.make }
-    status            { "active" }
+    status            { 'active' }
   end
 
   Domain.blueprint do
@@ -62,7 +81,7 @@ module VCAP::CloudController
 
     domain do
       PrivateDomain.make(
-        :owning_organization => space.organization,
+        owning_organization: space.organization,
       )
     end
 
@@ -82,10 +101,20 @@ module VCAP::CloudController
 
   Service.blueprint do
     label             { Sham.label }
+    unique_id         { SecureRandom.uuid }
+    bindable          { true }
+    active            { true }
+    service_broker    { ServiceBroker.make }
+    description       { Sham.description } # remove hack
+    provider          { '' }
+    url               { nil }
+    version           { nil }
+  end
+
+  Service.blueprint(:v1) do
     provider          { Sham.provider }
     url               { Sham.url }
     version           { Sham.version }
-    unique_id         { SecureRandom.uuid }
     description do
       # Hack since Sequel does not allow two foreign keys natively
       # and putting this side effect outside memoizes the label and provider.
@@ -94,34 +123,38 @@ module VCAP::CloudController
       ServiceAuthToken.make(label: label, provider: provider, token: Sham.token)
       Sham.description
     end
-    bindable          { true }
-    active            { true }
-  end
 
-  Service.blueprint(:v1) do
+    service_broker    { nil }
   end
 
   Service.blueprint(:v2) do
-    service_broker
-    description { Sham.description } # remove hack
-    provider    { '' }
-    url         { nil }
-    version     { nil }
   end
 
   ServiceInstance.blueprint do
-    name        { Sham.name }
-    credentials { Sham.service_credentials }
-    space       { Space.make }
+    name              { Sham.name }
+    credentials       { Sham.service_credentials }
+    space             { Space.make }
   end
 
   ManagedServiceInstance.blueprint do
+    is_gateway_service         { true }
+    name                       { Sham.name }
+    credentials                { Sham.service_credentials }
+    space                      { Space.make }
+    service_plan               { ServicePlan.make(:v2) }
+    gateway_name               { Sham.guid }
+  end
+
+  ManagedServiceInstance.blueprint(:v1) do
     is_gateway_service { true }
     name              { Sham.name }
     credentials       { Sham.service_credentials }
     space             { Space.make }
-    service_plan      { ServicePlan.make }
+    service_plan      { ServicePlan.make(:v1) }
     gateway_name      { Sham.guid }
+  end
+
+  ManagedServiceInstance.blueprint(:v2) do
   end
 
   UserProvidedServiceInstance.blueprint do
@@ -130,6 +163,13 @@ module VCAP::CloudController
     syslog_drain_url  { Sham.url }
     space             { Space.make }
     is_gateway_service { false }
+  end
+
+  ServiceInstanceOperation.blueprint do
+    type                      { 'create' }
+    state                     { 'succeeded' }
+    description               { 'description goes here' }
+    updated_at                { Time.now.utc }
   end
 
   Stack.blueprint do
@@ -144,13 +184,20 @@ module VCAP::CloudController
     space             { Space.make }
     stack             { Stack.make }
     instances         { 1 }
+    type              { 'web' }
   end
 
   ServiceBinding.blueprint do
     credentials       { Sham.service_credentials }
     service_instance  { ManagedServiceInstance.make }
-    app               { AppFactory.make(:space => service_instance.space) }
+    app               { AppFactory.make(space: service_instance.space) }
     syslog_drain_url  { nil }
+  end
+
+  ServiceKey.blueprint do
+    credentials       { Sham.service_credentials }
+    service_instance  { ManagedServiceInstance.make }
+    name               { Sham.name }
   end
 
   ServiceBroker.blueprint do
@@ -169,18 +216,21 @@ module VCAP::CloudController
     name              { Sham.name }
     free              { false }
     description       { Sham.description }
-    service           { Service.make }
+    service           { Service.make(:v2) }
+    unique_id         { SecureRandom.uuid }
+    active            { true }
+  end
+
+  ServicePlan.blueprint(:v1) do
+    name              { Sham.name }
+    free              { false }
+    description       { Sham.description }
+    service           { Service.make(:v1) }
     unique_id         { SecureRandom.uuid }
     active            { true }
   end
 
   ServicePlan.blueprint(:v2) do
-    name              { Sham.name }
-    free              { false }
-    description       { Sham.description }
-    service           { Service.make(:v2) }
-    unique_id         { SecureRandom.uuid }
-    active            { true }
   end
 
   ServicePlanVisibility.blueprint do
@@ -189,14 +239,14 @@ module VCAP::CloudController
   end
 
   BillingEvent.blueprint do
-    timestamp         { Time.now }
+    timestamp         { Time.now.utc }
     organization_guid { Sham.guid }
     organization_name { Sham.name }
   end
 
   Event.blueprint do
-    timestamp  { Time.now }
-    type       { Sham.name}
+    timestamp  { Time.now.utc }
+    type       { Sham.name }
     actor      { Sham.guid }
     actor_type { Sham.name }
     actor_name { Sham.name }
@@ -217,7 +267,7 @@ module VCAP::CloudController
     app_guid          { Sham.guid }
     app_name          { Sham.name }
     app_run_id        { Sham.guid }
-    app_plan_name     { "free" }
+    app_plan_name     { 'free' }
     app_memory        { 256 }
     app_instance_count { 1 }
   end
@@ -237,7 +287,7 @@ module VCAP::CloudController
     instance_index    { Sham.instance_index }
     exit_status       { Random.rand(256) }
     exit_description  { Sham.description }
-    timestamp         { Time.now }
+    timestamp         { Time.now.utc }
   end
 
   ServiceCreateEvent.blueprint do
@@ -280,7 +330,8 @@ module VCAP::CloudController
   end
 
   AppUsageEvent.blueprint do
-    state { "STARTED" }
+    state { 'STARTED' }
+    package_state { 'STAGED' }
     instance_count { 1 }
     memory_in_mb_per_instance { 564 }
     app_guid { Sham.guid }
@@ -290,10 +341,11 @@ module VCAP::CloudController
     space_name { Sham.name }
     buildpack_guid { Sham.guid }
     buildpack_name { Sham.name }
+    process_type { 'web' }
   end
 
   ServiceUsageEvent.blueprint do
-    state { "CREATED" }
+    state { 'CREATED' }
     org_guid { Sham.guid }
     space_guid { Sham.guid }
     space_name { Sham.name }
@@ -311,9 +363,9 @@ module VCAP::CloudController
     rules do
       [
         {
-          "protocol" => "udp",
-          "ports" => "8080",
-          "destination" => "198.41.191.47/1",
+          'protocol' => 'udp',
+          'ports' => '8080',
+          'destination' => '198.41.191.47/1',
         }
       ]
     end
@@ -330,11 +382,11 @@ module VCAP::CloudController
   end
 
   EnvironmentVariableGroup.blueprint do
-    name { "runtime" }
+    name { "runtime-#{Sham.instance_index}" }
     environment_json do
       {
-        "MOTD" => "Because of your smile, you make life more beautiful.",
-        "COROPRATE_PROXY_SERVER" => "abc:8080",
+        'MOTD' => 'Because of your smile, you make life more beautiful.',
+        'COROPRATE_PROXY_SERVER' => 'abc:8080',
       }
     end
   end

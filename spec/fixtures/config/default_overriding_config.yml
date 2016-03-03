@@ -7,6 +7,8 @@ info:
   version: 2
   support_address: "http://support.cloudfoundry.com"
   description: "Cloud Foundry sponsored by Pivotal"
+  min_cli_version: "6.0.0"
+  min_recommended_cli_version: "6.9.0"
 
 external_protocol: http
 
@@ -29,7 +31,15 @@ failed_jobs:
   cutoff_age_in_days: 31
 
 default_app_memory: 1024 #mb
-maximum_health_check_timeout: 180
+
+default_health_check_timeout: 30 #seconds
+maximum_health_check_timeout: 90 #seconds
+
+broker_client_default_async_poll_interval_seconds: 60
+broker_client_max_async_poll_duration_minutes: 10080
+
+hm9000:
+  url: "http://localhost:5155"
 
 uaa:
   url: "http://localhost:8080/uaa"
@@ -46,8 +56,16 @@ bulk_api:
   auth_user: bulk_user
   auth_password: bulk_password
 
+internal_service_hostname: cloud_controller_ng.service.consul
+internal_api:
+  auth_user: internal_user
+  auth_password: internal_password
+
 staging:
   timeout_in_seconds: 120
+  minimum_staging_memory_mb: 512
+  minimum_staging_disk_mb: 1024
+  minimum_staging_file_descriptor_limit: 2048
   auth:
     user: user
     password: password
@@ -74,14 +92,22 @@ quota_definitions:
 default_quota_definition: default
 
 resource_pool:
+  resource_directory_key: cc-resources
   fog_connection:
     provider: Local
 
 packages:
+  app_package_directory_key: cc-packages
   fog_connection:
     provider: Local
 
 droplets:
+  droplet_directory_key: cc-droplets
+  fog_connection:
+    provider: Local
+
+buildpacks:
+  droplet_directory_key: cc-buildpacks
   fog_connection:
     provider: Local
 
@@ -113,3 +139,17 @@ default_staging_security_groups:
 - non_allowed
 default_running_security_groups:
 - non_allowed
+
+allowed_cors_domains:
+- http://andrea.corr
+- http://caroline.corr
+- http://jim.corr
+- http://sharon.corr
+
+users_can_select_backend: false
+diego_docker: true
+default_to_diego_backend: true
+allow_app_ssh_access: true
+
+broker_client_timeout_seconds: 120
+broker_client_default_async_poll_interval_seconds: 120

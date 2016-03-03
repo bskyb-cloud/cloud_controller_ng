@@ -5,7 +5,7 @@ module VCAP::CloudController::RestController
     end
 
     module ClassMethods
-      def define_route(verb, path, method = nil, &blk)
+      def define_route(verb, path, method=nil, &blk)
         opts = {}
         klass = self
         controller.send(verb, path, opts) do |*args|
@@ -20,7 +20,7 @@ module VCAP::CloudController::RestController
         end
       end
 
-      [:post, :get, :put, :delete].each do |verb|
+      [:post, :get, :put, :delete, :patch].each do |verb|
         define_method(verb) do |*args, &blk|
           (path, method) = *args
           define_route(verb, path, method, &blk)
@@ -48,16 +48,24 @@ module VCAP::CloudController::RestController
 
       def define_to_many_routes
         to_many_relationships.each do |name, attr|
-          get "#{path_guid}/#{name}" do |api, id|
-            api.dispatch(:enumerate_related, id, name)
+          route_for = Array(attr.route_for)
+
+          if route_for.include?(:get)
+            get "#{path_guid}/#{name}" do |api, id|
+              api.dispatch(:enumerate_related, id, name)
+            end
           end
 
-          put "#{path_guid}/#{name}/:other_id" do |api, id, other_id|
-            api.dispatch(:add_related, id, name, other_id)
+          if route_for.include?(:put)
+            put "#{path_guid}/#{name}/:other_id" do |api, id, other_id|
+              api.dispatch(:add_related, id, name, other_id)
+            end
           end
 
-          delete "#{path_guid}/#{name}/:other_id" do |api, id, other_id|
-            api.dispatch(:remove_related, id, name, other_id)
+          if route_for.include?(:delete)
+            delete "#{path_guid}/#{name}/:other_id" do |api, id, other_id|
+              api.dispatch(:remove_related, id, name, other_id)
+            end
           end
         end
       end

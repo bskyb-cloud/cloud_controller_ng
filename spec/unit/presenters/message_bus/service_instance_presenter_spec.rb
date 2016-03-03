@@ -2,20 +2,19 @@ require 'spec_helper'
 require 'presenters/message_bus/service_instance_presenter'
 
 describe ServiceInstancePresenter do
-
-  describe "#to_hash" do
+  describe '#to_hash' do
     subject { ServiceInstancePresenter.new(service_instance).to_hash }
 
-    context "for a managed service instance" do
+    context 'for a managed service instance' do
       let(:service_instance) do
-        VCAP::CloudController::ManagedServiceInstance.make(service_plan: service_plan)
+        VCAP::CloudController::ManagedServiceInstance.make(:v1, service_plan: service_plan)
       end
 
       let(:service_plan) do
-        VCAP::CloudController::ServicePlan.make(service: service)
+        VCAP::CloudController::ServicePlan.make(:v1, service: service)
       end
 
-      let(:service) { VCAP::CloudController::Service.make(tags: ["relational", "mysql"]) }
+      let(:service) { VCAP::CloudController::Service.make(:v1, tags: ['relational', 'mysql']) }
 
       specify do
         expect(subject.keys).to include(:label)
@@ -34,9 +33,8 @@ describe ServiceInstancePresenter do
         expect(subject.fetch(:vendor)).to eq(service_instance.service.label)
         expect(subject.fetch(:plan)).to eq(service_instance.service_plan.name)
         expect(subject.fetch(:name)).to eq(service_instance.name)
-        expect(subject.fetch(:tags)).to eq(["relational", "mysql"])
+        expect(subject.fetch(:tags)).to eq(['relational', 'mysql'])
       end
-
 
       context 'when the service does not have a version' do
         let(:service) { VCAP::CloudController::Service.make(version: nil) }
@@ -47,7 +45,7 @@ describe ServiceInstancePresenter do
       end
     end
 
-    context "for a provided service instance" do
+    context 'for a provided service instance' do
       let(:service_instance) { VCAP::CloudController::UserProvidedServiceInstance.make }
 
       specify do
@@ -55,7 +53,7 @@ describe ServiceInstancePresenter do
       end
 
       specify do
-        expect(subject.fetch(:label)).to eq("user-provided")
+        expect(subject.fetch(:label)).to eq('user-provided')
         expect(subject.fetch(:name)).to eq(service_instance.name)
         expect(subject.fetch(:tags)).to eq([])
       end

@@ -1,7 +1,8 @@
 #!/bin/bash
 
+
 export CC_JOB_DIR=/var/vcap/jobs/cloud_controller_ng
-export PATH=/var/vcap/packages/ruby/bin:$PATH
+source $CC_JOB_DIR/bin/ruby_version.sh
 
 CC_PACKAGE_DIR=/var/vcap/packages/cloud_controller_ng
 
@@ -58,7 +59,7 @@ case $1 in
     chown vcap:vcap <%= diag_dir %>
     <% end %>
 
-    source $CC_JOB_DIR/bin/handle_nfs_or_local_blobstore.sh
+    source $CC_JOB_DIR/bin/handle_local_blobstore.sh
 
     # Configure the core file location
     mkdir -p /var/vcap/sys/cores
@@ -66,8 +67,6 @@ case $1 in
     echo /var/vcap/sys/cores/core-%e-%s-%p-%t > /proc/sys/kernel/core_pattern
 
     ulimit -c unlimited
-
-    /var/vcap/packages/syslog_aggregator/setup_syslog_forwarder.sh $CONFIG_DIR
 
     # Run the migrations only on the first CC launch
     <% if spec.index.to_i == 0 %>

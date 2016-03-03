@@ -1,104 +1,88 @@
-require 'net/http'
+require 'httpclient'
 
 module VCAP::Services
   module ServiceBrokers::V2
+    class HttpResponse
+      attr_reader :code, :message, :body
 
-    class ServiceBrokerBadResponse < HttpResponseError
-      def initialize(uri, method, response)
-        begin
-          hash = MultiJson.load(response.body)
-        rescue MultiJson::ParseError
-        end
+      STATUS_CODE_MESSAGES = {
+        100 => 'Continue',
+        101 => 'Switching Protocols',
+        200 => 'OK',
+        201 => 'Created',
+        202 => 'Accepted',
+        203 => 'Non-Authoritative Information',
+        204 => 'No Content',
+        205 => 'Reset Content',
+        206 => 'Partial Content',
+        300 => 'Multiple Choices',
+        301 => 'Moved Permanently',
+        302 => 'Found',
+        303 => 'See Other',
+        304 => 'Not Modified',
+        305 => 'Use Proxy',
+        307 => 'Temporary Redirect',
+        400 => 'Bad Request',
+        401 => 'Unauthorized',
+        402 => 'Payment Required',
+        403 => 'Forbidden',
+        404 => 'Not Found',
+        405 => 'Method Not Allowed',
+        406 => 'Not Acceptable',
+        407 => 'Proxy Authentication Required',
+        408 => 'Request Timeout',
+        409 => 'Conflict',
+        410 => 'Gone',
+        411 => 'Length Required',
+        412 => 'Precondition Failed',
+        413 => 'Request Entity Too Large',
+        414 => 'Request-URI Too Long',
+        415 => 'Unsupported Media Type',
+        416 => 'Requested Range Not Satisfiable',
+        417 => 'Expectation Failed',
+        418 => "I'm a Teapot",
+        422 => 'Unprocessable Entity',
+        423 => 'Locked',
+        424 => 'Failed Dependency',
+        428 => 'Precondition Required',
+        429 => 'Too Many Requests',
+        431 => 'Request Header Fields Too Large',
+        500 => 'Internal Server Error',
+        501 => 'Not Implemented',
+        502 => 'Bad Gateway',
+        503 => 'Service Unavailable',
+        504 => 'Gateway Timeout',
+        505 => 'HTTP Version Not Supported',
+        507 => 'Insufficient Storage',
+        508 => 'Loop Detected',
+        511 => 'Network Authentication Required',
+      }
 
-        if hash.is_a?(Hash) && hash.has_key?('description')
-          message = "Service broker error: #{hash['description']}"
-        else
-          message = "The service broker API returned an error from #{uri}: #{response.code} #{response.message}"
-        end
-
-        super(message, uri, method, response)
+      def initialize(attrs={})
+        @code = attrs.fetch(:code)
+        @message = attrs[:message] || STATUS_CODE_MESSAGES[@code]
+        @body = attrs.fetch(:body)
       end
 
-    end
-
-    class ServiceBrokerApiUnreachable < HttpRequestError
-      def initialize(uri, method, source)
-        super(
-          "The service broker API could not be reached: #{uri}",
-          uri,
-          method,
-          source
+      def self.from_http_client_response(http_client_response)
+        @http_client_response = http_client_response
+        self.new(
+          code: http_client_response.code,
+          message: STATUS_CODE_MESSAGES.fetch(http_client_response.code, http_client_response.reason),
+          body: http_client_response.body,
         )
-      end
-    end
-
-    class ServiceBrokerApiTimeout < HttpRequestError
-      def initialize(uri, method, source)
-        super(
-          "The service broker API timed out: #{uri}",
-          uri,
-          method,
-          source
-        )
-      end
-    end
-
-    class ServiceBrokerResponseMalformed < HttpResponseError
-      def initialize(uri, method, response)
-        super(
-          "The service broker response was not understood",
-          uri,
-          method,
-          response
-        )
-      end
-    end
-
-    class ServiceBrokerApiAuthenticationFailed < HttpResponseError
-      def initialize(uri, method, response)
-        super(
-          "Authentication failed for the service broker API. Double-check that the username and password are correct: #{uri}",
-          uri,
-          method,
-          response
-        )
-      end
-    end
-
-    class ServiceBrokerConflict < HttpResponseError
-      def initialize(uri, method, response)
-        error_message = parsed_json(response.body)["description"]
-
-        super(
-          error_message || "Resource conflict: #{uri}",
-          uri,
-          method,
-          response
-        )
-      end
-
-      def response_code
-        409
-      end
-
-      private
-
-      def parsed_json(str)
-        MultiJson.load(str)
-      rescue MultiJson::ParseError
-        {}
       end
     end
 
     class HttpClient
-
       attr_reader :url
 
-      def initialize(attrs)
+      def initialize(attrs, logger=nil)
         @url = attrs.fetch(:url)
         @auth_username = attrs.fetch(:auth_username)
         @auth_password = attrs.fetch(:auth_password)
         @broker_client_timeout = VCAP::CloudController::Config.config[:broker_client_timeout_seconds] || 60
+        @logger = logger || Steno.logger('cc.service_broker.v2.http_client')
       end
 
       def get(path)
@@ -107,6 +91,10 @@ module VCAP::Services
 
       def put(path, message)
         make_request(:put, uri_for(path), message.to_json, 'application/json')
+      end
+
+      def patch(path, message)
+        make_request(:patch, uri_for(path), message.to_json, 'application/json')
       end
 
       def delete(path, message)
@@ -118,78 +106,51 @@ module VCAP::Services
 
       private
 
-      attr_reader :auth_username, :auth_password, :broker_client_timeout, :extra_path
+      attr_reader :auth_username, :auth_password, :broker_client_timeout, :extra_path, :logger
 
       def uri_for(path)
         URI(url + path)
       end
 
       def make_request(method, uri, body, content_type)
-        begin
-          req = build_request(method, uri, body, content_type)
-          opts = build_options(uri)
+        client = HTTPClient.new(force_basic_auth: true)
+        client.set_auth(uri, auth_username, auth_password)
 
-          response = Net::HTTP.start(uri.hostname, uri.port, opts) do |http|
-            http.open_timeout = broker_client_timeout
-            http.read_timeout = broker_client_timeout
+        client.ssl_config.verify_mode = verify_certs? ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
+        client.connect_timeout = broker_client_timeout
+        client.receive_timeout = broker_client_timeout
+        client.send_timeout = broker_client_timeout
 
-            http.request(req)
-          end
+        opts = { body: body, header: {} }
 
-          log_response(uri, response)
-          return response
-        rescue SocketError, Errno::ECONNREFUSED => error
-          raise ServiceBrokerApiUnreachable.new(uri.to_s, method, error)
-        rescue Timeout::Error => error
-          raise ServiceBrokerApiTimeout.new(uri.to_s, method, error)
-        rescue => error
-          raise HttpRequestError.new(error.message, uri.to_s, method, error)
-        end
+        client.default_header = default_headers
+        opts[:header]['Content-Type'] = content_type if content_type
+        headers = default_headers.merge(opts[:header])
+
+        logger.debug "Sending #{method} to #{uri}, BODY: #{body.inspect}, HEADERS: #{headers}"
+
+        response = client.request(method, uri, opts)
+        logger.debug "Response from request to #{uri}: STATUS #{response.code}, BODY: #{response.body.inspect}, HEADERS: #{response.headers.inspect}"
+
+        HttpResponse.from_http_client_response(response)
+      rescue SocketError, Errno::ECONNREFUSED => error
+        raise Errors::ServiceBrokerApiUnreachable.new(uri.to_s, method, error)
+      rescue HTTPClient::TimeoutError => error
+        raise Errors::ServiceBrokerApiTimeout.new(uri.to_s, method, error)
+      rescue => error
+        raise HttpRequestError.new(error.message, uri.to_s, method, error)
       end
 
-      def log_request(uri, req)
-        logger.debug "Sending #{req.method} to #{uri}, BODY: #{req.body.inspect}, HEADERS: #{req.to_hash.inspect}"
-      end
-
-      def log_response(uri, response)
-        logger.debug "Response from request to #{uri}: STATUS #{response.code}, BODY: #{response.body.inspect}, HEADERS: #{response.to_hash.inspect}"
-      end
-
-      def build_request(method, uri, body, content_type)
-        req_class = method.to_s.capitalize
-        req = Net::HTTP.const_get(req_class).new(uri.request_uri)
-
-        req.basic_auth(auth_username, auth_password)
-
-        req[VCAP::Request::HEADER_NAME] = VCAP::Request.current_id
-        req[VCAP::Request::HEADER_BROKER_API_VERSION] = '2.3'
-        req['Accept'] = 'application/json'
-
-        req.body = body
-        req.content_type = content_type if content_type
-
-        log_request(uri, req)
-
-        req
-      end
-
-      def build_options(uri)
-        opts = {}
-
-        use_ssl = uri.scheme.to_s.downcase == 'https'
-        opts.merge!(use_ssl: use_ssl)
-
-        verify_mode = verify_certs? ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
-        opts.merge!(verify_mode: verify_mode) if use_ssl
-        opts
+      def default_headers
+        {
+          VCAP::Request::HEADER_BROKER_API_VERSION => '2.5',
+          VCAP::Request::HEADER_NAME => VCAP::Request.current_id,
+          'Accept' => 'application/json'
+        }
       end
 
       def verify_certs?
         !VCAP::CloudController::Config.config[:skip_cert_verify]
-      end
-
-      def logger
-        @logger ||= Steno.logger('cc.service_broker.v2.http_client')
       end
     end
   end

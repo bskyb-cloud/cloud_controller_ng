@@ -1,18 +1,13 @@
+require 'presenters/error_presenter'
+
 module VCAP::CloudController
   module Jobs
-    class ExceptionCatchingJob < Struct.new(:handler)
-      def perform
-        handler.perform
-      end
-
+    class ExceptionCatchingJob < WrappingJob
       def error(job, e)
         error_presenter = ErrorPresenter.new(e)
         log_error(error_presenter)
         save_error(error_presenter, job)
-      end
-
-      def max_attempts
-        handler.max_attempts
+        super(job, e)
       end
 
       private
@@ -31,7 +26,7 @@ module VCAP::CloudController
       end
 
       def logger
-        Steno.logger("cc.background")
+        Steno.logger('cc.background')
       end
     end
   end

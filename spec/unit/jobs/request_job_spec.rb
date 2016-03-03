@@ -1,17 +1,17 @@
-require "spec_helper"
+require 'spec_helper'
 
 module VCAP::CloudController::Jobs
   describe RequestJob do
-    let(:wrapped_job) { double("InnerJob", max_attempts: 2) }
-    let(:request_id) { "abc123" }
+    let(:wrapped_job) { double('InnerJob', max_attempts: 2, reschedule_at: Time.now) }
+    let(:request_id) { 'abc123' }
     subject(:request_job) { RequestJob.new(wrapped_job, request_id) }
 
-    describe "#perform" do
+    describe '#perform' do
       before do
         allow(wrapped_job).to receive(:perform)
       end
 
-      it "calls perform on the wrapped job" do
+      it 'calls perform on the wrapped job' do
         request_job.perform
         expect(wrapped_job).to have_received(:perform)
       end
@@ -35,21 +35,29 @@ module VCAP::CloudController::Jobs
 
       it "restores the original VCAP Request ID after exception within execution of the wrapped job's perform method" do
         allow(wrapped_job).to receive(:perform) do
-          raise "runtime test exception"
+          raise 'runtime test exception'
         end
 
         random_request_id = SecureRandom.uuid
         ::VCAP::Request.current_id = random_request_id
 
-        expect { request_job.perform }.to raise_error, "runtime test exception"
+        expect { request_job.perform }.to raise_error, 'runtime test exception'
 
         expect(::VCAP::Request.current_id).to eq random_request_id
       end
     end
 
-    context "#max_attempts" do
-      it "delegates to the handler" do
+    context '#max_attempts' do
+      it 'delegates to the handler' do
         expect(subject.max_attempts).to eq(2)
+      end
+    end
+
+    describe '#reschedule_at' do
+      it 'delegates to the inner job' do
+        time = Time.now
+        attempts = 5
+        expect(request_job.reschedule_at(time, attempts)).to eq(wrapped_job.reschedule_at(time, attempts))
       end
     end
   end

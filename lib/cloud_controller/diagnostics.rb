@@ -1,9 +1,8 @@
 module VCAP::CloudController
   class Diagnostics
-
     def self.collect(output_directory)
       data = {
-        time: Time.now,
+        time: Time.now.utc,
         threads: thread_data,
         varz: varz_data
       }
@@ -26,11 +25,9 @@ module VCAP::CloudController
       Thread.current[:current_request] = nil
     end
 
-    private
-
     def self.request_info(request)
       {
-        start_time: Time.now.to_f,
+        start_time: Time.now.utc.to_f,
         request_id: ::VCAP::Request.current_id,
         request_method: request.request_method,
         request_uri: request_uri(request)
@@ -60,8 +57,7 @@ module VCAP::CloudController
     end
 
     def self.output_file_name
-      Time.now.strftime("diag-#{Process.pid}-%Y%m%d-%H:%M:%S.%L.json")
+      Time.now.utc.strftime("diag-#{Process.pid}-%Y%m%d-%H:%M:%S.%L.json")
     end
   end
 end
-

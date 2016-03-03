@@ -2,6 +2,7 @@
 #Actually NGX host and port
 local_route: <%= spec.networks.send(properties.networks.apps).ip %>
 external_port: <%= p("cc.external_port") %>
+internal_service_hostname: cloud-controller-ng.service.consul
 
 pid_filename: /var/vcap/sys/run/cloud_controller_ng/cloud_controller_ng.pid
 newrelic_enabled: <%= !!properties.cc.newrelic.license_key || p("cc.development_mode") %>
@@ -74,6 +75,8 @@ default_app_memory: <%= p("cc.default_app_memory") %>
 default_app_disk_in_mb: <%= p("cc.default_app_disk_in_mb") %>
 maximum_app_disk_in_mb: <%= p("cc.maximum_app_disk_in_mb") %>
 
+instance_file_descriptor_limit: <%= p("cc.instance_file_descriptor_limit") %>
+
 request_timeout_in_seconds: <%= p("request_timeout_in_seconds") %>
 
 cc_partition: <%= p("cc.cc_partition") %>
@@ -81,6 +84,10 @@ cc_partition: <%= p("cc.cc_partition") %>
 bulk_api:
   auth_user: <%= p("cc.bulk_api_user") %>
   auth_password: "<%= p("cc.bulk_api_password") %>"
+
+internal_api:
+  auth_user: <%= p("cc.internal_api_user") %>
+  auth_password: "<%= p("cc.internal_api_password") %>"
 
 nginx:
   use_nginx: true
@@ -96,6 +103,18 @@ info:
   version: <%= p("version") %>
   support_address: <%= p("support_address") %>
   description: <%= p("description") %>
+<% if_p("cc.allow_app_ssh_access") do %>
+  app_ssh_endpoint: <%= "ssh." + p("system_domain") + ":" + p("app_ssh.port").to_s %>
+<% if_p("app_ssh.host_key_fingerprint") do |fingerprint| %>
+  app_ssh_host_key_fingerprint: <%= fingerprint %>
+<% end %>
+<% end %>
+<% if_p("cc.min_cli_version") do |min_cli_version| %>
+  min_cli_version: <%= min_cli_version %>
+<% end %>
+<% if_p("cc.min_recommended_cli_version") do |min_recommended_cli_version| %>
+  min_recommended_cli_version: <%= min_recommended_cli_version %>
+<% end %>
 <% if_p("cc.info.custom") do |custom| %>
   custom:
   <% custom.each do |key, value| %>
@@ -110,9 +129,7 @@ directories:<% p("cc.directories").each do |key, value| %>
 
 logging:
   file: /var/vcap/sys/log/cloud_controller_ng/cloud_controller_ng.log
-  <% if_p("syslog_aggregator.address") do %>
   syslog: vcap.cloud_controller_ng
-  <% end %>
   level: <%= p("cc.logging_level") %>
   max_retries: <%= p("cc.logging_max_retries") %>
 
@@ -146,15 +163,20 @@ uaa:
   <% end %>
   verification_key: <%= p("uaa.jwt.verification_key") ? ("|\n      " + p("uaa.jwt.verification_key").gsub("\n", "\n      ")) : '~' %>
 
+hm9000:
+  url: <%= p("hm9000.url", "https://hm9000.#{domain}") %>
+
 # App staging parameters
 staging:
   timeout_in_seconds: <%= p("cc.staging_timeout_in_seconds") %>
   minimum_staging_memory_mb: <%= p("dea_next.staging_memory_limit_mb") %>
   minimum_staging_disk_mb: <%= p("dea_next.staging_disk_limit_mb") %>
+  minimum_staging_file_descriptor_limit: <%= p("cc.staging_file_descriptor_limit") %>
   auth:
     user: <%= p("cc.staging_upload_user") %>
     password: "<%= p("cc.staging_upload_password") %>"
 
+default_health_check_timeout: <%= p("cc.default_health_check_timeout") %>
 maximum_health_check_timeout: <%= p("cc.maximum_health_check_timeout") %>
 
 runtimes_file: /var/vcap/jobs/cloud_controller_ng/config/runtimes.yml
@@ -218,6 +240,8 @@ flapping_crash_count_threshold: <%= p("cc.flapping_crash_count_threshold") %>
 disable_custom_buildpacks: <%= p("cc.disable_custom_buildpacks") %>
 
 broker_client_timeout_seconds: <%= p("cc.broker_client_timeout_seconds") %>
+broker_client_default_async_poll_interval_seconds: <%= p('cc.broker_client_default_async_poll_interval_seconds') %>
+broker_client_max_async_poll_duration_minutes: <%= p('cc.broker_client_max_async_poll_duration_minutes') %>
 
 renderer:
   max_results_per_page: <%= p("cc.renderer.max_results_per_page") %>
@@ -234,7 +258,16 @@ uaa_client_secret: <%= p("uaa.clients.cc-service-dashboards.secret") %>
 uaa_client_scope: <%= p("uaa.clients.cc-service-dashboards.scope") %>
 <% end %>
 
-diego: <%= p("cc.diego") %>
+cloud_controller_username_lookup_client_name: "cloud_controller_username_lookup"
+cloud_controller_username_lookup_client_secret: <%= p("uaa.clients.cloud_controller_username_lookup.secret") %>
+
+users_can_select_backend: <%= p("cc.users_can_select_backend") %>
+diego_docker: <%= p("cc.diego_docker") %>
+diego_nsync_url: http://nsync.service.consul:8787
+diego_stager_url: http://stager.service.consul:8888
+diego_tps_url: http://tps.service.consul:1518
+allow_app_ssh_access: <%= p("cc.allow_app_ssh_access") %>
+default_to_diego_backend: <%= p("cc.default_to_diego_backend") %>
 
 <% if_p("ssl.skip_cert_verify") do |skip_cert_verify|%>
 skip_cert_verify: <%= skip_cert_verify %>
@@ -251,3 +284,7 @@ default_staging_security_groups: <%= p("cc.default_staging_security_groups").to_
 <% if_p("cc.feature_disabled_message") do %>
 feature_disabled_message: <%= p("cc.feature_disabled_message") %>
 <% end %>
+
+allowed_cors_domains: <%= p("cc.allowed_cors_domains").to_json %>
+
+dea_advertisement_timeout_in_seconds: <%= p("dea_next.advertise_interval_in_seconds") * 3 %>

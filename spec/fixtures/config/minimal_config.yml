@@ -30,7 +30,15 @@ failed_jobs:
 
 default_app_memory: 1024 #mb
 default_app_disk_in_mb: 1024
-maximum_health_check_timeout: 180
+
+default_health_check_timeout: 60  #seconds
+maximum_health_check_timeout: 180 #seconds
+
+broker_client_default_async_poll_interval_seconds: 60
+broker_client_max_async_poll_duration_minutes: 10080
+
+hm9000:
+  url: "http://localhost:5155"
 
 uaa:
   url: "http://localhost:8080/uaa"
@@ -46,6 +54,10 @@ pid_filename: /tmp/cloud_controller.pid
 bulk_api:
   auth_user: bulk_user
   auth_password: bulk_password
+
+internal_api:
+  auth_user: internal_user
+  auth_password: internal_password
 
 staging:
   timeout_in_seconds: 120
@@ -75,14 +87,22 @@ quota_definitions:
 default_quota_definition: default
 
 resource_pool:
+  resource_directory_key: cc-resources
   fog_connection:
     provider: Local
 
 packages:
+  app_package_directory_key: cc-packages
   fog_connection:
     provider: Local
 
 droplets:
+  droplet_directory_key: cc-droplets
+  fog_connection:
+    provider: Local
+
+buildpacks:
+  droplet_directory_key: cc-buildpacks
   fog_connection:
     provider: Local
 

@@ -1,6 +1,11 @@
 module VCAP::CloudController
   class SpaceSummariesController < RestController::ModelController
-    path_base "spaces"
+    def self.dependencies
+      [:instances_reporters]
+    end
+
+    path_base 'spaces'
+
     model_class_name :Space
 
     get "#{path_guid}/summary", :summary
@@ -12,11 +17,11 @@ module VCAP::CloudController
 
     protected
 
-    attr_reader :instances_reporter
+    attr_reader :instances_reporters
 
     def inject_dependencies(dependencies)
       super
-      @instances_reporter = dependencies[:instances_reporter]
+      @instances_reporters = dependencies[:instances_reporters]
     end
 
     private
@@ -31,7 +36,7 @@ module VCAP::CloudController
     end
 
     def app_summary(space)
-      instances = instances_reporter.number_of_starting_and_running_instances_for_apps(space.apps)
+      instances = instances_reporters.number_of_starting_and_running_instances_for_apps(space.apps)
       space.apps.collect do |app|
         {
           guid:              app.guid,
@@ -43,13 +48,11 @@ module VCAP::CloudController
         }.merge(app.to_hash)
       end
     rescue Errors::InstancesUnavailable => e
-      raise VCAP::Errors::ApiError.new_from_details("InstancesUnavailable", e.to_s)
+      raise VCAP::Errors::ApiError.new_from_details('InstancesUnavailable', e.to_s)
     end
 
     def services_summary(space)
-      space.service_instances.map do |instance|
-        instance.as_summary_json
-      end
+      space.service_instances.map(&:as_summary_json)
     end
   end
 end

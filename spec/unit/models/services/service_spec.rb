@@ -1,31 +1,36 @@
-require "spec_helper"
+require 'spec_helper'
 
 module VCAP::CloudController
   describe Service, type: :model do
     it { is_expected.to have_timestamp_columns }
 
-    describe "Associations" do
+    describe 'Associations' do
       it { is_expected.to have_associated :service_broker }
       it { is_expected.to have_associated :service_plans }
 
-      it "has associated service_auth_token" do
-        service = Service.make
-        expect(service.reload.service_auth_token).to be_a ServiceAuthToken
+      context 'for a v1 service' do
+        it 'has associated service_auth_token' do
+          service = Service.make(:v1)
+          expect(service.reload.service_auth_token).to be_a ServiceAuthToken
+        end
       end
     end
 
-    describe "Validations" do
+    describe 'Validations' do
       it { is_expected.to validate_presence :label, message: 'Service name is required' }
       it { is_expected.to validate_presence :description, message: 'is required' }
       it { is_expected.to validate_presence :bindable, message: 'is required' }
-      it { is_expected.to validate_uniqueness [:label, :provider], message: 'is taken' }
       it { is_expected.to validate_uniqueness :unique_id, message: 'Service ids must be unique' }
       it { is_expected.to strip_whitespace :label }
       it { is_expected.to strip_whitespace :provider }
 
+      context 'for a v1 service' do
+        it { is_expected.to validate_uniqueness [:label, :provider], message: 'is taken', make: [:v1] }
+      end
+
       context 'when the unique_id is not unique' do
         let(:existing_service) { Service.make }
-        let(:service) { Service.make_unsaved(unique_id: existing_service.unique_id) }
+        let(:service) { Service.make_unsaved(:v1, unique_id: existing_service.unique_id) }
 
         it 'is not valid' do
           expect(service).not_to be_valid
@@ -37,17 +42,17 @@ module VCAP::CloudController
         end
       end
 
-      describe "urls" do
-        it "validates format of url" do
-          service = Service.make_unsaved(url: "bogus_url")
+      describe 'urls' do
+        it 'validates format of url' do
+          service = Service.make_unsaved(url: 'bogus_url', service_broker: nil)
           expect(service).to_not be_valid
-          expect(service.errors.on(:url)).to include "must be a valid url"
+          expect(service.errors.on(:url)).to include 'must be a valid url'
         end
 
-        it "validates format of info_url" do
-          service = Service.make_unsaved(info_url: "bogus_url")
+        it 'validates format of info_url' do
+          service = Service.make_unsaved(info_url: 'bogus_url', service_broker: nil)
           expect(service).to_not be_valid
-          expect(service.errors.on(:info_url)).to include "must be a valid url"
+          expect(service.errors.on(:info_url)).to include 'must be a valid url'
         end
       end
 
@@ -71,7 +76,7 @@ module VCAP::CloudController
         end
 
         it 'allows the service to have the same label as a v1 service' do
-          existing_service = Service.make_unsaved(label: 'other', provider: 'core').save
+          existing_service = Service.make_unsaved(:v1, label: 'other', provider: 'core').save
           expect {
             Service.make_unsaved(:v2, label: existing_service.label, service_broker: ServiceBroker.make).save
           }.not_to raise_error
@@ -81,26 +86,28 @@ module VCAP::CloudController
       context 'for a v1 service' do
         it 'maintains the uniqueness of the compound key [label, provider]' do
           expect {
-            Service.make_unsaved(label: 'blah', provider: 'blah').save
-            Service.make_unsaved(label: 'blah', provider: 'blah').save
+            Service.make_unsaved(:v1, label: 'blah', provider: 'blah').save
+            Service.make_unsaved(:v1, label: 'blah', provider: 'blah').save
           }.to raise_error('label and provider is taken')
         end
       end
     end
 
-    describe "Serialization" do
+    describe 'Serialization' do
       it { is_expected.to export_attributes :label, :provider, :url, :description, :long_description, :version, :info_url, :active, :bindable,
-                                    :unique_id, :extra, :tags, :requires, :documentation_url, :service_broker_guid }
+                                    :unique_id, :extra, :tags, :requires, :documentation_url, :service_broker_guid, :plan_updateable
+      }
       it { is_expected.to import_attributes :label, :provider, :url, :description, :long_description, :version, :info_url,
-                                    :active, :bindable, :unique_id, :extra, :tags, :requires, :documentation_url }
+                                    :active, :bindable, :unique_id, :extra, :tags, :requires, :documentation_url, :plan_updateable
+      }
     end
 
     it 'ensures that blank provider values will be treated as nil' do
-      service = Service.make_unsaved(provider: '').save
+      service = Service.make_unsaved(provider: '', service_broker: nil).save
       expect(service.provider).to be_nil
     end
 
-    describe "#destroy" do
+    describe '#destroy' do
       let!(:service) { Service.make }
       subject { service.destroy }
 
@@ -109,22 +116,22 @@ module VCAP::CloudController
         expect {
           subject
         }.to_not change {
-          ServiceAuthToken.count(:label => service.label, :provider => service.provider)
+          ServiceAuthToken.count(label: service.label, provider: service.provider)
         }
       end
     end
 
-    describe "#user_visibility_filter" do
+    describe '#user_visibility_filter' do
       let(:private_service) { Service.make }
       let(:public_service) { Service.make }
       let(:nonadmin_org) { Organization.make }
-      let(:admin_user) { User.make(:admin => true, :active => true) }
-      let(:nonadmin_user) { User.make(:admin => false, :active => true) }
-      let!(:private_plan) { ServicePlan.make :service => private_service, :public => false }
+      let(:admin_user) { User.make(admin: true, active: true) }
+      let(:nonadmin_user) { User.make(admin: false, active: true) }
+      let!(:private_plan) { ServicePlan.make service: private_service, public: false }
       before do
-        ServicePlan.make :service => public_service, :public => true
-        ServicePlan.make :service => public_service, :public => false
-        VCAP::CloudController::SecurityContext.set(admin_user, {'scope' => [VCAP::CloudController::Roles::CLOUD_CONTROLLER_ADMIN_SCOPE]} )
+        ServicePlan.make service: public_service, public: true
+        ServicePlan.make service: public_service, public: false
+        VCAP::CloudController::SecurityContext.set(admin_user, { 'scope' => [VCAP::CloudController::Roles::CLOUD_CONTROLLER_ADMIN_SCOPE] })
         nonadmin_user.add_organization nonadmin_org
         VCAP::CloudController::SecurityContext.clear
       end
@@ -133,16 +140,16 @@ module VCAP::CloudController
         Service.user_visible(user, user.admin?).all
       end
 
-      it "returns all services for admins" do
+      it 'returns all services for admins' do
         expect(records(admin_user)).to include(private_service, public_service)
       end
 
-      it "only returns public services for nonadmins" do
+      it 'only returns public services for nonadmins' do
         expect(records(nonadmin_user)).to include(public_service)
         expect(records(nonadmin_user)).not_to include(private_service)
       end
 
-      it "returns private services if a user can see a plan inside them" do
+      it 'returns private services if a user can see a plan inside them' do
         ServicePlanVisibility.create(
           organization: nonadmin_org,
           service_plan: private_plan,
@@ -150,13 +157,13 @@ module VCAP::CloudController
         expect(records(nonadmin_user)).to include(private_service, public_service)
       end
 
-      it "returns public services for unauthenticated users" do
+      it 'returns public services for unauthenticated users' do
         records = Service.user_visible(nil).all
         expect(records).to eq [public_service]
       end
     end
 
-    describe "#tags" do
+    describe '#tags' do
       context 'null tags in the database' do
         it 'returns an empty array' do
           service = Service.make(tags: nil)
@@ -165,7 +172,7 @@ module VCAP::CloudController
       end
     end
 
-    describe "#requires" do
+    describe '#requires' do
       context 'null requires in the database' do
         it 'returns an empty array' do
           service = Service.make(requires: nil)
@@ -174,7 +181,7 @@ module VCAP::CloudController
       end
     end
 
-    describe "#documentation_url" do
+    describe '#documentation_url' do
       context 'with a URL in the database' do
         it 'returns the appropriate URL' do
           sham_url = Sham.url
@@ -184,7 +191,7 @@ module VCAP::CloudController
       end
     end
 
-    describe "#long_description" do
+    describe '#long_description' do
       context 'with a long description in the database' do
         it 'return the appropriate long description' do
           sham_long_description = Sham.long_description
@@ -194,13 +201,13 @@ module VCAP::CloudController
       end
     end
 
-    describe "#v2?" do
-      it "returns true when the service is associated with a broker" do
+    describe '#v2?' do
+      it 'returns true when the service is associated with a broker' do
         service = Service.make(service_broker: ServiceBroker.make)
         expect(service).to be_v2
       end
 
-      it "returns false when the service is not associated with a broker" do
+      it 'returns false when the service is not associated with a broker' do
         service = Service.make(service_broker: nil)
         expect(service).not_to be_v2
       end
@@ -216,10 +223,6 @@ module VCAP::CloudController
       let!(:service_plan_visibility_2) { ServicePlanVisibility.make(service_plan: service_plan_2) }
       let!(:service_instance_2) { ManagedServiceInstance.make(service_plan: service_plan_2) }
       let!(:service_binding_2) { ServiceBinding.make(service_instance: service_instance_2) }
-
-      before do
-        stub_request(:delete, /.*/).to_return(body: '{}', status: 200)
-      end
 
       context 'for v1 services' do
         let!(:service) { Service.make(:v1) }
@@ -247,7 +250,7 @@ module VCAP::CloudController
 
         it 'does not mark apps for restaging that were bound to the deleted service' do
           service_binding.app.update(package_state: 'STAGED')
-          expect { service.purge }.not_to change{ service_binding.app.reload.pending? }
+          expect { service.purge }.not_to change { service_binding.app.reload.pending? }
         end
       end
 
@@ -275,7 +278,7 @@ module VCAP::CloudController
 
         it 'does not mark apps for restaging that were bound to the deleted service' do
           service_binding.app.update(package_state: 'STAGED')
-          expect { service.purge }.not_to change{ service_binding.app.reload.pending? }
+          expect { service.purge }.not_to change { service_binding.app.reload.pending? }
         end
       end
 
@@ -329,16 +332,16 @@ module VCAP::CloudController
     describe '.public_visible' do
       it 'returns services that have a plan that is public and active' do
         public_active_service = Service.make(active: true)
-        public_active_plan = ServicePlan.make(active: true, public: true, service: public_active_service)
+        ServicePlan.make(active: true, public: true, service: public_active_service)
 
         private_active_service = Service.make(active: true)
-        private_active_plan = ServicePlan.make(active: true, public: false, service: private_active_service)
+        ServicePlan.make(active: true, public: false, service: private_active_service)
 
         public_inactive_service = Service.make(active: false)
-        public_inactive_plan = ServicePlan.make(active: false, public: true, service: public_inactive_service)
+        ServicePlan.make(active: false, public: true, service: public_inactive_service)
 
         private_inactive_service = Service.make(active: false)
-        private_inactive_plan = ServicePlan.make(active: false, public: false, service: private_inactive_service)
+        ServicePlan.make(active: false, public: false, service: private_inactive_service)
 
         public_visible = Service.public_visible.all
         expect(public_visible).to eq [public_active_service]
@@ -355,7 +358,7 @@ module VCAP::CloudController
       end
 
       context 'for a v1 service' do
-        let(:service) { Service.make(service_broker: nil) }
+        let(:service) { Service.make(:v1, service_broker: nil) }
 
         it 'returns a v1 broker client' do
           v1_client = double(VCAP::Services::ServiceBrokers::V1::Client)
@@ -375,7 +378,7 @@ module VCAP::CloudController
       end
 
       context 'for a v2 service' do
-        let(:service) { Service.make(service_broker: ServiceBroker.make) }
+        let(:service) { Service.make(:v2, service_broker: ServiceBroker.make) }
 
         it 'returns a v2 broker client' do
           v2_client = double(VCAP::Services::ServiceBrokers::V2::Client)

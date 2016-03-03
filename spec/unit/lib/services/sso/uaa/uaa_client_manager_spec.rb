@@ -9,48 +9,6 @@ module VCAP::Services::SSO::UAA
         'redirect_uri' => 'http://redirect.com'
       }
     end
-    let(:scim) { double('scim') }
-
-    describe 'building a scim' do
-      it 'knows how to build a valid scim' do
-        creator = UaaClientManager.new
-        token_info = double('info', auth_header: 'bearer BLAH')
-        token_issuer = double('issuer', client_credentials_grant: token_info)
-
-        allow(CF::UAA::TokenIssuer).to receive(:new).with('http://localhost:8080/uaa', 'cc-service-dashboards', 'some-sekret').and_return(token_issuer)
-
-        expect(creator.send(:scim)).to be_a(CF::UAA::Scim)
-        expect(token_issuer).to have_received(:client_credentials_grant)
-      end
-    end
-
-    describe '#get_clients' do
-      it 'returns the clients that are in uaa' do
-        allow(scim).to receive(:get).and_return({ 'client_id' => 'existing-id' })
-        client_manager = UaaClientManager.new(scim: scim)
-
-        result = client_manager.get_clients(['existing-id'])
-
-        expect(scim).to have_received(:get).with(:client, 'existing-id').once
-        expect(result).to be_a(Array)
-        expect(result.length).to eq(1)
-        expect(result[0]).to include('client_id' => 'existing-id')
-      end
-
-      it 'does not return clients that are not in uaa' do
-        allow(scim).to receive(:get).with(:client, 'existing-id').and_return({ 'client_id' => 'existing-id' })
-        allow(scim).to receive(:get).with(:client, 'non-existing-id').and_raise(CF::UAA::NotFound.new)
-        client_manager = UaaClientManager.new(scim: scim)
-
-        result = client_manager.get_clients(['existing-id', 'non-existing-id'])
-
-        expect(scim).to have_received(:get).with(:client, 'existing-id').once
-        expect(scim).to have_received(:get).with(:client, 'non-existing-id').once
-        expect(result).to be_a(Array)
-        expect(result.length).to eq(1)
-        expect(result[0]).to include('client_id' => 'existing-id')
-      end
-    end
 
     describe '#modify_transaction' do
       let(:uaa_uri) { VCAP::CloudController::Config.config[:uaa][:url] }
@@ -58,11 +16,14 @@ module VCAP::Services::SSO::UAA
       let(:auth_header) { 'bearer ACCESSTOKENSTUFF' }
       let(:token_info) { double('info', auth_header: auth_header) }
       let(:token_issuer) { double('issuer', client_credentials_grant: token_info) }
+      let(:skip_cert_verify) { false }
 
       before do
         stub_request(:post, tx_url)
+        VCAP::CloudController::Config.config[:skip_cert_verify] = skip_cert_verify
 
-        allow(CF::UAA::TokenIssuer).to receive(:new).with(uaa_uri, 'cc-service-dashboards', 'some-sekret').
+        opts = { skip_ssl_validation: skip_cert_verify }
+        allow(CF::UAA::TokenIssuer).to receive(:new).with(uaa_uri, 'cc-service-dashboards', 'some-sekret', opts).
           and_return(token_issuer)
       end
 
@@ -104,12 +65,12 @@ module VCAP::Services::SSO::UAA
 
         expect(a_request(:post, tx_url).with(
           body: expected_json_body,
-          headers: {'Authorization' => auth_header})).to have_been_made
+          headers: { 'Authorization' => auth_header })).to have_been_made
       end
 
       it 'logs a sanitized version of the request' do
         changeset = [
-          double('update_command', uaa_command: {client_id: 'id', client_secret: 'secret'}, client_attrs: {}),
+          double('update_command', uaa_command: { client_id: 'id', client_secret: 'secret' }, client_attrs: {}),
         ]
 
         logger = double('logger')
@@ -148,14 +109,14 @@ module VCAP::Services::SSO::UAA
 
           expect {
             client_manager.modify_transaction(changeset)
-          }.to raise_error(UaaResourceNotFound)
+          }.to raise_error(VCAP::CloudController::UaaResourceNotFound)
         end
       end
 
       context 'when the CF router returns a 404' do
         before do
           stub_request(:post, tx_url).to_return(
-            status: 404, headers: {'X-Cf-Routererror' => 'unknown_route'})
+            status: 404, headers: { 'X-Cf-Routererror' => 'unknown_route' })
         end
 
         it 'raises a UaaUnavailable error' do
@@ -167,7 +128,7 @@ module VCAP::Services::SSO::UAA
 
           expect {
             client_manager.modify_transaction(changeset)
-          }.to raise_error(UaaUnavailable)
+          }.to raise_error(VCAP::CloudController::UaaUnavailable)
         end
       end
 
@@ -185,7 +146,7 @@ module VCAP::Services::SSO::UAA
 
           expect {
             client_manager.modify_transaction(changeset)
-          }.to raise_error(UaaResourceAlreadyExists)
+          }.to raise_error(VCAP::CloudController::UaaResourceAlreadyExists)
         end
       end
 
@@ -203,7 +164,7 @@ module VCAP::Services::SSO::UAA
 
           expect {
             client_manager.modify_transaction(changeset)
-          }.to raise_error(UaaResourceInvalid)
+          }.to raise_error(VCAP::CloudController::UaaResourceInvalid)
         end
       end
 
@@ -221,7 +182,7 @@ module VCAP::Services::SSO::UAA
 
           expect {
             client_manager.modify_transaction(changeset)
-          }.to raise_error(UaaUnexpectedResponse)
+          }.to raise_error(VCAP::CloudController::UaaUnexpectedResponse)
         end
       end
 
@@ -239,10 +200,8 @@ module VCAP::Services::SSO::UAA
 
           expect {
             client_manager.modify_transaction(changeset)
-          }.to raise_error(UaaUnavailable)
-
+          }.to raise_error(VCAP::CloudController::UaaUnavailable)
         end
-
       end
 
       describe 'ssl options' do
@@ -253,10 +212,7 @@ module VCAP::Services::SSO::UAA
           allow(mock_http).to receive(:use_ssl=)
           allow(mock_http).to receive(:verify_mode=)
           allow(mock_http).to receive(:request).and_return(double(:response, code: '200'))
-
-          config_hash = { url: uaa_uri }
-          allow(VCAP::CloudController::Config.config).to receive(:[]).with(anything()).and_call_original
-          allow(VCAP::CloudController::Config.config).to receive(:[]).with(:uaa).and_return(config_hash)
+          VCAP::CloudController::Config.config[:uaa][:url] = uaa_uri
         end
 
         context 'without ssl' do
@@ -291,9 +247,7 @@ module VCAP::Services::SSO::UAA
           end
 
           context 'and verifying ssl certs' do
-            before do
-              allow(VCAP::CloudController::Config.config).to receive(:[]).with(:skip_cert_verify).and_return(false)
-            end
+            let(:skip_cert_verify) { false }
 
             it 'sets verify_mode to verify_peer' do
               changeset = [
@@ -308,9 +262,7 @@ module VCAP::Services::SSO::UAA
           end
 
           context 'and not verifying ssl certs' do
-            before do
-              allow(VCAP::CloudController::Config.config).to receive(:[]).with(:skip_cert_verify).and_return(true)
-            end
+            let(:skip_cert_verify) { true }
 
             it 'sets verify_mode to verify_none' do
               changeset = [
@@ -329,7 +281,8 @@ module VCAP::Services::SSO::UAA
       describe 'scope options' do
         let(:changeset) { [
           double('create_command', uaa_command: { action: 'add' }, client_attrs: {})
-        ] }
+        ]
+        }
         let(:expected_json_body) { [
           {
             client_id:              nil,
@@ -339,11 +292,12 @@ module VCAP::Services::SSO::UAA
             authorized_grant_types: ['authorization_code'],
             action:                 'add'
           }
-        ].to_json }
+        ].to_json
+        }
         let(:client_manager) { UaaClientManager.new }
 
         before do
-          allow(VCAP::CloudController::Config.config).to receive(:[]).with(anything()).and_call_original
+          allow(VCAP::CloudController::Config.config).to receive(:[]).with(anything).and_call_original
           allow(VCAP::CloudController::Config.config).to receive(:[]).with(:uaa_client_scope).and_return(configured_scope)
 
           client_manager.modify_transaction(changeset)
@@ -356,7 +310,7 @@ module VCAP::Services::SSO::UAA
           it 'makes a request to UAA with minimal scope' do
             expect(a_request(:post, tx_url).with(
               body: expected_json_body,
-              headers: {'Authorization' => auth_header})).to have_been_made
+              headers: { 'Authorization' => auth_header })).to have_been_made
           end
         end
 
@@ -367,7 +321,7 @@ module VCAP::Services::SSO::UAA
           it 'makes a request to UAA with extended scope' do
             expect(a_request(:post, tx_url).with(
               body: expected_json_body,
-              headers: {'Authorization' => auth_header})).to have_been_made
+              headers: { 'Authorization' => auth_header })).to have_been_made
           end
         end
 
@@ -378,7 +332,7 @@ module VCAP::Services::SSO::UAA
           it 'makes a request to UAA with extended scope' do
             expect(a_request(:post, tx_url).with(
               body: expected_json_body,
-              headers: {'Authorization' => auth_header})).to have_been_made
+              headers: { 'Authorization' => auth_header })).to have_been_made
           end
         end
       end

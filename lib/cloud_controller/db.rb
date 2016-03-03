@@ -1,3 +1,5 @@
+require 'cloud_controller/db_migrator'
+
 module VCAP::CloudController
   class DB
     # Setup a Sequel connection pool
@@ -16,13 +18,22 @@ module VCAP::CloudController
     #
     # @return [Sequel::Database]
     def self.connect(opts, logger)
-      connection_options = { :sql_mode => [:strict_trans_tables, :strict_all_tables, :no_zero_in_date] }
+      connection_options = { sql_mode: [:strict_trans_tables, :strict_all_tables, :no_zero_in_date] }
       [:max_connections, :pool_timeout].each do |key|
         connection_options[key] = opts[key] if opts[key]
       end
 
-      if opts[:database].index("mysql") == 0
-        connection_options[:charset] = "utf8"
+      if opts[:database].index('mysql') == 0
+        connection_options[:charset] = 'utf8'
+      end
+
+      connection_options[:after_connect] = proc do |conn|
+        # time zone is a per connection setting, ensure it is set for each connection in the pool
+        if conn.class.to_s =~ /mysql/i
+          conn.query("SET time_zone = '+0:00'")
+        elsif conn.class.to_s =~ /postgres/i
+          conn.exec("SET time zone 'UTC'")
+        end
       end
 
       db = Sequel.connect(opts[:database], connection_options)
@@ -30,16 +41,18 @@ module VCAP::CloudController
       db.sql_log_level = opts[:log_level] || :debug2
 
       if db.database_type == :mysql
-        Sequel::MySQL.default_collate = "utf8_bin"
+        Sequel::MySQL.default_collate = 'utf8_bin'
       end
 
       db
     end
 
     def self.load_models(db_config, logger)
-      connect(db_config, logger)
-      require "models"
-      require "delayed_job_sequel"
+      db = connect(db_config, logger)
+      DBMigrator.new(db).check_migrations!
+
+      require 'models'
+      require 'delayed_job_sequel'
     end
   end
 end
@@ -53,6 +66,9 @@ Sequel::Model.plugin :timestamps
 Sequel::Model.plugin :validation_helpers
 
 Sequel::Database.extension(:current_datetime_timestamp)
+
+require 'cloud_controller/encryptor'
+Sequel::Model.include VCAP::CloudController::Encryptor::FieldEncryptor
 
 # monkey patch sequel to make it easier to map validation failures to custom
 # exceptions, e.g.
@@ -77,19 +93,19 @@ module VCAP
     def self.timestamps(migration, table_key)
       created_at_idx = "#{table_key}_created_at_index".to_sym if table_key
       updated_at_idx = "#{table_key}_updated_at_index".to_sym if table_key
-      migration.Timestamp :created_at, :null => false
+      migration.Timestamp :created_at, null: false, default: Sequel::CURRENT_TIMESTAMP
       migration.Timestamp :updated_at
-      migration.index :created_at, :name => created_at_idx
-      migration.index :updated_at, :name => updated_at_idx
+      migration.index :created_at, name: created_at_idx
+      migration.index :updated_at, name: updated_at_idx
     end
 
     def self.guid(migration, table_key)
       guid_idx = "#{table_key}_guid_index".to_sym if table_key
-      migration.String :guid, :null => false
-      migration.index :guid, :unique => true, :name => guid_idx
+      migration.String :guid, null: false
+      migration.index :guid, unique: true, name: guid_idx
     end
 
-    def self.common(migration, table_key = nil)
+    def self.common(migration, table_key=nil)
       migration.primary_key :id
       guid(migration, table_key)
       timestamps(migration, table_key)
@@ -106,13 +122,13 @@ module VCAP
       table = name.pluralize.to_sym
 
       migration.create_table(join_table) do
-        Integer id_attr, :null => false
-        foreign_key [id_attr], table, :name => fk_name
+        Integer id_attr, null: false
+        foreign_key [id_attr], table, name: fk_name
 
-        Integer :user_id, :null => false
-        foreign_key [:user_id], :users, :name => fk_user
+        Integer :user_id, null: false
+        foreign_key [:user_id], :users, name: fk_user
 
-        index [id_attr, :user_id], :unique => true, :name => idx_name
+        index [id_attr, :user_id], unique: true, name: idx_name
       end
     end
   end

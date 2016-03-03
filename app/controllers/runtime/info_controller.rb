@@ -2,7 +2,7 @@ module VCAP::CloudController
   class InfoController < RestController::BaseController
     allow_unauthenticated_access
 
-    get "/v2/info", :read
+    get '/v2/info', :read
     def read
       info = {
         name: @config[:info][:name],
@@ -12,7 +12,11 @@ module VCAP::CloudController
         description: @config[:info][:description],
         authorization_endpoint: @config[:login] ? @config[:login][:url] : @config[:uaa][:url],
         token_endpoint: config[:uaa][:url],
-        api_version: VCAP::CloudController::Constants::API_VERSION
+        min_cli_version: @config[:info][:min_cli_version],
+        min_recommended_cli_version: @config[:info][:min_recommended_cli_version],
+        api_version: VCAP::CloudController::Constants::API_VERSION,
+        app_ssh_endpoint: @config[:info][:app_ssh_endpoint],
+        app_ssh_host_key_fingerprint: @config[:info][:app_ssh_host_key_fingerprint]
       }
 
       if @config[:loggregator] && @config[:loggregator][:url]

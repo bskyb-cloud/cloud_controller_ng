@@ -14,8 +14,16 @@ module CloudController
         generate_download_url(@package_blobstore, "/staging/apps/#{app.guid}", app.guid)
       end
 
+      def package_download_url(package)
+        generate_download_url(@package_blobstore, "/staging/packages/#{package.guid}", package.guid)
+      end
+
       def buildpack_cache_download_url(app)
-        generate_download_url(@buildpack_cache_blobstore, "/staging/buildpack_cache/#{app.guid}/download", app.guid)
+        generate_download_url(@buildpack_cache_blobstore, "/staging/buildpack_cache/#{app.guid}/download", "#{app.stack.name}-#{app.guid}")
+      end
+
+      def v3_app_buildpack_cache_download_url(app_guid, stack)
+        generate_download_url(@buildpack_cache_blobstore, "/staging/v3/buildpack_cache/#{stack}/#{app_guid}/download", "#{stack}-#{app_guid}")
       end
 
       def admin_buildpack_download_url(buildpack)
@@ -30,7 +38,11 @@ module CloudController
         url = blob.download_url if blob
 
         return nil unless url
-        return @droplet_blobstore.local? ? staging_uri("/staging/droplets/#{app.guid}/download") : url
+        @droplet_blobstore.local? ? staging_uri("/staging/droplets/#{app.guid}/download") : url
+      end
+
+      def v3_droplet_download_url(droplet)
+        generate_download_url(@droplet_blobstore, "/staging/v3/droplets/#{droplet.guid}/download", droplet.blobstore_key)
       end
 
       def perma_droplet_download_url(app_guid)
@@ -42,39 +54,35 @@ module CloudController
         staging_uri("/staging/droplets/#{app.guid}/upload")
       end
 
+      def package_droplet_upload_url(droplet_guid)
+        staging_uri("/staging/v3/droplets/#{droplet_guid}/upload")
+      end
+
+      def v3_app_buildpack_cache_upload_url(app_guid, stack)
+        staging_uri("/staging/v3/buildpack_cache/#{stack}/#{app_guid}/upload")
+      end
+
       def buildpack_cache_upload_url(app)
         staging_uri("/staging/buildpack_cache/#{app.guid}/upload")
       end
 
       private
+
       def generate_download_url(store, path, blobstore_key)
         uri = store.download_uri(blobstore_key)
         return nil unless uri
-        return store.local? ? staging_uri(path) : uri
+        store.local? ? staging_uri(path) : uri
       end
 
       def staging_uri(path)
         return nil unless path
 
-        begin
-          URI::HTTP.build(
-            host: @blobstore_options[:blobstore_host],
-            port: @blobstore_options[:blobstore_port],
-            userinfo: [@blobstore_options[:user], @blobstore_options[:password]],
-            path: path,
-          ).to_s
-        rescue URI::InvalidComponentError
-          URI::HTTP.build(
-            host: @blobstore_options[:blobstore_host],
-            port: @blobstore_options[:blobstore_port],
-            userinfo: [encode_userinfo(@blobstore_options[:user]), encode_userinfo(@blobstore_options[:password])],
-            path: path,
-          ).to_s
-        end
-      end
-
-      def encode_userinfo(info)
-        URI::escape(info, "%#{URI::REGEXP::PATTERN::RESERVED}")
+        URI::HTTP.build(
+          host: @blobstore_options[:blobstore_host],
+          port: @blobstore_options[:blobstore_port],
+          userinfo: [@blobstore_options[:user], @blobstore_options[:password]],
+          path: path,
+        ).to_s
       end
     end
   end

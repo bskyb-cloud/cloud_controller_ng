@@ -3,27 +3,33 @@ RSpec::Matchers.define :strip_whitespace do |attribute|
     "strip #{attribute}"
   end
   match do |instance|
-    instance[attribute] = " foo "
-    instance[attribute] == "foo"
+    instance[attribute] = ' foo '
+    instance[attribute] == 'foo'
   end
 end
 
 RSpec::Matchers.define :export_attributes do |*attributes|
-  description do
-    "exports #{attributes.join(", ")}"
+  failure_message do |actual|
+    instance = described_class.make
+    actual_keys = instance.to_hash.keys.collect(&:to_sym)
+    "expected #{described_class} to have exported attributes #{expected}, got: #{actual_keys}"
+  end
+
+  failure_message_when_negated do |actual|
+    instance = described_class.make
+    actual_keys = instance.to_hash.keys.collect(&:to_sym)
+    "expected #{described_class} to not have exported attributes #{expected}, got: #{actual_keys}"
   end
 
   match do |_|
     instance = described_class.make
-    attributes.sort!
-    instance.to_hash.keys.collect(&:to_sym).sort == attributes
+    instance.to_hash.keys.collect(&:to_sym).sort == attributes.sort
   end
 end
 
-
 RSpec::Matchers.define :import_attributes do |*attributes|
   description do
-    "imports #{attributes.join(", ")}"
+    "imports #{attributes.join(', ')}"
   end
 
   match do |_|

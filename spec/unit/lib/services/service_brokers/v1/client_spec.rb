@@ -23,7 +23,7 @@ module VCAP::Services
       let(:plan) { VCAP::CloudController::ServicePlan.make }
       let(:service) { plan.service }
       let(:instance) do
-        VCAP::CloudController::ManagedServiceInstance.new(
+        VCAP::CloudController::ManagedServiceInstance.make(
           space: space,
           service_plan: plan
         )
@@ -32,8 +32,8 @@ module VCAP::Services
       let(:response) do
         {
           'service_id' => '123',
-          'configuration' => {'setting' => true},
-          'credentials' => {'user' => 'admin', 'pass' => 'secret'},
+          'configuration' => { 'setting' => true },
+          'credentials' => { 'user' => 'admin', 'pass' => 'secret' },
           'dashboard_url' => 'http://dashboard.example.com'
         }
       end
@@ -44,19 +44,20 @@ module VCAP::Services
           plan.unique_id,
           instance.name,
           {
-            :label => "#{service.label}-#{service.version}",
-            :email => current_user_email,
-            :plan  => plan.name,
-            :version => service.version,
-            :provider => service.provider,
-            :space_guid => space.guid,
-            :organization_guid => space.organization_guid
+            label: "#{service.label}-#{service.version}",
+            email: current_user_email,
+            plan: plan.name,
+            version: service.version,
+            provider: service.provider,
+            space_guid: space.guid,
+            organization_guid: space.organization_guid
           }
         ).and_return(response)
       end
 
       it 'sets relevant attributes on the instance' do
-        client.provision(instance)
+        attributes = client.provision(instance)
+        instance.save_with_new_operation(attributes)
 
         expect(instance.broker_provided_id).to eq('123')
         expect(instance.gateway_data).to eq('setting' => true)
@@ -86,13 +87,19 @@ module VCAP::Services
       let(:current_user_email) { 'john@example.com' }
       let(:instance) { VCAP::CloudController::ManagedServiceInstance.make }
       let(:plan) { instance.service_plan }
-      let(:service) { plan.service }
-      let(:app) { VCAP::CloudController::AppFactory.make }
+      let(:service) do
+        service = plan.service
+        service.requires = ['syslog_drain']
+        service.save
+        service
+      end
+
+      let(:app) { VCAP::CloudController::AppFactory.make(space: instance.space) }
       let(:binding) do
         VCAP::CloudController::ServiceBinding.new(
           service_instance: instance,
           app: app,
-          binding_options: {'this' => 'that'}
+          binding_options: { 'this' => 'that' }
         )
       end
 
@@ -100,8 +107,8 @@ module VCAP::Services
         {
           'service_id' => '123',
           'configuration' => 'config',
-          'credentials' => {'foo' => 'bar'},
-          'syslog_drain_url' => 'drain url'
+          'credentials' => { 'foo' => 'bar' },
+          'syslog_drain_url' => 'drain url',
         }
       end
 
@@ -112,12 +119,15 @@ module VCAP::Services
           app.guid,
           "#{service.label}-#{service.version}",
           current_user_email,
-          {'this' => 'that'}
+          { 'this' => 'that' }
         ).and_return(response)
       end
 
       it 'sets relevant attributes of the binding' do
-        client.bind(binding)
+        attributes = client.bind(binding)
+        # Ensure attributes correctly saves to the database.
+        binding.set_all(attributes)
+        binding.save
 
         expect(binding.broker_provided_id).to eq('123')
         expect(binding.credentials).to eq({ 'foo' => 'bar' })
@@ -129,7 +139,7 @@ module VCAP::Services
     describe '#unbind' do
       let(:binding) do
         VCAP::CloudController::ServiceBinding.make(
-          binding_options: {'this' => 'that'}
+          binding_options: { 'this' => 'that' }
         )
       end
       let(:instance) { binding.service_instance }
@@ -162,6 +172,14 @@ module VCAP::Services
         client.deprovision(instance)
 
         expect(http_client).to have_received(:deprovision)
+      end
+
+      it 'returns a successful synchronous response' do
+        expect(client.deprovision(instance)).to eq({
+          last_operation: {
+            state: 'succeeded'
+          }
+        })
       end
     end
   end

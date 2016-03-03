@@ -1,4 +1,4 @@
-require "presenters/api/feature_flag_presenter"
+require 'presenters/api/feature_flag_presenter'
 
 module VCAP::CloudController
   class FeatureFlagsController < RestController::ModelController
@@ -33,7 +33,7 @@ module VCAP::CloudController
     def read(name)
       validate_access(:read, model)
 
-      raise self.class.not_found_exception(name) unless FeatureFlag::DEFAULT_FLAGS.has_key?(name.to_sym)
+      raise self.class.not_found_exception(name) unless FeatureFlag::DEFAULT_FLAGS.key?(name.to_sym)
 
       feature_flag = FeatureFlag.find(name: name)
 
@@ -47,7 +47,7 @@ module VCAP::CloudController
     def update_feature_flag(name)
       validate_access(:update, model)
 
-      raise self.class.not_found_exception(name) unless FeatureFlag::DEFAULT_FLAGS.has_key?(name.to_sym)
+      raise self.class.not_found_exception(name) unless FeatureFlag::DEFAULT_FLAGS.key?(name.to_sym)
 
       feature_flag_attributes = MultiJson.load(body)
 
@@ -62,17 +62,6 @@ module VCAP::CloudController
         HTTP::OK,
         FeatureFlagPresenter.new(feature_flag, name, self.class.path).to_json
       ]
-    end
-
-    delete "#{path}/:name", :delete
-    def delete(name)
-      validate_access(:delete, model)
-      feature_flag = FeatureFlag.find(name: name)
-
-      raise self.class.not_found_exception(name) unless feature_flag
-
-      feature_flag.destroy
-      [HTTP::NO_CONTENT, nil]
     end
   end
 end

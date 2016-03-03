@@ -1,6 +1,7 @@
 module VCAP::CloudController
   class Organization < Sequel::Model
     ORG_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/.freeze
+    ORG_STATUS_VALUES = %w(active suspended)
 
     one_to_many :spaces
 
@@ -16,8 +17,26 @@ module VCAP::CloudController
     one_to_many :app_events,
                 dataset: -> { VCAP::CloudController::AppEvent.filter(app: apps) }
 
-    one_to_many :private_domains, key: :owning_organization_id,
-                before_add: proc { |org, private_domain| private_domain.addable_to_organization!(org)}
+    many_to_many(
+      :private_domains,
+      class: 'VCAP::CloudController::PrivateDomain',
+      right_key: :private_domain_id,
+      dataset: proc { | r |
+        VCAP::CloudController::Domain.dataset.where(owning_organization_id: self.id).
+          or(id: db[r.join_table_source].select(r.qualified_right_key).where(r.predicate_key => self.id))
+      },
+      before_add: proc { |org, private_domain| private_domain.addable_to_organization?(org) },
+      before_remove: proc { |org, private_domain| !private_domain.owned_by?(org) },
+      after_remove: proc { |org, private_domain| private_domain.routes_dataset.filter(space: org.spaces_dataset).destroy }
+    )
+
+    one_to_many(
+      :owned_private_domains,
+      class: 'VCAP::CloudController::PrivateDomain',
+      read_only: true,
+      key: :owning_organization_id,
+    )
+
     one_to_many :service_plan_visibilities
     many_to_one :quota_definition
 
@@ -49,29 +68,30 @@ module VCAP::CloudController
     one_to_many :space_quota_definitions,
                 before_add: proc { |org, quota| quota.organization.id == org.id }
 
-    add_association_dependencies spaces: :destroy,
-      service_instances: :destroy,
-      private_domains: :destroy,
+    add_association_dependencies(
+      owned_private_domains: :destroy,
+      private_domains: :nullify,
       service_plan_visibilities: :destroy,
       space_quota_definitions: :destroy
+    )
 
     define_user_group :users
-    define_user_group :managers, 
+    define_user_group :managers,
                       reciprocal: :managed_organizations,
                       before_remove: proc { |org, user| org.manager_guids.count > 1 }
     define_user_group :billing_managers, reciprocal: :billing_managed_organizations
     define_user_group :auditors, reciprocal: :audited_organizations
 
-    strip_attributes  :name
+    strip_attributes :name
 
     export_attributes :name, :billing_enabled, :quota_definition_guid, :status
     import_attributes :name, :billing_enabled,
                       :user_guids, :manager_guids, :billing_manager_guids,
-                      :auditor_guids, :private_domain_guids, :quota_definition_guid,
-                      :status, :domain_guids
+                      :auditor_guids, :quota_definition_guid, :status
 
     def remove_user(user)
-      raise VCAP::Errors::ApiError.new_from_details("AssociationNotEmpty", "user", "spaces in the org") unless ([user.spaces, user.audited_spaces, user.managed_spaces].flatten & spaces).empty?
+      can_remove = ([user.spaces, user.audited_spaces, user.managed_spaces].flatten & spaces).empty?
+      raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', 'user', 'spaces in the org') unless can_remove
       super(user)
     end
 
@@ -82,22 +102,24 @@ module VCAP::CloudController
     end
 
     def self.user_visibility_filter(user)
-      Sequel.or(
-        managers: [user],
-        users: [user],
-        billing_managers: [user],
-        auditors: [user])
-    end
-
-    def before_create
-      add_default_quota
-      super
+      {
+        id: dataset.join_table(:inner, :organizations_managers, organization_id: :id, user_id: user.id).select(:organizations__id).union(
+            dataset.join_table(:inner, :organizations_users, organization_id: :id, user_id: user.id).select(:organizations__id)
+          ).union(
+            dataset.join_table(:inner, :organizations_billing_managers, organization_id: :id, user_id: user.id).select(:organizations__id)
+          ).union(
+            dataset.join_table(:inner, :organizations_auditors, organization_id: :id, user_id: user.id).select(:organizations__id)
+          ).select(:id)
+      }
     end
 
     def before_save
       if column_changed?(:billing_enabled) && billing_enabled?
         @is_billing_enabled = true
       end
+
+      validate_quota
+
       super
     end
 
@@ -118,18 +140,9 @@ module VCAP::CloudController
 
     def validate
       validates_presence :name
-      validates_unique   :name
+      validates_unique :name
       validates_format ORG_NAME_REGEX, :name
-    end
-
-    def add_default_quota
-      unless quota_definition_id
-        if QuotaDefinition.default.nil?
-          err_msg = Errors::ApiError.new_from_details("QuotaDefinitionNotFound", QuotaDefinition.default_quota_name).message
-          raise Errors::ApiError.new_from_details("OrganizationInvalid", err_msg)
-        end
-        self.quota_definition_id = QuotaDefinition.default.id
-      end
+      validates_includes ORG_STATUS_VALUES, :status, allow_missing: true
     end
 
     def has_remaining_memory(mem)
@@ -150,8 +163,29 @@ module VCAP::CloudController
 
     private
 
+    def validate_quota_on_create
+      return if quota_definition
+
+      if QuotaDefinition.default.nil?
+        err_msg = Errors::ApiError.new_from_details('QuotaDefinitionNotFound', QuotaDefinition.default_quota_name).message
+        raise Errors::ApiError.new_from_details('OrganizationInvalid', err_msg)
+      end
+      self.quota_definition_id = QuotaDefinition.default.id
+    end
+
+    def validate_quota_on_update
+      if column_changed?(:quota_definition_id) && quota_definition.nil?
+        err_msg = Errors::ApiError.new_from_details('QuotaDefinitionNotFound', 'null').message
+        raise Errors::ApiError.new_from_details('OrganizationInvalid', err_msg)
+      end
+    end
+
+    def validate_quota
+      new? ? validate_quota_on_create : validate_quota_on_update
+    end
+
     def memory_remaining
-      memory_used = apps_dataset.sum(Sequel.*(:memory, :instances)) || 0
+      memory_used = apps_dataset.where(state: 'STARTED').sum(Sequel.*(:memory, :instances)) || 0
       quota_definition.memory_limit - memory_used
     end
   end

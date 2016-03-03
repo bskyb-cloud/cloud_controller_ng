@@ -3,7 +3,7 @@
 INDEX=$2
 
 export CC_JOB_DIR=/var/vcap/jobs/cloud_controller_ng
-export PATH=/var/vcap/packages/ruby/bin:$PATH
+source $CC_JOB_DIR/bin/ruby_version.sh
 
 CC_PACKAGE_DIR=/var/vcap/packages/cloud_controller_ng
 
@@ -40,8 +40,6 @@ case $1 in
     echo $$ > $PIDFILE
     chown vcap:vcap $PIDFILE
 
-    /var/vcap/packages/syslog_aggregator/setup_syslog_forwarder.sh $CONFIG_DIR
-
     cd $CC_PACKAGE_DIR/cloud_controller_ng
     
     # Run the buildpack install only on the first CC Worker launch
@@ -57,7 +55,7 @@ case $1 in
     <% end %>
 
     <% task_name = "jobs:local"  %>
-    exec chpst -u vcap:vcap bundle exec rake <%= task_name %>
+    exec chpst -u vcap:vcap bundle exec rake <%= task_name %>[cc_api_worker.<%= spec.job.name %>.<%= spec.index %>.$INDEX]
   ;;
 
   stop)

@@ -1,276 +1,383 @@
-require "spec_helper"
-require "membrane"
+require 'spec_helper'
+require 'cloud_controller/diego/process_guid'
 
 module VCAP::CloudController
   describe BulkAppsController do
-    before do
-      allow_any_instance_of(::CloudController::Blobstore::UrlGenerator)
-      .to receive(:perma_droplet_download_url)
-      .and_return("http://blobsto.re/droplet")
+    def make_diego_app(options={})
+      AppFactory.make(options).tap do |app|
+        app.package_state = 'STAGED'
+        app.diego = true
+        app.save
+      end
+    end
+
+    def app_table_entry(index)
+      App.order_by(:id).all[index - 1]
+    end
+
+    let(:runners) do
+      ::CloudController::DependencyLocator.instance.runners
     end
 
     before do
-      @bulk_user = "bulk_user"
-      @bulk_password = "bulk_password"
+      allow_any_instance_of(::CloudController::Blobstore::UrlGenerator).
+        to receive(:perma_droplet_download_url).
+        and_return('http://blobsto.re/droplet')
+
+      @internal_user = 'internal_user'
+      @internal_password = 'internal_password'
+
+      5.times { |i| make_diego_app(state: 'STARTED') }
     end
 
-    describe "GET", "/internal/bulk/apps" do
-      def make_diego_app(options = {})
-        AppFactory.make(options).tap do |app|
-          app.environment_json = (app.environment_json || {}).merge("CF_DIEGO_RUN_BETA" => "true")
-          app.package_state = "STAGED"
-          app.save
+    describe 'GET', '/internal/bulk/apps' do
+      context 'without credentials' do
+        it 'rejects the request as unauthorized' do
+          get '/internal/bulk/apps'
+          expect(last_response.status).to eq(401)
         end
       end
 
-      before do
-        5.times do |i|
-          make_diego_app(
-            id: i+1,
-            state: "STARTED",
-          )
-        end
-      end
-
-      it "requires authentication" do
-        get "/internal/bulk/apps"
-        expect(last_response.status).to eq(401)
-
-        authorize "bar", "foo"
-        get "/internal/bulk/apps"
-        expect(last_response.status).to eq(401)
-      end
-
-      describe "with authentication" do
+      context 'with invalid credentials' do
         before do
-          authorize @bulk_user, @bulk_password
+          authorize 'bar', 'foo'
         end
 
-        it "requires a token in query string" do
-          get "/internal/bulk/apps", {
-              "batch_size" => 20,
-          }
+        it 'rejects the request as unauthorized' do
+          get '/internal/bulk/apps'
+          expect(last_response.status).to eq(401)
+        end
+      end
+
+      context 'with valid credentials' do
+        before do
+          authorize @internal_user, @internal_password
+        end
+
+        it 'requires a token in query string' do
+          get '/internal/bulk/apps', {
+                                       'batch_size' => 20,
+                                   }
 
           expect(last_response.status).to eq(400)
         end
 
-        it "returns a populated token for the initial request (which has an empty bulk token)" do
-          get "/internal/bulk/apps", {
-              "batch_size" => 3,
-              "token" => "{}",
-          }
+        it 'returns a populated token for the initial request (which has an empty bulk token)' do
+          get '/internal/bulk/apps', {
+                                       'batch_size' => 3,
+                                       'token' => '{}',
+                                   }
 
           expect(last_response.status).to eq(200)
-          expect(decoded_response["token"]).to eq({ "id" => 3 })
+          expect(decoded_response['token']).to eq({ 'id' => app_table_entry(3).id })
         end
 
-        it "returns apps in the response body" do
-          get "/internal/bulk/apps", {
-              "batch_size" => 20,
-              "token" => { id: 2 }.to_json,
-          }
+        it 'returns apps in the response body' do
+          get '/internal/bulk/apps', {
+                                       'batch_size' => 20,
+                                       'token' => { id: app_table_entry(2).id }.to_json,
+                                   }
 
           expect(last_response.status).to eq(200)
-          expect(decoded_response["apps"].size).to eq(3)
+          expect(decoded_response['apps'].size).to eq(3)
         end
 
-        it "returns apps that have the desired data" do
-          last_app = make_diego_app(
-            id: 6,
-            state: "STARTED",
-            package_state: "STAGED",
-            package_hash: "package-hash",
-            disk_quota: 1_024,
-            environment_json: {
-                "env-key-3" => "env-value-3",
-                "env-key-4" => "env-value-4",
-                "CF_DIEGO_RUN_BETA" => "true",
-            },
-            file_descriptors: 16_384,
-            instances: 4,
-            memory: 1_024,
-            guid: "app-guid-6",
-            command: "start-command-6",
-            stack: Stack.make(name: "stack-6"),
-          )
+        context 'when a format parameter is not specified' do
+          before do
+            app = make_diego_app(
+                state: 'STARTED',
+                package_state: 'STAGED',
+                package_hash: 'package-hash',
+                disk_quota: 1_024,
+                environment_json: {
+                    'env-key-3' => 'env-value-3',
+                    'env-key-4' => 'env-value-4',
+                },
+                file_descriptors: 16_384,
+                instances: 4,
+                memory: 1_024,
+                guid: 'app-guid-6',
+                command: 'start-command-6',
+                stack: Stack.make(name: 'stack-6'),
+            )
 
-          route1 = Route.make(
-              space: last_app.space,
-              host: "arsenio",
-              domain: SharedDomain.make(name: "lo-mein.com"),
-          )
-          last_app.add_route(route1)
+            route1 = Route.make(
+                space: app.space,
+                host: 'arsenio',
+                domain: SharedDomain.make(name: 'lo-mein.com'),
+            )
+            app.add_route(route1)
 
-          route2 = Route.make(
-              space: last_app.space,
-              host: "conan",
-              domain: SharedDomain.make(name: "doe-mane.com"),
-          )
-          last_app.add_route(route2)
+            route2 = Route.make(
+                space: app.space,
+                host: 'conan',
+                domain: SharedDomain.make(name: 'doe-mane.com'),
+            )
+            app.add_route(route2)
 
-          last_app.version = "app-version-6"
-          last_app.save
+            app.version = 'app-version-6'
+            app.save
+          end
 
-          get "/internal/bulk/apps", {
-              "batch_size" => 100,
-              "token" => "{\"id\": 0 }",
-          }
-
-          expect(last_response.status).to eq(200)
-
-          expect(decoded_response["apps"].size).to eq(6)
-
-
-          last_response_app = decoded_response["apps"][5]
-          expect(last_response_app.except("environment")).to match_object({
-            "disk_mb" => 1_024,
-            "file_descriptors" => 16_384,
-            "num_instances" => 4,
-            "log_guid" => "app-guid-6",
-            "memory_mb" => 1_024,
-            "process_guid" => "app-guid-6-app-version-6",
-            "routes" => ["arsenio.lo-mein.com", "conan.doe-mane.com"],
-            "droplet_uri" => "http://blobsto.re/droplet",
-            "stack" => "stack-6",
-            "start_command" => "start-command-6"
-          })
-
-          last_response_app_env = last_response_app["environment"]
-          expect(last_response_app_env).to(be_any) { |e| e["name"] == "VCAP_APPLICATION" }
-          expect(last_response_app_env).to(be_any) { |e| e["name"] == "MEMORY_LIMIT" }
-          expect(last_response_app_env).to(be_any) { |e| e["name"] == "VCAP_SERVICES" }
-          expect(last_response_app_env.find { |e| e["name"] == "env-key-3" }["value"]).to eq("env-value-3")
-          expect(last_response_app_env.find { |e| e["name"] == "env-key-4" }["value"]).to eq("env-value-4")
-          expect(last_response_app_env.find { |e| e["name"] == "CF_DIEGO_RUN_BETA" }["value"]).to eq("true")
-        end
-
-        it "respects the batch_size parameter" do
-          [3,5].each { |size|
-            get "/internal/bulk/apps", {
-                "batch_size" => size,
-                "token" => "{\"id\":0}",
-            }
+          it 'uses the desire app message format' do
+            get '/internal/bulk/apps', {
+                                         'batch_size' => 100,
+                                         'token' => { id: 0 }.to_json,
+                                     }
 
             expect(last_response.status).to eq(200)
-            expect(decoded_response["apps"].size).to eq(size)
-          }
-        end
+            expect(decoded_response['apps'].size).to eq(6)
 
-        it "returns non-intersecting apps when token is supplied" do
-          get "/internal/bulk/apps", {
-              "batch_size" => 2,
-              "token" => "{\"id\":0}",
-          }
+            last_response_app = decoded_response['apps'].last
+            last_app = app_table_entry(6)
 
-          expect(last_response.status).to eq(200)
-
-          saved_apps = decoded_response["apps"].dup
-          expect(saved_apps.size).to eq(2)
-
-          get "/internal/bulk/apps", {
-              "batch_size" => 2,
-              "token" => MultiJson.dump(decoded_response["token"]),
-          }
-
-          expect(last_response.status).to eq(200)
-
-          new_apps = decoded_response["apps"].dup
-          expect(new_apps.size).to eq(2)
-          saved_apps.each do |saved_result|
-            expect(new_apps).not_to include(saved_result)
+            expect(last_response_app).to eq(runners.runner_for_app(last_app).desire_app_message)
           end
         end
 
-        it "should eventually return entire collection, batch after batch" do
-          apps = []
-          total_size = App.count
-
-          token = "{}"
-          while apps.size < total_size do
-            get "/internal/bulk/apps", {
-                "batch_size" => 2,
-                "token" => MultiJson.dump(token),
-            }
+        context 'when a format=cache parameter is set' do
+          it 'uses the cache data format' do
+            get '/internal/bulk/apps', {
+                                         'batch_size' => 1,
+                                         'format' => 'fingerprint',
+                                         'token' => { id: 0 }.to_json,
+                                     }
 
             expect(last_response.status).to eq(200)
-            token = decoded_response["token"]
-            apps += decoded_response["apps"]
+            expect(decoded_response['fingerprints'].size).to eq(1)
+
+            app = App.order(:id).first
+
+            message = decoded_response['fingerprints'][0]
+            expect(message).to match_object({
+                                                'process_guid' => Diego::ProcessGuid.from_app(app),
+                                                'etag' => app.updated_at.to_f.to_s
+                                            })
+          end
+        end
+
+        context 'when there are unstaged apps' do
+          before do
+            app = make_diego_app(state: 'STARTED')
+            app.package_state = 'PENDING'
+            app.save
           end
 
-          expect(apps.size).to eq(total_size)
-          get "/internal/bulk/apps", {
-              "batch_size" => 2,
-              "token" => MultiJson.dump(token),
-          }
+          it 'only returns staged apps' do
+            get '/internal/bulk/apps', {
+                                         'batch_size' => App.count,
+                                         'token' => '{}',
+                                     }
 
-          expect(last_response.status).to eq(200)
-          expect(decoded_response["apps"].size).to eq(0)
+            expect(last_response.status).to eq(200)
+            expect(decoded_response['apps'].size).to eq(App.count - 1)
+          end
         end
 
-        it "does return docker apps" do
-          app = make_diego_app(id: 6, state: "STARTED", docker_image: "fake-docker-image")
-          app.save
-
-          get "/internal/bulk/apps", {
-            "batch_size" => App.count,
-            "token" => "{}",
-          }
-
-          expect(last_response.status).to eq(200)
-          expect(decoded_response["apps"].size).to eq(App.count)
-        end
-
-        it "does not return unstaged apps" do
-          app = make_diego_app(id: 6, state: "STARTED")
-          app.package_state = "PENDING"
-          app.save
-
-          get "/internal/bulk/apps", {
-              "batch_size" => App.count,
-              "token" => "{}",
-          }
-
-          expect(last_response.status).to eq(200)
-          expect(decoded_response["apps"].size).to eq(App.count - 1)
-        end
-
-        it "does not return apps which aren't expected to be started" do
-          make_diego_app(id: 6, state: "STOPPED")
-
-          get "/internal/bulk/apps", {
-              "batch_size" => App.count,
-              "token" => "{}",
-          }
-
-          expect(last_response.status).to eq(200)
-          expect(decoded_response["apps"].size).to eq(App.count - 1)
-        end
-
-        it "does not return deleted apps" do
-          make_diego_app(id: 6, state: "STARTED", deleted_at: DateTime.now)
-
-          get "/internal/bulk/apps", {
-              "batch_size" => App.count,
-              "token" => "{}",
-          }
-
-          expect(last_response.status).to eq(200)
-          expect(decoded_response["apps"].size).to eq(App.count - 1)
-        end
-
-        it "only returns apps with CF_DIEGO_RUN_BETA" do
-          make_diego_app(id: 6, state: "STARTED").tap do |a|
-            a.environment_json = {} # remove CF_DIEGO_RUN_BETA
-            a.save
+        context 'when apps are not in the STARTED state' do
+          before do
+            make_diego_app(state: 'STOPPED')
           end
 
-          get "/internal/bulk/apps", {
-            "batch_size" => App.count,
-            "token" => "{}",
-          }
+          it 'does not return apps in the STOPPED state' do
+            get '/internal/bulk/apps', {
+                                         'batch_size' => App.count,
+                                         'token' => '{}',
+                                     }
 
-          expect(last_response.status).to eq(200)
-          expect(decoded_response["apps"].size).to eq(App.count - 1)
+            expect(last_response.status).to eq(200)
+            expect(decoded_response['apps'].size).to eq(App.count - 1)
+          end
+        end
+
+        context 'when there is a mixture of diego and traditional apps' do
+          before do
+            app = AppFactory.make
+            expect(app.diego).to be_falsey
+          end
+
+          it 'only returns diego apps' do
+            get '/internal/bulk/apps', {
+                                         'batch_size' => App.count,
+                                         'token' => '{}',
+                                     }
+
+            expect(last_response.status).to eq(200)
+            expect(decoded_response['apps'].size).to eq(App.count - 1)
+          end
+        end
+
+        context 'when docker is enabled' do
+          before do
+            TestConfig.override(diego_docker: true, diego: { staging: 'optional', running: 'optional' })
+          end
+
+          it 'does return docker apps' do
+            app = make_diego_app(state: 'STARTED', docker_image: 'fake-docker-image')
+            app.save
+
+            get '/internal/bulk/apps', {
+                                         'batch_size' => App.count,
+                                         'token' => '{}',
+                                     }
+
+            expect(last_response.status).to eq(200)
+            expect(decoded_response['apps'].size).to eq(App.count)
+          end
+        end
+
+        describe 'pagination' do
+          it 'respects the batch_size parameter' do
+            [3, 5].each { |size|
+              get '/internal/bulk/apps', {
+                                           'batch_size' => size,
+                                           'token' => { id: 0 }.to_json,
+                                       }
+
+              expect(last_response.status).to eq(200)
+              expect(decoded_response['apps'].size).to eq(size)
+            }
+          end
+
+          it 'returns non-intersecting apps when token is supplied' do
+            get '/internal/bulk/apps', {
+                                         'batch_size' => 2,
+                                         'token' => { id: 0 }.to_json,
+                                     }
+
+            expect(last_response.status).to eq(200)
+
+            saved_apps = decoded_response['apps'].dup
+            expect(saved_apps.size).to eq(2)
+
+            get '/internal/bulk/apps', {
+                                         'batch_size' => 2,
+                                         'token' => MultiJson.dump(decoded_response['token']),
+                                     }
+
+            expect(last_response.status).to eq(200)
+
+            new_apps = decoded_response['apps'].dup
+            expect(new_apps.size).to eq(2)
+            saved_apps.each do |saved_result|
+              expect(new_apps).not_to include(saved_result)
+            end
+          end
+
+          it 'should eventually return entire collection, batch after batch' do
+            apps = []
+            total_size = App.count
+
+            token = '{}'
+            while apps.size < total_size
+              get '/internal/bulk/apps', {
+                                           'batch_size' => 2,
+                                           'token' => MultiJson.dump(token),
+                                       }
+
+              expect(last_response.status).to eq(200)
+              token = decoded_response['token']
+              apps += decoded_response['apps']
+            end
+
+            expect(apps.size).to eq(total_size)
+            get '/internal/bulk/apps', {
+                                         'batch_size' => 2,
+                                         'token' => MultiJson.dump(token),
+                                     }
+
+            expect(last_response.status).to eq(200)
+            expect(decoded_response['apps'].size).to eq(0)
+          end
+        end
+      end
+    end
+
+    describe 'POST' '/internal/bulk/apps' do
+      context 'without credentials' do
+        it 'rejects the request as unauthorized' do
+          post '/internal/bulk/apps', {}
+
+          expect(last_response.status).to eq(401)
+        end
+      end
+
+      context 'with invalid credentials' do
+        before do
+          authorize 'bar', 'foo'
+        end
+
+        it 'rejects the request as unauthorized' do
+          post '/internal/bulk/apps'
+
+          expect(last_response.status).to eq(401)
+        end
+      end
+
+      context 'with valid credentials' do
+        before do
+          authorize @internal_user, @internal_password
+        end
+
+        context 'without a body' do
+          it 'is an invalid request' do
+            post '/internal/bulk/apps'
+
+            expect(last_response.status).to eq(400)
+          end
+        end
+
+        context 'with a body' do
+          context 'with invalid json' do
+            it 'is an invalid request' do
+              post '/internal/bulk/apps', 'foo'
+
+              expect(last_response.status).to eq(400)
+            end
+          end
+
+          context 'with an empty list' do
+            it 'returns an empty list' do
+              post '/internal/bulk/apps', [].to_json
+
+              expect(last_response.status).to eq(200)
+              expect(decoded_response).to eq([])
+            end
+          end
+
+          context 'with a list of process guids' do
+            it 'returns a list of desire app messages that match the process guids' do
+              diego_apps = runners.diego_apps(100, 0)
+
+              guids = diego_apps.map { |app| Diego::ProcessGuid.from_app(app) }
+              post '/internal/bulk/apps', guids.to_json
+
+              expect(last_response.status).to eq(200)
+              expect(decoded_response.length).to eq(5)
+
+              diego_apps.each do |app|
+                expect(decoded_response).to include(runners.runner_for_app(app).desire_app_message)
+              end
+            end
+
+            context 'when there is a mixture of diego and traditional apps' do
+              before do
+                5.times { AppFactory.make }
+              end
+
+              it 'only returns the diego apps' do
+                diego_apps = runners.diego_apps(100, 0)
+
+                guids = App.all.map { |app| Diego::ProcessGuid.from_app(app) }
+                post '/internal/bulk/apps', guids.to_json
+
+                expect(last_response.status).to eq(200)
+                expect(decoded_response.length).to eq(diego_apps.length)
+              end
+            end
+          end
+
+          # validate max batch size; reject requests that are too large
         end
       end
     end
