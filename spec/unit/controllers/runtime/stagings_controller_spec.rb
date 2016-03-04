@@ -52,7 +52,8 @@ module VCAP::CloudController
               tmpdir: Dir.mktmpdir('tmpdir', workspace)
           },
           index: 99,
-          name: 'api_z1'
+          name: 'api_z1',
+          zone: 'datacenter1'
       }
     end
     let(:staging_config) { original_staging_config }
@@ -218,7 +219,7 @@ module VCAP::CloudController
           job = Delayed::Job.last
           expect(job.handler).to include(app_obj.id.to_s)
           expect(job.handler).to include('ngx.uploads')
-          expect(job.queue).to eq('cc-api_z1-99')
+          expect(job.queue).to eq('cc-datacenter1-api_z1-99')
           expect(job.guid).not_to be_nil
           expect(last_response.status).to eq 200
         end
@@ -363,7 +364,7 @@ module VCAP::CloudController
         expect(job.handler).to include('VCAP::CloudController::Jobs::V3::DropletUpload')
         expect(job.handler).to include("droplet_guid: #{droplet.guid}")
         expect(job.handler).to include('ngx.uploads')
-        expect(job.queue).to eq('cc-api_z1-99')
+        expect(job.queue).to eq('cc-datacenter1-api_z1-99')
         expect(job.guid).not_to be_nil
         expect(last_response.status).to eq 200
       end
@@ -561,7 +562,7 @@ module VCAP::CloudController
           expect(job.handler).to include(app_obj.guid)
           expect(job.handler).to include('ngx.uploads')
           expect(job.handler).to include('buildpack_cache_blobstore')
-          expect(job.queue).to eq('cc-api_z1-99')
+          expect(job.queue).to eq('cc-datacenter1-api_z1-99')
           expect(job.guid).not_to be_nil
           expect(last_response.status).to eq 200
         end
@@ -731,7 +732,7 @@ module VCAP::CloudController
           expect(job.handler).to include("#{stack}-#{app_model.guid}")
           expect(job.handler).to include('ngx.uploads')
           expect(job.handler).to include('buildpack_cache_blobstore')
-          expect(job.queue).to eq('cc-api_z1-99')
+          expect(job.queue).to eq('cc-datacenter1-api_z1-99')
           expect(job.guid).not_to be_nil
           expect(last_response.status).to eq 200
         end

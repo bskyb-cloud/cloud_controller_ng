@@ -191,7 +191,7 @@ module VCAP::CloudController
 
         it 'should allow [index] in the hostname' do
           route.host = 'a-[index]'
-          route.should be_valid
+          expect(route).to be_valid
         end
         
         it 'should allow an empty host' do
@@ -378,8 +378,8 @@ module VCAP::CloudController
     end
 
     describe 'Serialization' do
-      it { is_expected.to export_attributes :host, :domain_guid, :space_guid, :path }
-      it { is_expected.to import_attributes :host, :domain_guid, :space_guid, :app_guids, :path }
+      it { is_expected.to export_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid}
+      it { is_expected.to import_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :app_guids}
     end
 
     describe 'instance methods' do

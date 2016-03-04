@@ -271,18 +271,18 @@ module VCAP::CloudController
       end
     end
 
-    describe "ssh_instance" do
-      it "should send message out to get ssh details" do
+    describe 'ssh_instance' do
+      it 'should send message out to get ssh details' do
         app.should_receive(:guid).and_return(1)
         app.instances = 2
 
         encoded = {:droplet => 1, :indices => [0], :version=> app.version, :states=>[:RUNNING]}
 
         message_bus.should_receive(:synchronous_request).
-            with("dea.ssh.droplet", encoded, {:timeout=>2}).
-            and_return(["instance"])
+            with('dea.ssh.droplet', encoded, {:timeout=>2}).
+            and_return(['instance'])
 
-        DeaClient.ssh_instance(app, 0).should == "instance"
+        expect(Dea::Client.ssh_instance(app, 0)).to eq('instance')
       end
     end
 

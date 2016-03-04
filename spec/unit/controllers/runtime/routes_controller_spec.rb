@@ -13,6 +13,8 @@ module VCAP::CloudController
       it do
         expect(described_class).to have_creatable_attributes({
           host:        { type: 'string', default: '' },
+          host_uniqueness:   { type: 'string', default: '' },
+          host_uniqueness2:  { type: 'string', default: '' },
           domain_guid: { type: 'string', required: true },
           space_guid:  { type: 'string', required: true },
           app_guids:   { type: '[string]' },
@@ -23,6 +25,8 @@ module VCAP::CloudController
       it do
         expect(described_class).to have_updatable_attributes({
           host:        { type: 'string' },
+          host_uniqueness:   { type: 'string' },
+          host_uniqueness2:  { type: 'string' },
           domain_guid: { type: 'string' },
           space_guid:  { type: 'string' },
           app_guids:   { type: '[string]' },

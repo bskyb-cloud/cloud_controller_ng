@@ -8,7 +8,7 @@ module VCAP::CloudController
     describe '#upload' do
       let(:package) { PackageModel.make(type: 'bits') }
       let(:message) { PackageUploadMessage.new({ 'bits_path' => '/tmp/path' }) }
-      let(:config) { { name: 'local', index: '1' } }
+      let(:config) { { zone: 'datacenter1', name: 'local', index: '1' } }
 
       it 'enqueues a upload job' do
         expect {
@@ -16,7 +16,7 @@ module VCAP::CloudController
         }.to change { Delayed::Job.count }.by(1)
 
         job = Delayed::Job.last
-        expect(job.queue).to eq('cc-local-1')
+        expect(job.queue).to eq('cc-datacenter1-local-1')
         expect(job.handler).to include(package.guid)
         expect(job.handler).to include('PackageBits')
       end

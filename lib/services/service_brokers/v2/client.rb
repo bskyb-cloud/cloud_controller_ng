@@ -170,7 +170,7 @@ module VCAP::Services::ServiceBrokers::V2
       
       response = @http_client.get(path)
       
-      parse_response(:get, path, response)
+      parse_schema_response(:get, path, response)
       
     rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
       raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
@@ -182,8 +182,8 @@ module VCAP::Services::ServiceBrokers::V2
       response = @http_client.put(path, {
          schema: schema   
       })
-      
-      parse_response(:put, path, response)
+
+      parse_schema_response(:put, path, response)
       
     rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
       raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
@@ -266,5 +266,43 @@ module VCAP::Services::ServiceBrokers::V2
       end
       path
     end
+
+    def parse_schema_response(method, path, response)
+      uri = URI(@http_client.url + path)
+      code = response.code.to_i
+
+      case code
+
+        when 204
+          return nil # no body
+
+        when 200..299
+          begin
+            response_hash = MultiJson.load(response.body)
+          rescue MultiJson::ParseError
+          end
+
+          unless response_hash.is_a?(Hash)
+            raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerResponseMalformed.new(uri.to_s, method, response, '')
+          end
+
+          return response_hash
+
+        when HTTP::Status::UNAUTHORIZED
+          raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerApiAuthenticationFailed.new(uri.to_s, method, response)
+
+        when 409
+          raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict.new(uri.to_s, method, response)
+
+        when 410
+          if method == :delete
+            logger.warn("Already deleted: #{uri.to_s}")
+            return nil
+          end
+      end
+
+      raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerBadResponse.new(uri.to_s, method, response)
+    end
+
   end
 end

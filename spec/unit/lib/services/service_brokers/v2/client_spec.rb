@@ -1166,7 +1166,7 @@ module VCAP::Services::ServiceBrokers::V2
       end
 
       it 'makes a set_schema request with correct data' do
-        client.set_schema(instance, "www.google.com")
+        client.set_schema(instance, 'www.google.com')
 
         expect(http_client).to have_received(:put).
                                    with("/v2/service_instances/#{instance.guid}/schema", anything())

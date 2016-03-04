@@ -795,40 +795,41 @@ module VCAP::CloudController
       end
     end
 
-    describe 'GET', 'v2/service_instances/:service_instance_guid/schema' do
-      context 'with a managed service instance' do
-        
-        let(:space)            { Space.make }
-        let(:developer)        { make_developer_for_space(space) }
-        let(:service) { Service.make(:v2) }
-        let(:service_plan) { ServicePlan.make(service: service) }
-        let(:service_instance) { ManagedServiceInstance.make(:space => space, service_plan: service_plan) }
-          
-        it "returns the service schema for the given service guid" do
-          stub_request(:get, %r(https://.*foo.com/.*/v2/service_instances/.*/schema)).to_return(body: "{}", status: 200)
-          get "v2/service_instances/#{service_instance.guid}/schema", {}, json_headers(headers_for(developer)) 
-          last_response.status.should == 200
-        end
-      end
-    end
+    # TODO: these 2 specs do not test anything
+    # describe 'GET', 'v2/service_instances/:service_instance_guid/schema' do
+    #   context 'with a managed service instance' do
+    #
+    #     let(:space)            { Space.make }
+    #     let(:developer)        { make_developer_for_space(space) }
+    #     let(:service) { Service.make(:v2) }
+    #     let(:service_plan) { ServicePlan.make(service: service) }
+    #     let(:service_instance) { ManagedServiceInstance.make(:space => space, service_plan: service_plan) }
+    #
+    #     it 'returns the service schema for the given service guid' do
+    #       stub_request(:get, %r(https://.*foo.com/.*/v2/service_instances/.*/schema)).to_return(body: "{}", status: 200)
+    #       get "v2/service_instances/#{service_instance.guid}/schema", {}, json_headers(headers_for(developer))
+    #       expect(last_response.status).to eq(200)
+    #     end
+    #   end
+    # end
+    #
     
-    
-    describe 'PUT', 'v2/service_instances/:service_instance_guid/schema' do
-      context 'with a managed service instance' do
-        
-        let(:space)            { Space.make }
-        let(:developer)        { make_developer_for_space(space) }
-        let(:service) { Service.make(:v2) }
-        let(:service_plan) { ServicePlan.make(service: service) }
-        let(:service_instance) { ManagedServiceInstance.make(:space => space, service_plan: service_plan) }
-          
-        it "returns the service schema for the given service guid" do
-          stub_request(:put, %r(https://.*foo.com/.*/v2/service_instances/.*/schema)).to_return(body: "{}", status: 200)
-          put "v2/service_instances/#{service_instance.guid}/schema", { :schema => "www.google.com"  }.to_json, json_headers(headers_for(developer)) 
-          last_response.status.should == 200
-        end
-      end
-    end
+    # describe 'PUT', 'v2/service_instances/:service_instance_guid/schema' do
+    #   context 'with a managed service instance' do
+    #
+    #     let(:space)            { Space.make }
+    #     let(:developer)        { make_developer_for_space(space) }
+    #     let(:service) { Service.make(:v2) }
+    #     let(:service_plan) { ServicePlan.make(service: service) }
+    #     let(:service_instance) { ManagedServiceInstance.make(:space => space, service_plan: service_plan) }
+    #
+    #     it 'returns the service schema for the given service guid' do
+    #       stub_request(:put, %r(https://.*foo.com/.*/v2/service_instances/.*/schema)).to_return(body: "{}", status: 200)
+    #       put "v2/service_instances/#{service_instance.guid}/schema", { :schema => 'www.google.com'}.to_json, json_headers(headers_for(developer))
+    #       expect(last_response.status).to eq(200)
+    #     end
+    #   end
+    # end
     
     describe 'GET', '/v2/service_instances/:service_instance_guid' do
       context 'with a managed service instance' do
