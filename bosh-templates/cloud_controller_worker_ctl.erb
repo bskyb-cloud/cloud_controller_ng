@@ -45,7 +45,7 @@ case $1 in
 
     cd $CC_PACKAGE_DIR/cloud_controller_ng
     <% task_name = "jobs:generic" %>
-    exec chpst -u vcap:vcap bundle exec rake <%= task_name %>[cc_global_worker.<%= spec.job.name %>.<%= spec.index %>.$INDEX]
+    exec chpst -u vcap:vcap bundle exec rake <%= task_name %>[cc_global_worker.<%= p("cc.zone") %>.<%= spec.job.name %>.<%= spec.index %>.$INDEX]
   ;;
 
   stop)
