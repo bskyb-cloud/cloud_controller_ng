@@ -176,29 +176,29 @@ module VCAP::Services::ServiceBrokers::V2
     rescue => e
       raise e.exception("Service instance #{instance.name}: #{e.message}")
     end
-    
+
     def get_schema(instance)
       path = "/v2/service_instances/#{instance.guid}/schema"
-      
+
       response = @http_client.get(path)
-      
+
       parse_schema_response(:get, path, response)
-      
+
     rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
-      raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
+      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceDeprovisionFailed', e.message)
     end
-    
+
     def set_schema(instance, schema)
       path = "/v2/service_instances/#{instance.guid}/schema"
-      
+
       response = @http_client.put(path, {
-         schema: schema   
+         schema: schema
       })
 
       parse_schema_response(:put, path, response)
-      
+
     rescue VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict => e
-      raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
+      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceDeprovisionFailed', e.message)
     end
 
     def update(instance, plan, accepts_incomplete: false, arbitrary_parameters: nil, previous_values: {})
@@ -304,13 +304,12 @@ module VCAP::Services::ServiceBrokers::V2
 
         when 410
           if method == :delete
-            logger.warn("Already deleted: #{uri.to_s}")
+            logger.warn("Already deleted: #{uri}")
             return nil
           end
       end
 
       raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerBadResponse.new(uri.to_s, method, response)
     end
-
   end
 end

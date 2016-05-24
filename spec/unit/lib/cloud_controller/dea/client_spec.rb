@@ -276,10 +276,10 @@ module VCAP::CloudController
         app.should_receive(:guid).and_return(1)
         app.instances = 2
 
-        encoded = {:droplet => 1, :indices => [0], :version=> app.version, :states=>[:RUNNING]}
+        encoded = { droplet: 1, indices: [0], version: app.version, states: [:RUNNING] }
 
         message_bus.should_receive(:synchronous_request).
-            with('dea.ssh.droplet', encoded, {:timeout=>2}).
+            with('dea.ssh.droplet', encoded, { timeout: 2 }).
             and_return(['instance'])
 
         expect(Dea::Client.ssh_instance(app, 0)).to eq('instance')

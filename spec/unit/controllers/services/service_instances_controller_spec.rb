@@ -919,7 +919,7 @@ module VCAP::CloudController
     #   end
     # end
     #
-    
+
     # describe 'PUT', 'v2/service_instances/:service_instance_guid/schema' do
     #   context 'with a managed service instance' do
     #
@@ -936,7 +936,7 @@ module VCAP::CloudController
     #     end
     #   end
     # end
-    
+
     describe 'GET', '/v2/service_instances/:service_instance_guid' do
       let(:space) { service_instance.space }
       let(:developer) { make_developer_for_space(space) }

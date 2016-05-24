@@ -66,20 +66,20 @@ module VCAP::CloudController
 
     def before_create
       super
-      if (self.host =~ /\[index\]/)
+      if self.host =~ /\[index\]/
         uniqueness1 = host.downcase
         uniqueness1.gsub!(/\[index\]/, '*')
         uniqueness1.gsub!(/\d+/, '*')
         self.host_uniqueness = uniqueness1
       end
-      if ( self.host =~ /\d+/ )
+      if  self.host =~ /\d+/
         uniqueness2 = host.downcase
         uniqueness2.gsub!(/\[index\]/, '*')
         uniqueness2.gsub!(/\d+/, '*')
         self.host_uniqueness2 = uniqueness2
       end
     end
-    
+
     def validate
       validates_presence :domain
       validates_presence :space
@@ -109,32 +109,32 @@ module VCAP::CloudController
       validate_ports
       errors.add(:host, :domain_conflict) if domains_match?
     end
-    
+
     def validate_index_uniqueness
-      if self.host_uniqueness != ""
-        validates_unique   [:host_uniqueness, :domain_id]
+      if self.host_uniqueness != ''
+        validates_unique [:host_uniqueness, :domain_id]
       end
-      
-      if (self.host =~ /\[index\]/)
+
+      if self.host =~ /\[index\]/
         uniqueness = self.host.downcase
         uniqueness.gsub!(/\[index\]/, '*')
         uniqueness.gsub!(/\d+/, '*')
-        routes = Route.find(:host_uniqueness2 => uniqueness, :domain_id => domain_id)
-        unless routes.nil? then
+        routes = Route.find(host_uniqueness2: uniqueness, domain_id: domain_id)
+        unless routes.nil?
           errors.add(:host_uniqueness, "Conflict with existing hostname #{routes.fqdn}")
         end
       end
-      
-      if (self.host =~ /\d+/)
+
+      if self.host =~ /\d+/
         uniqueness = self.host.downcase
         uniqueness.gsub!(/\[index\]/, '*')
         uniqueness.gsub!(/\d+/, '*')
-        routes = Route.find(:host_uniqueness => uniqueness, :domain_id => domain_id)
-        unless routes.nil? then
+        routes = Route.find(host_uniqueness: uniqueness, domain_id: domain_id)
+        unless routes.nil?
           errors.add(:host_uniqueness, "Conflict with existing hostname #{routes.fqdn}")
         end
-      end      
-    end 
+      end
+    end
 
     def validate_ports
       errors.add(:port, :invalid_port) if port < 0 || port > 65535

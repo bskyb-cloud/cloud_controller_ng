@@ -187,10 +187,9 @@ module VCAP::CloudController
 
     put '/v2/service_instances/:guid/schema', :set_schema
     def set_schema(guid)
-
       json_msg = self.class::SetSchemaMessage.decode(body)
 
-      @request_attrs = json_msg.extract(:stringify_keys => true)
+      @request_attrs = json_msg.extract(stringify_keys: true)
 
       raise Errors::ApiError.new_from_details('InvalidRequest') unless request_attrs
       raise Errors::ApiError.new_from_details('InvalidRequest') unless request_attrs['schema']
@@ -198,9 +197,9 @@ module VCAP::CloudController
       service_instance = find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)
       service_instance.client.set_schema(service_instance, request_attrs['schema'])
 
-      [HTTP::OK, {}, { }.to_json]
+      [HTTP::OK, {}, {}.to_json]
     end
-    
+
     get '/v2/service_instances/:guid/permissions', :permissions
     def permissions(guid)
       find_guid_and_validate_access(:read_permissions, guid, ServiceInstance)

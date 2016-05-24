@@ -244,7 +244,7 @@ module VCAP::CloudController
           route.host = 'a-[index]'
           expect(route).to be_valid
         end
-        
+
         it 'should allow an empty host' do
           Route.make(
             space: space,
@@ -263,46 +263,46 @@ module VCAP::CloudController
           }.to raise_error(Sequel::ValidationFailed)
         end
 
-        it "should not allow an [index] hostname to conflict with a number" do
+        it 'should not allow an [index] hostname to conflict with a number' do
           expect {
-            Route.make(:space => space,
-                       :domain => domain,
-                       :host => "app-a-1")
-            Route.make(:space => space,
-                       :domain => domain,
-                       :host => "app-a-[index]")
+            Route.make(space: space,
+                       domain: domain,
+                       host: 'app-a-1')
+            Route.make(space: space,
+                       domain: domain,
+                       host: 'app-a-[index]')
           }.to raise_error(Sequel::ValidationFailed)
         end
 
-        it "should not allow an number hostname to conflict with a [index]" do
+        it 'should not allow an number hostname to conflict with a [index]' do
           expect {
-            Route.make(:space => space,
-                       :domain => domain,
-                       :host => "app-b-[index]")
-            Route.make(:space => space,
-                       :domain => domain,
-                       :host => "app-b-1")
+            Route.make(space: space,
+                       domain: domain,
+                       host: 'app-b-[index]')
+            Route.make(space: space,
+                       domain: domain,
+                       host: 'app-b-1')
           }.to raise_error(Sequel::ValidationFailed)
         end
 
-        it "should allow two numbers hostnames" do
-          Route.make(:space => space,
-                     :domain => domain,
-                     :host => "app-c-1")
-          Route.make(:space => space,
-                     :domain => domain,
-                     :host => "app-c-2")
+        it 'should allow two numbers hostnames' do
+          Route.make(space: space,
+                     domain: domain,
+                     host: 'app-c-1')
+          Route.make(space: space,
+                     domain: domain,
+                     host: 'app-c-2')
         end
 
-        it "should allow conflicting hostnames across domains" do
+        it 'should allow conflicting hostnames across domains' do
           domain2 = PrivateDomain.make(owning_organization: space.organization)
 
-          Route.make(:space => space,
-                     :domain => domain,
-                     :host => "app-d-1")
-          Route.make(:space => space,
-                     :domain => domain2,
-                     :host => "app-d-[index]")
+          Route.make(space: space,
+                     domain: domain,
+                     host: 'app-d-1')
+          Route.make(space: space,
+                     domain: domain2,
+                     host: 'app-d-[index]')
         end
 
         it 'should not allow route to match existing domain' do
