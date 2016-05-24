@@ -9,17 +9,11 @@ resource 'Service Usage Events', type: [:api, :legacy_api] do
   let!(:event2) { VCAP::CloudController::ServiceUsageEvent.make }
   let!(:event3) { VCAP::CloudController::ServiceUsageEvent.make }
 
-  around do |example|
-    admin_user
-    example.run
-    admin_user.destroy
-  end
-
   standard_model_get :service_usage_event
 
   get '/v2/service_usage_events' do
     field :guid, 'The guid of the event.', required: false
-    field :state, 'The desired state of the service.', required: false, readonly: true, valid_values: ['CREATED', 'DELETED']
+    field :state, 'The desired state of the service.', required: false, readonly: true, valid_values: ['CREATED', 'DELETED', 'UPDATED']
     field :org_guid, 'The GUID of the organization.', required: false, readonly: true
     field :space_guid, 'The GUID of the space.', required: false, readonly: true
     field :space_name, 'The name of the space.', required: false, readonly: true
@@ -30,7 +24,7 @@ resource 'Service Usage Events', type: [:api, :legacy_api] do
     field :service_plan_name, 'The name for the service plan.', required: false, readonly: true
     field :service_guid, 'The GUID of the service.', required: false, readonly: true
     field :created_at, 'The timestamp of the event creation.',  required: false, readonly: true
-    field :serivce_label, 'The name of the service.',  required: false, readonly: true
+    field :service_label, 'The name of the service.',  required: false, readonly: true
 
     standard_list_parameters VCAP::CloudController::ServiceUsageEventsController
 

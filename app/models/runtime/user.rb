@@ -91,7 +91,7 @@ module VCAP::CloudController
     end
 
     def admin?
-      admin
+      raise 'This method is deprecated. A user is only an admin if their token contains the cloud_controller.admin scope'
     end
 
     def active?
@@ -102,6 +102,16 @@ module VCAP::CloudController
       remove_space space
       remove_managed_space space
       remove_audited_space space
+    end
+
+    def membership_spaces
+      Space.join(:spaces_developers, space_id: :id, user_id: id).select(:spaces__id).
+        union(
+          Space.join(:spaces_auditors, space_id: :id, user_id: id).select(:spaces__id)
+        ).
+        union(
+          Space.join(:spaces_managers, space_id: :id, user_id: id).select(:spaces__id)
+        )
     end
 
     def self.user_visibility_filter(_)

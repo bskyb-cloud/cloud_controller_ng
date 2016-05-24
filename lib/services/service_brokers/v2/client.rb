@@ -22,36 +22,37 @@ module VCAP::Services::ServiceBrokers::V2
     def provision(instance, arbitrary_parameters: {}, accepts_incomplete: false)
       path = service_instance_resource_path(instance, accepts_incomplete: accepts_incomplete)
 
-      body_parameters = {
+      body = {
         service_id: instance.service.broker_provided_id,
         plan_id: instance.service_plan.broker_provided_id,
         organization_guid: instance.organization.guid,
         space_guid: instance.space.guid,
       }
 
-      body_parameters[:parameters] = arbitrary_parameters if arbitrary_parameters.present?
-      response = @http_client.put(path, body_parameters)
+      body[:parameters] = arbitrary_parameters if arbitrary_parameters.present?
+      response = @http_client.put(path, body)
 
       parsed_response = @response_parser.parse_provision(path, response)
       last_operation_hash = parsed_response['last_operation'] || {}
-      attributes = {
-        # DEPRECATED, but needed because of not null constraint
-        credentials: {},
-        dashboard_url: parsed_response['dashboard_url'],
+      return_values = {
+        instance: {
+          credentials: {},
+          dashboard_url: parsed_response['dashboard_url']
+        },
         last_operation: {
           type: 'create',
           description: last_operation_hash['description'] || '',
-        },
+        }
       }
 
       state = last_operation_hash['state']
       if state
-        attributes[:last_operation][:state] = state
+        return_values[:last_operation][:state] = state
       else
-        attributes[:last_operation][:state] = 'succeeded'
+        return_values[:last_operation][:state] = 'succeeded'
       end
 
-      attributes
+      return_values
     rescue Errors::ServiceBrokerApiTimeout, Errors::ServiceBrokerBadResponse => e
       @orphan_mitigator.cleanup_failed_provision(@attrs, instance)
       raise e
@@ -80,15 +81,15 @@ module VCAP::Services::ServiceBrokers::V2
     end
 
     def create_service_key(key, arbitrary_parameters: {})
-      path = service_binding_resource_path(key)
-      attr = {
+      path = service_binding_resource_path(key.guid, key.service_instance.guid)
+      body = {
           service_id:  key.service.broker_provided_id,
           plan_id:     key.service_plan.broker_provided_id
       }
 
-      attr[:parameters] = arbitrary_parameters if arbitrary_parameters.present?
+      body[:parameters] = arbitrary_parameters if arbitrary_parameters.present?
 
-      response = @http_client.put(path, attr)
+      response = @http_client.put(path, body)
       parsed_response = @response_parser.parse_bind(path, response, service_guid: key.service.guid)
 
       attributes = {
@@ -102,23 +103,29 @@ module VCAP::Services::ServiceBrokers::V2
     end
 
     def bind(binding, arbitrary_parameters: {})
-      path = service_binding_resource_path(binding)
-      attr = {
-          service_id:  binding.service.broker_provided_id,
-          plan_id:     binding.service_plan.broker_provided_id,
-          app_guid:    binding.app_guid
+      path = service_binding_resource_path(binding.guid, binding.service_instance.guid)
+      body = {
+        service_id:    binding.service.broker_provided_id,
+        plan_id:       binding.service_plan.broker_provided_id,
+        app_guid:      binding.try(:app_guid),
+        bind_resource: binding.required_parameters
       }
+      body = body.reject { |_, v| v.nil? }
+      body[:parameters] = arbitrary_parameters if arbitrary_parameters.present?
 
-      attr[:parameters] = arbitrary_parameters if arbitrary_parameters.present?
-
-      response = @http_client.put(path, attr)
+      response = @http_client.put(path, body)
       parsed_response = @response_parser.parse_bind(path, response, service_guid: binding.service.guid)
 
       attributes = {
         credentials: parsed_response['credentials']
       }
+
       if parsed_response.key?('syslog_drain_url')
         attributes[:syslog_drain_url] = parsed_response['syslog_drain_url']
+      end
+
+      if parsed_response.key?('route_service_url')
+        attributes[:route_service_url] = parsed_response['route_service_url']
       end
 
       attributes
@@ -130,25 +137,28 @@ module VCAP::Services::ServiceBrokers::V2
     end
 
     def unbind(binding)
-      path = service_binding_resource_path(binding)
+      path = service_binding_resource_path(binding.guid, binding.service_instance.guid)
 
-      response = @http_client.delete(path, {
+      body = {
         service_id: binding.service.broker_provided_id,
-        plan_id:    binding.service_plan.broker_provided_id,
-      })
+        plan_id: binding.service_plan.broker_provided_id,
+      }
+      response = @http_client.delete(path, body)
 
       @response_parser.parse_unbind(path, response)
+    rescue => e
+      raise e.exception("Service instance #{binding.service_instance.name}: #{e.message}")
     end
 
     def deprovision(instance, accepts_incomplete: false)
       path = service_instance_resource_path(instance)
 
-      request_params = {
+      body = {
         service_id: instance.service.broker_provided_id,
         plan_id:    instance.service_plan.broker_provided_id,
       }
-      request_params.merge!(accepts_incomplete: true) if accepts_incomplete
-      response = @http_client.delete(path, request_params)
+      body.merge!(accepts_incomplete: true) if accepts_incomplete
+      response = @http_client.delete(path, body)
 
       parsed_response = @response_parser.parse_deprovision(path, response) || {}
       last_operation_hash = parsed_response['last_operation'] || {}
@@ -163,6 +173,8 @@ module VCAP::Services::ServiceBrokers::V2
       }
     rescue VCAP::Services::ServiceBrokers::V2::Errors::ServiceBrokerConflict => e
       raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceDeprovisionFailed', e.message)
+    rescue => e
+      raise e.exception("Service instance #{instance.name}: #{e.message}")
     end
     
     def get_schema(instance)
@@ -189,20 +201,16 @@ module VCAP::Services::ServiceBrokers::V2
       raise VCAP::Errors::ApiError.new_from_details("ServiceInstanceDeprovisionFailed", e.message)
     end
 
-    def update_service_plan(instance, plan, accepts_incomplete: false, arbitrary_parameters: nil)
+    def update(instance, plan, accepts_incomplete: false, arbitrary_parameters: nil, previous_values: {})
       path = service_instance_resource_path(instance, accepts_incomplete: accepts_incomplete)
 
-      body_hash = {
+      body = {
+        service_id: instance.service.broker_provided_id,
         plan_id: plan.broker_provided_id,
-        previous_values: {
-          plan_id: instance.service_plan.broker_provided_id,
-          service_id: instance.service.broker_provided_id,
-          organization_id: instance.organization.guid,
-          space_id: instance.space.guid
-        }
+        previous_values: previous_values
       }
-      body_hash[:parameters] = arbitrary_parameters if arbitrary_parameters
-      response = @http_client.patch(path, body_hash)
+      body[:parameters] = arbitrary_parameters if arbitrary_parameters
+      response = @http_client.patch(path, body)
 
       parsed_response = @response_parser.parse_update(path, response)
       last_operation_hash = parsed_response['last_operation'] || {}
@@ -255,8 +263,8 @@ module VCAP::Services::ServiceBrokers::V2
       "#{service_instance_resource_path(instance)}/last_operation"
     end
 
-    def service_binding_resource_path(binding)
-      "/v2/service_instances/#{binding.service_instance.guid}/service_bindings/#{binding.guid}"
+    def service_binding_resource_path(binding_guid, service_instance_guid)
+      "/v2/service_instances/#{service_instance_guid}/service_bindings/#{binding_guid}"
     end
 
     def service_instance_resource_path(instance, opts={})

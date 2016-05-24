@@ -100,10 +100,12 @@ module VCAP::Services::ServiceBrokers::V2
       let(:response_body) { response_data.to_json }
       let(:code) { '201' }
       let(:message) { 'Created' }
+      let(:developer) { make_developer_for_space(instance.space) }
 
       before do
         allow(http_client).to receive(:put).and_return(response)
         allow(http_client).to receive(:delete).and_return(response)
+        allow(VCAP::CloudController::SecurityContext).to receive(:current_user).and_return(developer)
 
         instance.service_instance_operation = service_instance_operation
       end
@@ -138,30 +140,35 @@ module VCAP::Services::ServiceBrokers::V2
         )
       end
 
-      it 'returns the attributes to update on a service instance' do
-        attributes, _ = client.provision(instance)
-        # ensure updating attributes and saving to service instance works
-        instance.save_and_update_operation(attributes)
+      describe 'return values' do
+        let(:response_data) do
+          {
+              dashboard_url: 'http://example-dashboard.com/9189kdfsk0vfnku'
+          }
+        end
 
-        expect(instance.dashboard_url).to eq('foo')
-      end
+        attributes = nil
+        before do
+          attributes = client.provision(instance)
+        end
 
-      it 'defaults the state to "succeeded"' do
-        attributes, _ = client.provision(instance)
+        it 'DEPRCATED: returns an empty credentials hash to satisfy the not null database constraint' do
+          expect(attributes[:instance][:credentials]).to eq({})
+        end
 
-        expect(attributes[:last_operation][:state]).to eq('succeeded')
-      end
+        it 'returns the dashboard url' do
+          expect(attributes[:instance][:dashboard_url]).to eq('http://example-dashboard.com/9189kdfsk0vfnku')
+        end
 
-      it 'leaves the description blank' do
-        attributes, _ = client.provision(instance)
+        describe 'last operation' do
+          it 'defaults the state to "succeeded"' do
+            expect(attributes[:last_operation][:state]).to eq('succeeded')
+          end
 
-        expect(attributes[:last_operation][:description]).to eq('')
-      end
-
-      it 'DEPRECATED, maintain for database not null constraint: sets the credentials on the instance' do
-        attributes, _ = client.provision(instance)
-
-        expect(attributes[:credentials]).to eq({})
+          it 'leaves the description blank' do
+            expect(attributes[:last_operation][:description]).to eq('')
+          end
+        end
       end
 
       it 'passes arbitrary params in the broker request' do
@@ -323,9 +330,7 @@ module VCAP::Services::ServiceBrokers::V2
       let(:message) { 'OK' }
 
       before do
-        instance.save_with_new_operation(
-          last_operation: { type: 'create' }
-        )
+        instance.save_with_new_operation({}, { type: 'create' })
         allow(http_client).to receive(:get).and_return(response)
       end
 
@@ -367,11 +372,7 @@ module VCAP::Services::ServiceBrokers::V2
 
         context 'when the last operation type is `delete`' do
           before do
-            instance.save_with_new_operation(
-              last_operation: {
-                type: 'delete',
-              }
-            )
+            instance.save_with_new_operation({}, { type: 'delete' })
           end
 
           it 'returns attributes to indicate the service instance was deleted' do
@@ -386,11 +387,7 @@ module VCAP::Services::ServiceBrokers::V2
 
         context 'with any other operation type' do
           before do
-            instance.save_with_new_operation(
-              last_operation: {
-                type: 'update'
-              }
-            )
+            instance.save_with_new_operation({}, { type: 'update' })
           end
 
           it 'returns attributes to indicate the service instance operation failed' do
@@ -418,7 +415,7 @@ module VCAP::Services::ServiceBrokers::V2
       end
     end
 
-    describe '#update_service_plan' do
+    describe '#update' do
       let(:old_plan) { VCAP::CloudController::ServicePlan.make }
       let(:new_plan) { VCAP::CloudController::ServicePlan.make }
 
@@ -451,45 +448,47 @@ module VCAP::Services::ServiceBrokers::V2
         instance.service_instance_operation = last_operation
       end
 
-      it 'makes a patch request with the new service plan' do
-        client.update_service_plan(instance, new_plan)
+      it 'makes a patch request with the service_id included in the body' do
+        client.update(instance, new_plan, previous_values: { plan_id: '1234' })
 
-        expect(http_client).to have_received(:patch).with(
-          anything,
-          {
-            plan_id:	new_plan.broker_provided_id,
-            previous_values: {
-              plan_id: old_plan.broker_provided_id,
-              service_id: old_plan.service.broker_provided_id,
-              organization_id: instance.organization.guid,
-              space_id: instance.space.guid
-            }
-          }
-        )
+        expect(http_client).to have_received(:patch).with(anything,
+            hash_including({
+              service_id: instance.service.broker_provided_id,
+            })
+          )
       end
 
       it 'makes a patch request to the correct path' do
-        client.update_service_plan(instance, new_plan)
-
+        client.update(instance, new_plan)
         expect(http_client).to have_received(:patch).with(path, anything)
+      end
+
+      context 'when the caller passes a new service plan' do
+        it 'makes a patch request with the new service plan' do
+          client.update(instance, new_plan, previous_values: { plan_id: '1234' })
+
+          expect(http_client).to have_received(:patch).with(
+              anything,
+              hash_including({
+                  plan_id:	new_plan.broker_provided_id,
+                  previous_values: {
+                    plan_id: '1234'
+                  }
+                })
+            )
+        end
       end
 
       context 'when the caller passes arbitrary parameters' do
         it 'includes the parameters in the request to the broker' do
-          client.update_service_plan(instance, new_plan, arbitrary_parameters: { myParam: 'some-value' })
+          client.update(instance, old_plan, arbitrary_parameters: { myParam: 'some-value' })
 
           expect(http_client).to have_received(:patch).with(
             anything,
-            {
-              plan_id:	new_plan.broker_provided_id,
+              hash_including({
               parameters: { myParam: 'some-value' },
-              previous_values: {
-                plan_id: old_plan.broker_provided_id,
-                service_id: old_plan.service.broker_provided_id,
-                organization_id: instance.organization.guid,
-                space_id: instance.space.guid
-              }
-            }
+              previous_values: {}
+            })
           )
         end
       end
@@ -498,7 +497,7 @@ module VCAP::Services::ServiceBrokers::V2
         let(:path) { "/v2/service_instances/#{instance.guid}?accepts_incomplete=true" }
 
         it 'adds the flag to the path of the service broker request' do
-          client.update_service_plan(instance, new_plan, accepts_incomplete: true)
+          client.update(instance, new_plan, accepts_incomplete: true)
 
           expect(http_client).to have_received(:patch).
             with(path, anything)
@@ -510,7 +509,7 @@ module VCAP::Services::ServiceBrokers::V2
           end
 
           it 'marks the last operation as succeeded' do
-            attributes, _, err = client.update_service_plan(instance, new_plan, accepts_incomplete: true)
+            attributes, _, err = client.update(instance, new_plan, accepts_incomplete: true)
 
             last_operation = attributes[:last_operation]
             expect(err).to be_nil
@@ -520,7 +519,7 @@ module VCAP::Services::ServiceBrokers::V2
           end
 
           it 'returns the new service_plan in a hash' do
-            attributes, _, err = client.update_service_plan(instance, new_plan, accepts_incomplete: true)
+            attributes, _, err = client.update(instance, new_plan, accepts_incomplete: true)
             expect(err).to be_nil
             expect(attributes[:service_plan]).to eq new_plan
           end
@@ -535,7 +534,7 @@ module VCAP::Services::ServiceBrokers::V2
 
           it 'return immediately with the broker response' do
             client = Client.new(client_attrs.merge(accepts_incomplete: true))
-            attributes, _, error = client.update_service_plan(instance, new_plan, accepts_incomplete: true)
+            attributes, _, error = client.update(instance, new_plan, accepts_incomplete: true)
 
             expect(attributes[:last_operation][:type]).to eq('update')
             expect(attributes[:last_operation][:state]).to eq('in progress')
@@ -558,7 +557,7 @@ module VCAP::Services::ServiceBrokers::V2
           end
 
           it 'returns an array containing the update attributes and the error' do
-            attrs, err = client.update_service_plan(instance, new_plan, accepts_incomplete: true)
+            attrs, err = client.update(instance, new_plan, accepts_incomplete: true)
 
             expect(err).to eq error
             expect(attrs).to eq({
@@ -579,7 +578,7 @@ module VCAP::Services::ServiceBrokers::V2
           end
 
           it 'returns an array containing the update attributes and the error' do
-            attrs, err = client.update_service_plan(instance, new_plan, accepts_incomplete: true)
+            attrs, err = client.update(instance, new_plan, accepts_incomplete: true)
 
             expect(err).to eq error
             expect(attrs).to eq({
@@ -600,7 +599,7 @@ module VCAP::Services::ServiceBrokers::V2
           end
 
           it 'returns an array containing the update attributes and the error' do
-            attrs, err = client.update_service_plan(instance, new_plan, accepts_incomplete: true)
+            attrs, err = client.update(instance, new_plan, accepts_incomplete: true)
 
             expect(err).to eq error
             expect(attrs).to eq({
@@ -621,7 +620,7 @@ module VCAP::Services::ServiceBrokers::V2
           end
 
           it 'returns an array containing the update attributes and the error' do
-            attrs, err = client.update_service_plan(instance, new_plan, accepts_incomplete: 'true')
+            attrs, err = client.update(instance, new_plan, accepts_incomplete: 'true')
 
             expect(err).to eq error
             expect(attrs).to eq({
@@ -642,7 +641,7 @@ module VCAP::Services::ServiceBrokers::V2
           end
 
           it 'returns an array containing the update attributes and the error' do
-            attrs, err = client.update_service_plan(instance, new_plan, accepts_incomplete: 'true')
+            attrs, err = client.update(instance, new_plan, accepts_incomplete: 'true')
 
             expect(err).to eq error
             expect(attrs).to eq({
@@ -825,7 +824,8 @@ module VCAP::Services::ServiceBrokers::V2
           with(anything,
              plan_id:    binding.service_plan.broker_provided_id,
              service_id: binding.service.broker_provided_id,
-             app_guid:   binding.app_guid
+             app_guid:   binding.app_guid,
+             bind_resource:      binding.required_parameters
         )
       end
 
@@ -846,12 +846,28 @@ module VCAP::Services::ServiceBrokers::V2
           arbitrary_parameters = { 'name' => 'value' }
           client.bind(binding, arbitrary_parameters: arbitrary_parameters)
           expect(http_client).to have_received(:put).
-            with(anything,
-                 plan_id:    binding.service_plan.broker_provided_id,
-                 service_id: binding.service.broker_provided_id,
-                 app_guid:   binding.app_guid,
-                 parameters: arbitrary_parameters
-            )
+              with(anything,
+                plan_id:    binding.service_plan.broker_provided_id,
+                service_id: binding.service.broker_provided_id,
+                app_guid:   binding.app_guid,
+                parameters: arbitrary_parameters,
+                bind_resource:      binding.required_parameters
+              )
+        end
+      end
+
+      context 'when the binding does not have an app_guid' do
+        let(:binding) { VCAP::CloudController::RouteBinding.make }
+
+        it 'does not send the app_guid in the request' do
+          client.bind(binding)
+
+          expect(http_client).to have_received(:put).
+              with(anything,
+                plan_id:    binding.service_plan.broker_provided_id,
+                service_id: binding.service.broker_provided_id,
+                bind_resource:      binding.required_parameters
+              )
         end
       end
 
@@ -1018,6 +1034,20 @@ module VCAP::Services::ServiceBrokers::V2
           }.to raise_error(Errors::ServiceBrokerBadResponse)
         end
       end
+      context 'when the broker returns an error' do
+        let(:code) { '204' }
+        let(:response_data) do
+          { 'description' => 'Could not delete instance' }
+        end
+        let(:response_body) { response_data.to_json }
+
+        it 'raises a ServiceBrokerBadResponse error with the instance name' do
+          expect {
+            client.unbind(binding)
+          }.to raise_error(Errors::ServiceBrokerBadResponse).
+                 with_message("Service instance #{binding.service_instance.name}: Service broker error: Could not delete instance")
+        end
+      end
     end
 
     describe '#deprovision' do
@@ -1115,6 +1145,22 @@ module VCAP::Services::ServiceBrokers::V2
           expect {
             client.deprovision(instance)
           }.to raise_error(Errors::ServiceBrokerBadResponse)
+        end
+      end
+
+      context 'when the broker returns an error' do
+        let(:instance) { VCAP::CloudController::ManagedServiceInstance.make }
+        let(:code) { '204' }
+        let(:response_data) do
+          { 'description' => 'Could not delete instance' }
+        end
+        let(:response_body) { response_data.to_json }
+
+        it 'raises a ServiceBrokerBadResponse error with the instance name' do
+          expect {
+            client.deprovision(instance)
+          }.to raise_error(Errors::ServiceBrokerBadResponse).
+                 with_message("Service instance #{instance.name}: Service broker error: Could not delete instance")
         end
       end
     end

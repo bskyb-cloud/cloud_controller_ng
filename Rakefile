@@ -1,27 +1,14 @@
-$LOAD_PATH.unshift(File.expand_path('../lib', __FILE__))
-$LOAD_PATH.unshift(File.expand_path('../app', __FILE__))
-
-ENV['BUNDLE_GEMFILE'] ||= File.expand_path('../Gemfile', __FILE__)
-require 'bundler/setup'
+require File.expand_path('../config/boot', __FILE__)
 
 require 'yaml'
 require 'sequel'
 require 'steno'
 require 'cloud_controller'
+require_relative 'lib/tasks/rake_config'
 
-def config
-  @config ||= begin
-    config_file = ENV['CLOUD_CONTROLLER_NG_CONFIG'] || File.expand_path('../config/cloud_controller.yml', __FILE__)
-    config = VCAP::CloudController::Config.from_file(config_file)
-    config
-  end
-end
+Rails.application.load_tasks
 
-Dir['lib/tasks/**/*.rake'].each do |tasks|
-  load tasks
-end
-
-task default: [:rubocop_autocorrect, :spec]
+task default: ['spec:all', :rubocop_autocorrect]
 
 task :rubocop_autocorrect do
   require 'rubocop'

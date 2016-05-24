@@ -11,51 +11,71 @@ module VCAP::CloudController
     one_to_many :processes, class: 'VCAP::CloudController::App', key: :app_guid, primary_key: :guid
     one_to_many :packages, class: 'VCAP::CloudController::PackageModel', key: :app_guid, primary_key: :guid
     one_to_many :droplets, class: 'VCAP::CloudController::DropletModel', key: :app_guid, primary_key: :guid
-    many_to_one :desired_droplet, class: 'VCAP::CloudController::DropletModel', key: :desired_droplet_guid, primary_key: :guid, without_guid_generation: true
+    many_to_one :droplet, class: 'VCAP::CloudController::DropletModel', key: :droplet_guid, primary_key: :guid, without_guid_generation: true
+
+    one_to_one :buildpack_lifecycle_data,
+                class: 'VCAP::CloudController::BuildpackLifecycleDataModel',
+                key: :app_guid,
+                primary_key: :guid
 
     encrypt :environment_variables, salt: :salt, column: :encrypted_environment_variables
     serializes_via_json :environment_variables
+
+    add_association_dependencies buildpack_lifecycle_data: :delete
 
     def validate
       validates_presence :name
       validates_unique [:space_guid, :name]
       validates_format APP_NAME_REGEX, :name
       validate_environment_variables
+      validate_droplet_is_staged
     end
+
+    def lifecycle_type
+      return BuildpackLifecycleDataModel::LIFECYCLE_TYPE if self.buildpack_lifecycle_data
+    end
+
+    def lifecycle_data
+      return buildpack_lifecycle_data if self.buildpack_lifecycle_data
+    end
+
+    class << self
+      def user_visible(user)
+        dataset.where(user_visibility_filter(user))
+      end
+
+      def user_visibility_filter(user)
+        {
+          space_guid: space_guids_where_visible(user)
+        }
+      end
+
+      private
+
+      def space_guids_where_visible(user)
+        Space.join(:spaces_developers, space_id: :id, user_id: user.id).select(:spaces__guid).
+        union(
+          Space.join(:spaces_managers, space_id: :id, user_id: user.id).select(:spaces__guid)
+        ).union(
+          Space.join(:spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__guid)
+        ).union(
+          Space.join(:organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__guid)
+        ).select(:space_guid)
+      end
+    end
+
+    private
 
     def validate_environment_variables
       return unless environment_variables
-      unless environment_variables.is_a?(Hash)
-        errors.add(:environment_variables, 'must be a JSON hash')
-        return
-      end
-      keys = environment_variables.keys
-      keys.each do |key|
-        key = key.to_s
-        if key =~ /^CF_/i
-          errors.add(:environment_variables, 'cannot start with CF_')
-        elsif key =~ /^VCAP_/i
-          errors.add(:environment_variables, 'cannot start with VCAP_')
-        elsif key == 'PORT'
-          errors.add(:environment_variables, 'cannot set PORT')
-        end
-      end
+      validator = VCAP::CloudController::Validators::EnvironmentVariablesValidator.new({ attributes: [:environment_variables] })
+      validator.validate_each(self, :environment_variables, environment_variables)
     end
 
-    def self.user_visible(user)
-      dataset.where(user_visibility_filter(user))
-    end
-
-    def self.user_visibility_filter(user)
-      {
-        space_guid: Space.dataset.join_table(:inner, :spaces_developers, space_id: :id, user_id: user.id).select(:spaces__guid).union(
-            Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__guid)
-          ).union(
-            Space.dataset.join_table(:inner, :spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__guid)
-          ).union(
-            Space.dataset.join_table(:inner, :organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__guid)
-        ).select(:space_guid)
-      }
+    def validate_droplet_is_staged
+      if droplet && droplet.state != DropletModel::STAGED_STATE
+        errors.add(:droplet, 'must be in staged state')
+      end
     end
   end
 end

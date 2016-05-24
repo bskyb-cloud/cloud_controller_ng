@@ -6,6 +6,7 @@ require 'cloud_controller/errors/invalid_route_relation'
 require 'repositories/runtime/app_usage_event_repository'
 require 'actions/services/service_binding_delete'
 require 'presenters/message_bus/service_binding_presenter'
+require 'presenters/v3/cache_key_presenter'
 
 require_relative 'buildpack'
 
@@ -14,6 +15,8 @@ module VCAP::CloudController
   class App < Sequel::Model
     plugin :serialization
     plugin :after_initialize
+
+    extend IntegerArraySerializer
 
     def after_initialize
       default_instances = db_schema[:instances][:default].to_i
@@ -45,20 +48,23 @@ module VCAP::CloudController
                       :detected_buildpack, :environment_json, :memory, :instances, :disk_quota,
                       :state, :version, :command, :console, :debug, :staging_task_id,
                       :package_state, :health_check_type, :health_check_timeout,
-                      :staging_failed_reason, :diego, :docker_image, :package_updated_at,
-                      :detected_start_command, :enable_ssh
+                      :staging_failed_reason, :staging_failed_description, :diego, :docker_image, :package_updated_at,
+                      :detected_start_command, :enable_ssh, :docker_credentials_json, :ports
 
     import_attributes :name, :production, :space_guid, :stack_guid, :buildpack,
                       :detected_buildpack, :environment_json, :memory, :instances, :disk_quota,
                       :state, :command, :console, :debug, :staging_task_id,
                       :service_binding_guids, :route_guids, :health_check_type,
-                      :health_check_timeout, :diego, :docker_image, :app_guid, :enable_ssh
+                      :health_check_timeout, :diego, :docker_image, :app_guid, :enable_ssh,
+                      :docker_credentials_json, :ports
 
     strip_attributes :name
 
     serialize_attributes :json, :metadata
+    serialize_attributes :integer_array, :ports
 
     encrypt :environment_json, salt: :salt, column: :encrypted_environment_json
+    encrypt :docker_credentials_json, salt: :docker_salt, column: :encrypted_docker_credentials_json
 
     APP_STATES = %w(STOPPED STARTED).map(&:freeze).freeze
     PACKAGE_STATES = %w(PENDING STAGED FAILED).map(&:freeze).freeze
@@ -87,7 +93,8 @@ module VCAP::CloudController
     def validation_policies
       [
         AppEnvironmentPolicy.new(self),
-        DiskQuotaPolicy.new(self, max_app_disk_in_mb),
+        MaxDiskQuotaPolicy.new(self, max_app_disk_in_mb),
+        MinDiskQuotaPolicy.new(self),
         MetadataPolicy.new(self, metadata_deserialized),
         MinMemoryPolicy.new(self),
         MaxMemoryPolicy.new(self, space, :space_quota_exceeded),
@@ -95,10 +102,12 @@ module VCAP::CloudController
         MaxInstanceMemoryPolicy.new(self, organization && organization.quota_definition, :instance_memory_limit_exceeded),
         MaxInstanceMemoryPolicy.new(self, space && space.space_quota_definition, :space_instance_memory_limit_exceeded),
         InstancesPolicy.new(self),
+        MaxAppInstancesPolicy.new(self, organization, organization && organization.quota_definition, :app_instance_limit_exceeded),
+        MaxAppInstancesPolicy.new(self, space, space && space.space_quota_definition, :space_app_instance_limit_exceeded),
         HealthCheckPolicy.new(self, health_check_timeout),
         CustomBuildpackPolicy.new(self, custom_buildpacks_enabled?),
         DockerPolicy.new(self),
-        EnableSshPolicy.new(self)
+        PortsPolicy.new(self)
       ]
     end
 
@@ -134,7 +143,7 @@ module VCAP::CloudController
     end
 
     def before_save
-      if generate_start_event? && !package_hash
+      if needs_package_in_current_state? && !package_hash
         raise VCAP::Errors::ApiError.new_from_details('AppPackageInvalid', 'bits have not been uploaded')
       end
 
@@ -148,9 +157,6 @@ module VCAP::CloudController
       end
 
       set_new_version if version_needs_to_be_updated?
-
-      AppStopEvent.create_from_app(self) if generate_stop_event?
-      AppStartEvent.create_from_app(self) if generate_start_event?
 
       if diego.nil?
         self.diego = Config.config[:default_to_diego_backend]
@@ -195,25 +201,17 @@ module VCAP::CloudController
       create_app_usage_buildpack_event
     end
 
-    def generate_start_event?
-      # Change to app state is given priority over change to footprint as
-      # we would like to generate only either start or stop event exactly
-      # once during a state change. Also, if the app is not in started state
-      # and/or is new, then the changes to the footprint shouldn't trigger a
-      # billing event.
-      started? && ((column_changed?(:state)) || (!new? && footprint_changed?))
-    end
-
-    def generate_stop_event?
-      # If app is not in started state and/or is new, then the changes
-      # to the footprint shouldn't trigger a billing event.
-      !new? &&
-        (being_stopped? || (footprint_changed? && started?)) &&
-        !has_stop_event_for_latest_run?
+    def needs_package_in_current_state?
+      started?
+      # started? && ((column_changed?(:state)) || (!new? && footprint_changed?))
     end
 
     def in_suspended_org?
       space.in_suspended_org?
+    end
+
+    def being_started?
+      column_changed?(:state) && started?
     end
 
     def being_stopped?
@@ -236,11 +234,6 @@ module VCAP::CloudController
       space && space.organization
     end
 
-    def has_stop_event_for_latest_run?
-      latest_run_id = AppStartEvent.filter(app_guid: guid).order(Sequel.desc(:id)).select_map(:app_run_id).first
-      !!AppStopEvent.find(app_run_id: latest_run_id)
-    end
-
     def before_destroy
       lock!
       self.state = 'STOPPED'
@@ -257,7 +250,6 @@ module VCAP::CloudController
 
     def after_destroy
       super
-      AppStopEvent.create_from_app(self) unless initial_value(:state) == 'STOPPED' || has_stop_event_for_latest_run?
       create_app_usage_event
     end
 
@@ -320,6 +312,18 @@ module VCAP::CloudController
     end
     alias_method_chain :environment_json, 'serialization'
 
+    def docker_credentials_json_with_serialization=(env)
+      self.docker_credentials_json_without_serialization = MultiJson.dump(env)
+    end
+    alias_method_chain :docker_credentials_json=, 'serialization'
+
+    def docker_credentials_json_with_serialization
+      string = docker_credentials_json_without_serialization
+      return if string.blank?
+      MultiJson.load string
+    end
+    alias_method_chain :docker_credentials_json, 'serialization'
+
     def system_env_json
       vcap_services
     end
@@ -332,6 +336,7 @@ module VCAP::CloudController
           disk: disk_quota,
           fds: file_descriptors
         },
+        application_id: guid,
         application_version: version,
         application_name: app_name,
         application_uris: uris,
@@ -358,10 +363,12 @@ module VCAP::CloudController
 
     def validate_route(route)
       objection = Errors::InvalidRouteRelation.new(route.guid)
+      route_service_objection = Errors::InvalidRouteRelation.new("#{route.guid} - Route services are only supported for apps on Diego")
 
       raise objection if route.nil?
       raise objection if space.nil?
       raise objection if route.space_id != space.id
+      raise route_service_objection if !route.route_service_url.nil? && !diego?
 
       raise objection unless route.domain.usable_by_organization?(space.organization)
     end
@@ -421,14 +428,28 @@ module VCAP::CloudController
       state == 'STARTED'
     end
 
+    def active?
+      if diego? && docker_image.present?
+        return false unless FeatureFlag.enabled?('diego_docker')
+      end
+      true
+    end
+
     def stopped?
       state == 'STOPPED'
     end
 
     def uris
-      routes.map do |r|
-        "#{r.fqdn}#{r.path}"
+      routes.map(&:uri)
+    end
+
+    def routing_info
+      info = routes.map do |r|
+        info = { 'hostname' => r.uri }
+        info['route_service_url'] = r.route_binding.route_service_url if r.route_binding && r.route_binding.route_service_url
+        info
       end
+      { 'http_routes' => info }
     end
 
     def mark_as_staged
@@ -437,8 +458,14 @@ module VCAP::CloudController
     end
 
     def mark_as_failed_to_stage(reason='StagingError')
+      unless STAGING_FAILED_REASONS.include?(reason)
+        logger.warn("Invalid staging failure reason: #{reason}, provided for app #{self.guid}")
+        reason = 'StagingError'
+      end
+
       self.package_state = 'FAILED'
       self.staging_failed_reason = reason
+      self.staging_failed_description = VCAP::Errors::ApiError.new_from_details(reason, 'staging failed').message
       self.package_pending_since = nil
       self.state = 'STOPPED' if diego?
       save
@@ -447,6 +474,7 @@ module VCAP::CloudController
     def mark_for_restaging
       self.package_state = 'PENDING'
       self.staging_failed_reason = nil
+      self.staging_failed_description = nil
       self.package_pending_since = Sequel::CURRENT_TIMESTAMP
     end
 
@@ -481,7 +509,7 @@ module VCAP::CloudController
     end
 
     def buildpack_cache_key
-      "#{stack.name}-#{guid}"
+      CacheKeyPresenter.cache_key(guid: guid, stack_name: stack.name)
     end
 
     def docker_image=(value)
@@ -551,8 +579,10 @@ module VCAP::CloudController
     end
 
     def to_hash(opts={})
-      if !VCAP::CloudController::SecurityContext.admin? && !space.developers.include?(VCAP::CloudController::SecurityContext.current_user)
-        opts.merge!(redact: %w(environment_json system_env_json))
+      if VCAP::CloudController::SecurityContext.admin? || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
+        opts.merge!(redact: %w(docker_credentials_json))
+      else
+        opts.merge!(redact: %w(environment_json system_env_json docker_credentials_json))
       end
       super(opts)
     end
@@ -579,6 +609,10 @@ module VCAP::CloudController
       end
     end
 
+    def handle_update_route(route)
+      mark_routes_changed(route)
+    end
+
     private
 
     def mark_routes_changed(_=nil)
@@ -591,6 +625,8 @@ module VCAP::CloudController
             AppObserver.routes_changed(self)
             @routes_changed = false
           end
+          self.updated_at = Sequel::CURRENT_TIMESTAMP
+          save
         end
       else
         set_new_version
@@ -666,4 +702,8 @@ module VCAP::CloudController
     end
   end
   # rubocop:enable ClassLength
+end
+
+module VCAP::CloudController
+  ProcessModel = App
 end

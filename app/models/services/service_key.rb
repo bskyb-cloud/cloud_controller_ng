@@ -15,7 +15,7 @@ module VCAP::CloudController
     encrypt :credentials, salt: :salt
 
     def to_hash(opts={})
-      if !VCAP::CloudController::SecurityContext.admin? && !service_instance.space.developers.include?(VCAP::CloudController::SecurityContext.current_user)
+      if !VCAP::CloudController::SecurityContext.admin? && !service_instance.space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
         opts.merge!({ redact: ['credentials'] })
       end
       super(opts)
@@ -48,7 +48,7 @@ module VCAP::CloudController
     alias_method_chain :credentials, 'serialization'
 
     def self.user_visibility_filter(user)
-      { service_instance: ServiceInstance.user_visible(user) }
+      { service_instance: ServiceInstance.dataset.filter({ space: user.spaces_dataset }) }
     end
 
     def after_initialize

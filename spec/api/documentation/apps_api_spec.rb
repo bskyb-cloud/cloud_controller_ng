@@ -43,11 +43,23 @@ resource 'Apps', type: [:api, :legacy_api] do
       default: nil,
       experimental: true,
       example_values: ['cloudfoundry/helloworld', 'registry.example.com:5000/user/repository/tag']
+    field :docker_credentials_json, 'Docker credentials for pulling docker image.',
+      default: {},
+      experimental: true,
+      example_values: [{ 'docker_user' => 'user name',
+                         'docker_password' => 's3cr3t',
+                         'docker_email' => 'email@example.com',
+                         'docker_login_server' => 'https://index.docker.io/v1/' }]
 
     field :environment_json, 'Key/value pairs of all the environment variables to run in your app. Does not include any system or service variables.'
     field :production, 'Deprecated.', deprecated: true, default: true, valid_values: [true, false]
     field :console, 'Open the console port for the app (at $CONSOLE_PORT).', deprecated: true, default: false, valid_values: [true, false]
     field :debug, 'Open the debug port for the app (at $DEBUG_PORT).', deprecated: true, default: false, valid_values: [true, false]
+
+    field :staging_failed_reason, 'Reason for application staging failures', default: nil
+    field :staging_failed_description, 'Detailed description for the staging_failed_reason', default: nil
+
+    field :ports, 'Ports on which application may listen. Supported for applications pushed to Diego only.'
   end
 
   describe 'Standard endpoints' do
@@ -62,7 +74,6 @@ resource 'Apps', type: [:api, :legacy_api] do
         staging: 'optional',
         running: 'optional',
       )
-      allow(VCAP::CloudController::Config.config).to receive(:[]).with(:diego_docker).and_return true
     end
 
     def after_standard_model_delete(guid)
@@ -74,7 +85,8 @@ resource 'Apps', type: [:api, :legacy_api] do
       include_context 'fields', required: true
       example 'Creating an App' do
         space_guid = VCAP::CloudController::Space.make.guid
-        client.post '/v2/apps', MultiJson.dump(required_fields.merge(space_guid: space_guid), pretty: true), headers
+        ports = [1000, 2000]
+        client.post '/v2/apps', MultiJson.dump(required_fields.merge(space_guid: space_guid, ports: ports), pretty: true), headers
         expect(status).to eq(201)
 
         standard_entity_response parsed_response, :app
@@ -124,6 +136,8 @@ resource 'Apps', type: [:api, :legacy_api] do
       let!(:associated_service_binding) { VCAP::CloudController::ServiceBinding.make(app: app_obj, service_instance: associated_service_instance) }
       let(:associated_service_binding_guid) { associated_service_binding.guid }
 
+      parameter :service_binding_guid, 'The guid of the service binding'
+
       before do
         service_broker = associated_service_binding.service.service_broker
         instance_guid = associated_service_instance.guid
@@ -149,6 +163,8 @@ resource 'Apps', type: [:api, :legacy_api] do
       let(:route_guid) { route.guid }
       let(:associated_route) { VCAP::CloudController::Route.make(space: app_obj.space) }
       let(:associated_route_guid) { associated_route.guid }
+
+      parameter :route_guid, 'The guid of the route'
 
       standard_model_list :route, VCAP::CloudController::RoutesController, outer_model: :app
       nested_model_associate :route, :app

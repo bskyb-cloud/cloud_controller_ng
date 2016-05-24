@@ -13,7 +13,11 @@ module VCAP::CloudController
       end
 
       def deleted(app)
-        @runners.runner_for_app(app).stop
+        begin
+          @runners.runner_for_app(app).stop
+        rescue VCAP::CloudController::Diego::Runner::CannotCommunicateWithDiegoError
+          # This is a hail mary.  Diego will eventually be consistent.  If this communication fails, we're cool with it.
+        end
 
         delete_package(app) if app.package_hash
         delete_buildpack_cache(app)
@@ -31,7 +35,7 @@ module VCAP::CloudController
       end
 
       def routes_changed(app)
-        @runners.runner_for_app(app).update_routes if app.started?
+        @runners.runner_for_app(app).update_routes if app.started? && app.active?
       end
 
       private
@@ -54,14 +58,14 @@ module VCAP::CloudController
 
         if app.needs_staging?
           @stagers.validate_app(app)
-          @stagers.stager_for_app(app).stage_app
+          @stagers.stager_for_app(app).stage
         else
           @runners.runner_for_app(app).start
         end
       end
 
       def react_to_instances_change(app)
-        @runners.runner_for_app(app).scale if app.started?
+        @runners.runner_for_app(app).scale if app.started? && app.active?
       end
     end
   end

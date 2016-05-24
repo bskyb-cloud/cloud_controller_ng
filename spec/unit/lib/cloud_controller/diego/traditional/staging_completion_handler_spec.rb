@@ -12,17 +12,20 @@ module VCAP::CloudController
 
     let(:success_response) do
       {
-        execution_metadata: '{command: [' ']}',
-        detected_start_command: { web: '' },
-        lifecycle_data: {
-          buildpack_key: buildpack.key,
-          detected_buildpack: 'INTERCAL',
+        result: {
+          process_types:      { web: 'some command' },
+          execution_metadata: '',
+          lifecycle_type:     'buildpack',
+          lifecycle_metadata: {
+            buildpack_key:      buildpack.key,
+            detected_buildpack: 'INTERCAL',
+          }
         }
       }
     end
 
     let(:malformed_success_response) do
-      success_response.except(:detected_start_command)
+      success_response[:result].except(:execution_metadata)
     end
 
     let(:fail_response) do
@@ -45,6 +48,7 @@ module VCAP::CloudController
 
     before do
       allow(Steno).to receive(:logger).with('cc.stager').and_return(logger)
+      allow(Loggregator).to receive(:emit_error)
       allow(Dea::Client).to receive(:start)
 
       staged_app.add_new_droplet('lol')
@@ -63,17 +67,33 @@ module VCAP::CloudController
 
       context 'when staging metadata is returned' do
         before do
-          success_response[:execution_metadata] = 'some-metadata'
-          success_response[:detected_start_command][:web] = 'some-command'
+          success_response[:result][:process_types] = {
+            web: 'web_command',
+            worker: 'worker_command',
+            anything: 'lizard hand on a stick'
+          }
         end
 
         it 'updates the droplet with the returned start command' do
           handle_staging_result(success_response)
           staged_app.reload
           droplet = staged_app.current_droplet
-          expect(droplet.execution_metadata).to eq('some-metadata')
-          expect(droplet.detected_start_command).to eq('some-command')
+
+          expect(droplet.execution_metadata).to eq('')
+          expect(droplet.detected_start_command).to eq('web_command')
           expect(droplet.droplet_hash).to eq('lol')
+        end
+
+        context 'when the app has no procfile' do
+          before do
+            success_response[:result][:process_types] = nil
+          end
+
+          it 'gracefully handles a nil process_types' do
+            expect {
+              handle_staging_result(success_response)
+            }.to change { staged_app.reload.staged? }.to(true)
+          end
         end
       end
 
@@ -177,8 +197,12 @@ module VCAP::CloudController
             'diego.staging.success.invalid-message',
             staging_guid: staging_guid,
             payload: malformed_success_response,
-            error: '{ detected_start_command => Missing key }'
+            error: '{ result => Missing key }'
           )
+        end
+
+        it 'logs an error for the CF user' do
+          expect(Loggregator).to have_received(:emit_error).with(staged_app.guid, /Malformed message from Diego stager/)
         end
       end
 

@@ -24,17 +24,37 @@ module VCAP::CloudController
 
     private
 
+    DEFAULT_HASHING_ALGORITHM = 'sha1'
+
     def package_hash(package)
       {
         guid:       package.guid,
         type:       package.type,
-        hash:       package.package_hash,
-        url:        package.url,
+        data:       build_data(package),
         state:      package.state,
-        error:      package.error,
         created_at: package.created_at,
         updated_at: package.updated_at,
-        _links:     build_links(package),
+        links:      build_links(package),
+      }
+    end
+
+    def build_data(package)
+      data = general_data(package)
+      return data unless package.type == 'docker' && package.docker_data
+      docker_data = package.docker_data
+      data[:image]       = docker_data.image
+      data[:credentials] = docker_data.credentials
+      data[:store_image] = docker_data.store_image
+      data
+    end
+
+    def general_data(package)
+      {
+        hash: {
+          type: DEFAULT_HASHING_ALGORITHM,
+          value: package.package_hash
+        },
+        error:      package.error,
       }
     end
 
@@ -42,6 +62,8 @@ module VCAP::CloudController
       upload_link = nil
       if package.type == 'bits'
         upload_link = { href: "/v3/packages/#{package.guid}/upload", method: 'POST' }
+        download_link = { href: "/v3/packages/#{package.guid}/download", method: 'GET' }
+        stage_link = { href: "/v3/packages/#{package.guid}/droplets", method: 'POST' }
       end
 
       links = {
@@ -49,6 +71,8 @@ module VCAP::CloudController
           href: "/v3/packages/#{package.guid}"
         },
         upload: upload_link,
+        download: download_link,
+        stage: stage_link,
         app:  {
           href: "/v3/apps/#{package.app_guid}",
         },

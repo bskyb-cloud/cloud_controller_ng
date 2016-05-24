@@ -2,112 +2,118 @@ require 'presenters/v3/process_presenter'
 require 'cloud_controller/paging/pagination_options'
 require 'actions/process_delete'
 require 'queries/process_scale_fetcher'
+require 'queries/process_list_fetcher'
 require 'messages/process_scale_message'
 require 'actions/process_scale'
 require 'actions/process_update'
 require 'messages/process_update_message'
+require 'messages/processes_list_message'
 
-module VCAP::CloudController
-  class ProcessesController < RestController::BaseController
-    def self.dependencies
-      [:process_presenter]
-    end
-    def inject_dependencies(dependencies)
-      @process_presenter = dependencies[:process_presenter]
-    end
+class ProcessesController < ApplicationController
+  def index
+    message = ProcessesListMessage.from_params(query_params)
+    invalid_param!(message.errors.full_messages) unless message.valid?
 
-    get '/v3/processes', :list
-    def list
-      check_read_permissions!
+    pagination_options = PaginationOptions.from_params(query_params)
+    invalid_param!(pagination_options.errors.full_messages) unless pagination_options.valid?
 
-      pagination_options = PaginationOptions.from_params(params)
-      invalid_param!(pagination_options.errors.full_messages) unless pagination_options.valid?
-      invalid_param!("Unknown query param(s) '#{params.keys.join("', '")}'") if params.any?
-
-      if membership.admin?
-        paginated_result = ProcessListFetcher.new.fetch_all(pagination_options)
-      else
-        space_guids = membership.space_guids_for_roles([Membership::SPACE_DEVELOPER, Membership::SPACE_MANAGER, Membership::SPACE_AUDITOR, Membership::ORG_MANAGER])
-        paginated_result = ProcessListFetcher.new.fetch(pagination_options, space_guids)
-      end
-
-      [HTTP::OK, @process_presenter.present_json_list(paginated_result, '/v3/processes')]
+    if roles.admin?
+      paginated_result = ProcessListFetcher.new.fetch_all(pagination_options)
+    else
+      space_guids = membership.space_guids_for_roles([Membership::SPACE_DEVELOPER, Membership::SPACE_MANAGER, Membership::SPACE_AUDITOR, Membership::ORG_MANAGER])
+      paginated_result = ProcessListFetcher.new.fetch(pagination_options, space_guids)
     end
 
-    get '/v3/processes/:guid', :show
-    def show(guid)
-      check_read_permissions!
+    render status: :ok, json: process_presenter.present_json_list(paginated_result, '/v3/processes')
+  end
 
-      process = App.where(guid: guid).eager(:space, :organization).all.first
+  def show
+    guid = params[:guid]
+    process = ProcessModel.where(guid: guid).eager(:space, :organization).all.first
+    not_found! if process.nil? || !can_read?(process.space.guid, process.organization.guid)
+    render status: :ok, json: process_presenter.present_json(process)
+  end
 
-      not_found! if process.nil? || !can_read?(process.space.guid, process.organization.guid)
+  def update
+    guid = params[:guid]
+    message = ProcessUpdateMessage.create_from_http_request(params[:body])
+    unprocessable!(message.errors.full_messages) unless message.valid?
 
-      [HTTP::OK, @process_presenter.present_json(process)]
-    end
+    process = ProcessModel.where(guid: guid).eager(:space, :organization).all.first
+    not_found! if process.nil? || !can_read?(process.space.guid, process.organization.guid)
+    unauthorized! if !can_update?(process.space.guid)
 
-    patch '/v3/processes/:guid', :update
-    def update(guid)
-      check_write_permissions!
+    ProcessUpdate.new(current_user, current_user_email).update(process, message)
 
-      request = parse_and_validate_json(body)
-      message = ProcessUpdateMessage.create_from_http_request(guid, request)
-      unprocessable!(message.errors.full_messages) unless message.valid?
+    render status: :ok, json: process_presenter.present_json(process)
+  rescue ProcessUpdate::InvalidProcess => e
+    unprocessable!(e.message)
+  end
 
-      process = App.where(guid: guid).eager(:space, :organization).all.first
-      not_found! if process.nil? || !can_read?(process.space.guid, process.organization.guid)
-      unauthorized! if !can_update?(process.space.guid)
+  def terminate
+    process_guid = params[:guid]
+    process = ProcessModel.where(guid: process_guid).eager(:space, :organization).all.first
+    not_found! if process.nil? || !can_read?(process.space.guid, process.organization.guid)
+    unauthorized! unless can_terminate?(process.space.guid)
 
-      ProcessUpdate.new(current_user, current_user_email).update(process, message)
+    index = params[:index].to_i
+    instance_not_found! unless index < process.instances && index >= 0
 
-      [HTTP::OK, @process_presenter.present_json(process)]
-    rescue ProcessUpdate::InvalidProcess => e
-      unprocessable!(e.message)
-    end
+    index_stopper.stop_index(process, index)
 
-    put '/v3/processes/:guid/scale', :scale
-    def scale(guid)
-      check_write_permissions!
+    head :no_content
+  end
 
-      FeatureFlag.raise_unless_enabled!('app_scaling')
+  def scale
+    FeatureFlag.raise_unless_enabled!('app_scaling') unless roles.admin?
 
-      request = parse_and_validate_json(body)
-      message = ProcessScaleMessage.create_from_http_request(request)
-      unprocessable!(message.errors.full_messages) if message.invalid?
+    message = ProcessScaleMessage.create_from_http_request(params[:body])
+    unprocessable!(message.errors.full_messages) if message.invalid?
 
-      process, space, org = ProcessScaleFetcher.new.fetch(guid)
-      not_found! if process.nil? || !can_read?(space.guid, org.guid)
-      unauthorized! if !can_scale?(space.guid)
+    process, space, org = ProcessScaleFetcher.new.fetch(params[:guid])
+    not_found! if process.nil? || !can_read?(space.guid, org.guid)
+    unauthorized! if !can_scale?(space.guid)
 
-      ProcessScale.new(current_user, current_user_email).scale(process, message)
+    ProcessScale.new(current_user, current_user_email).scale(process, message)
 
-      [HTTP::OK, @process_presenter.present_json(process)]
-    rescue ProcessScale::InvalidProcess => e
-      unprocessable!(e.message)
-    end
+    render status: :ok, json: process_presenter.present_json(process)
+  rescue ProcessScale::InvalidProcess => e
+    unprocessable!(e.message)
+  end
 
-    private
+  private
 
-    def membership
-      @membership ||= Membership.new(current_user)
-    end
+  def process_presenter
+    ProcessPresenter.new
+  end
 
-    def can_read?(space_guid, org_guid)
-      membership.has_any_roles?([Membership::SPACE_DEVELOPER,
-                                 Membership::SPACE_MANAGER,
-                                 Membership::SPACE_AUDITOR,
-                                 Membership::ORG_MANAGER], space_guid, org_guid)
-    end
+  def index_stopper
+    CloudController::DependencyLocator.instance.index_stopper
+  end
 
-    def can_update?(space_guid)
-      membership.has_any_roles?([Membership::SPACE_DEVELOPER], space_guid)
-    end
+  def membership
+    @membership ||= Membership.new(current_user)
+  end
 
-    def can_scale?(space_guid)
-      can_update?(space_guid)
-    end
+  def can_read?(space_guid, org_guid)
+    roles.admin? ||
+    membership.has_any_roles?([Membership::SPACE_DEVELOPER,
+                               Membership::SPACE_MANAGER,
+                               Membership::SPACE_AUDITOR,
+                               Membership::ORG_MANAGER], space_guid, org_guid)
+  end
 
-    def not_found!
-      raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', 'Process not found')
-    end
+  def can_update?(space_guid)
+    roles.admin? || membership.has_any_roles?([Membership::SPACE_DEVELOPER], space_guid)
+  end
+  alias_method :can_terminate?, :can_update?
+  alias_method :can_scale?, :can_update?
+
+  def instance_not_found!
+    raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', 'Instance not found')
+  end
+
+  def not_found!
+    raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', 'Process not found')
   end
 end

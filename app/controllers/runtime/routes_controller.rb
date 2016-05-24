@@ -1,16 +1,29 @@
+# rubocop:disable CyclomaticComplexity
+
 module VCAP::CloudController
   class RoutesController < RestController::ModelController
     define_attributes do
       attribute :host, String, default: ''
       attribute :path, String, default: nil
+      attribute :port, Integer, default: nil
       attribute :host_uniqueness, String, default: ''
       attribute :host_uniqueness2, String, default: ''
       to_one :domain
       to_one :space
+      to_one :service_instance, exclude_in: [:create, :update]
       to_many :apps
     end
 
-    query_parameters :host, :domain_guid, :organization_guid, :path
+    query_parameters :host, :domain_guid, :organization_guid, :path, :port, :generate_port
+
+    def self.dependencies
+      [:routing_api_client]
+    end
+
+    def inject_dependencies(dependencies)
+      super
+      @routing_api_client = dependencies.fetch(:routing_api_client)
+    end
 
     def self.translate_validation_exception(e, attributes)
       name_errors = e.errors.on([:host, :domain_id])
@@ -38,11 +51,42 @@ module VCAP::CloudController
         return path_errors(path_error, attributes)
       end
 
+      service_instance_errors = e.errors.on(:service_instance)
+      if service_instance_errors && service_instance_errors.include?(:route_binding_not_allowed)
+        return Errors::ApiError.new_from_details('ServiceDoesNotSupportRoutes')
+      end
+
       Errors::ApiError.new_from_details('RouteInvalid', e.errors.full_messages)
     end
 
+    def create
+      json_msg = self.class::CreateMessage.decode(body)
+
+      @request_attrs = json_msg.extract(stringify_keys: true)
+
+      logger.debug 'cc.create', model: self.class.model_class_name, attributes: redact_attributes(:create, request_attrs)
+
+      overwrite_port! if convert_flag_to_bool(params['generate_port'])
+
+      before_create
+
+      route = model.create_from_hash(request_attrs)
+      validate_access(:create, route, request_attrs)
+
+      [
+        HTTP::CREATED,
+        { 'Location' => "#{self.class.path}/#{route.guid}" },
+        object_renderer.render_json(self.class, route, @opts)
+      ]
+    end
+
     def delete(guid)
-      do_delete(find_guid_and_validate_access(:delete, guid))
+      route = find_guid_and_validate_access(:delete, guid)
+      if !recursive? && route.service_instance.present?
+        raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', 'service_instance', route.class.table_name)
+      end
+
+      do_delete(route)
     end
 
     def get_filtered_dataset_for_enumeration(model, ds, qp, opts)
@@ -80,11 +124,52 @@ module VCAP::CloudController
       [HTTP::NOT_FOUND, nil]
     end
 
+    def before_create
+      super
+      domain_guid = request_attrs['domain_guid']
+      return if domain_guid.nil?
+
+      validate_route(domain_guid)
+    end
+
+    def before_update(route)
+      super
+
+      return if request_attrs['app']
+
+      validate_route(route.domain.guid) if request_attrs['port'] != route.port
+    end
+
     define_messages
     define_routes
   end
 
   private
+
+  def overwrite_port!
+    if @request_attrs['port']
+      add_warning('Specified port ignored. Random port generated.')
+    end
+
+    @request_attrs = @request_attrs.deep_dup
+    @request_attrs['port'] = PortGenerator.new(@request_attrs).generate_port
+    @request_attrs.freeze
+  end
+
+  def convert_flag_to_bool(flag)
+    raise Errors::ApiError.new_from_details('InvalidRequest') unless ['true', 'false', nil].include? flag
+    flag == 'true'
+  end
+
+  def validate_route(domain_guid)
+    RouteValidator.new(@routing_api_client, domain_guid, assemble_route_attrs).validate
+  rescue RouteValidator::ValidationError => e
+    raise Errors::ApiError.new_from_details(e.class.name.demodulize, e.message)
+  rescue RoutingApi::Client::RoutingApiUnavailable
+    raise Errors::ApiError.new_from_details('RoutingApiUnavailable')
+  rescue RoutingApi::Client::UaaUnavailable
+    raise Errors::ApiError.new_from_details('UaaUnavailable')
+  end
 
   def path_errors(path_error, attributes)
     if path_error.include?(:single_slash)
@@ -96,5 +181,12 @@ module VCAP::CloudController
     elsif path_error.include?(:invalid_path)
       return Errors::ApiError.new_from_details('PathInvalid', attributes['path'])
     end
+  end
+
+  def assemble_route_attrs
+    port = request_attrs['port']
+    host = request_attrs['host']
+    path = request_attrs['path']
+    { 'port' => port, 'host' => host, 'path' => path }
   end
 end

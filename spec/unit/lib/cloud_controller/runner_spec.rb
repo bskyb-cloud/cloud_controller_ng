@@ -5,7 +5,8 @@ module VCAP::CloudController
     let(:valid_config_file_path) { File.join(Paths::FIXTURES, 'config/minimal_config.yml') }
     let(:config_file) { File.new(valid_config_file_path) }
     let(:message_bus) { CfMessageBus::MockMessageBus.new }
-    let(:registrar) { Cf::Registrar.new({}) }
+    let(:diagnostics) { instance_double(VCAP::CloudController::Diagnostics) }
+    let(:periodic_updater) { instance_double(VCAP::CloudController::Metrics::PeriodicUpdater) }
 
     let(:argv) { [] }
 
@@ -15,16 +16,16 @@ module VCAP::CloudController
       allow(VCAP::Component).to receive(:register)
       allow(EM).to receive(:run).and_yield
       allow(EM).to receive(:add_timer).and_yield
-      allow(VCAP::CloudController::Varz).to receive(:setup_updates)
+      allow(VCAP::CloudController::Metrics::PeriodicUpdater).to receive(:new).and_return(periodic_updater)
+      allow(periodic_updater).to receive(:setup_updates)
       allow(VCAP::PidFile).to receive(:new) { double(:pidfile, unlink_at_exit: nil) }
-      allow(registrar).to receive_messages(message_bus: message_bus)
-      allow(registrar).to receive(:register_with_router)
+      allow(VCAP::CloudController::Diagnostics).to receive(:new).and_return(diagnostics)
+      allow(diagnostics).to receive(:collect)
     end
 
     subject do
       Runner.new(argv + ['-c', config_file.path]).tap do |r|
         allow(r).to receive(:start_thin_server)
-        allow(r).to receive_messages(router_registrar: registrar)
       end
     end
 
@@ -100,20 +101,22 @@ module VCAP::CloudController
           subject.run!
         end
 
-        it 'registers with router' do
-          expect(registrar).to receive(:register_with_router)
-          subject.run!
-        end
-
         it 'sets up varz updates' do
-          expect(VCAP::CloudController::Varz).to receive(:setup_updates)
+          expect(periodic_updater).to receive(:setup_updates)
           subject.run!
         end
 
         it 'logs an error if an exception is raised' do
           allow(subject).to receive(:start_cloud_controller).and_raise('we have a problem')
           expect(subject.logger).to receive(:error)
-          expect { subject.run! }.to raise_exception
+          expect { subject.run! }.to raise_exception('we have a problem')
+        end
+
+        it 'initializes varz threadsafety' do
+          VCAP::Component.varz.synchronize do
+            expect(VCAP::Component.varz).to receive(:threadsafe!)
+            subject.run!
+          end
         end
       end
 
@@ -213,17 +216,43 @@ module VCAP::CloudController
         let(:argv) { [] }
 
         it_behaves_like 'running Cloud Controller'
+      end
 
-        it 'registers with the router' do
-          expect(registrar).to receive(:register_with_router)
-          subject.run!
+      it 'sets up logging before creating a logger' do
+        steno_configurer = instance_double(StenoConfigurer)
+        logger = Steno.logger('logger')
+        allow(StenoConfigurer).to receive(:new).and_return(steno_configurer)
+
+        logging_configuration_time = nil
+        logger_creation_time = nil
+
+        allow(steno_configurer).to receive(:configure) do
+          logging_configuration_time ||= Time.now
         end
+
+        allow(Steno).to receive(:logger) do |_|
+          logger_creation_time ||= Time.now
+          logger
+        end
+
+        subject.run!
+
+        expect(logging_configuration_time).to be < logger_creation_time
+      end
+
+      it 'only sets up logging once' do
+        steno_configurer = instance_double(StenoConfigurer)
+        allow(StenoConfigurer).to receive(:new).and_return(steno_configurer)
+        allow(steno_configurer).to receive(:configure).once
+
+        subject.run!
+
+        expect(steno_configurer).to have_received(:configure).once
       end
     end
 
     describe '#stop!' do
-      it 'should stop thin and EM after unregistering routes' do
-        expect(registrar).to receive(:shutdown).and_yield
+      it 'should stop thin and EM' do
         expect(subject).to receive(:stop_thin_server)
         expect(EM).to receive(:stop)
         subject.stop!
@@ -231,12 +260,11 @@ module VCAP::CloudController
     end
 
     describe '#trap_signals' do
-      it 'registers TERM, INT, QUIT, USR1, and USR2 handlers' do
+      it 'registers TERM, INT, QUIT and USR1 handlers' do
         expect(subject).to receive(:trap).with('TERM')
         expect(subject).to receive(:trap).with('INT')
         expect(subject).to receive(:trap).with('QUIT')
         expect(subject).to receive(:trap).with('USR1')
-        expect(subject).to receive(:trap).with('USR2')
         subject.trap_signals
       end
 
@@ -259,17 +287,9 @@ module VCAP::CloudController
           callbacks << blk
         end
 
-        expect(subject).to receive(:trap).with('USR2') do |_, &blk|
-          callbacks << blk
-        end
-
         subject.trap_signals
 
         expect(subject).to receive(:stop!).exactly(3).times
-
-        registrar = double(:registrar)
-        expect(subject).to receive(:router_registrar).and_return(registrar)
-        expect(registrar).to receive(:shutdown)
 
         callbacks.each(&:call)
       end
@@ -284,9 +304,9 @@ module VCAP::CloudController
 
       subject { Runner.new(argv_options) }
 
-      it "should set ENV['RACK_ENV'] to production" do
-        ENV.delete('RACK_ENV')
-        expect { subject }.to change { ENV['RACK_ENV'] }.from(nil).to('production')
+      it "should set ENV['NEW_RELIC_ENV'] to production" do
+        ENV.delete('NEW_RELIC_ENV')
+        expect { subject }.to change { ENV['NEW_RELIC_ENV'] }.from(nil).to('production')
       end
 
       it 'should set the configuration file' do
@@ -385,7 +405,6 @@ module VCAP::CloudController
         expect(subject).to receive(:trap).with('TERM')
         expect(subject).to receive(:trap).with('INT')
         expect(subject).to receive(:trap).with('QUIT')
-        expect(subject).to receive(:trap).with('USR2')
         expect(subject).to receive(:trap).with('USR1') do |_, &blk|
           callback = blk
         end
@@ -396,7 +415,7 @@ module VCAP::CloudController
         it 'uses a temporary directory' do
           expect(Dir).to receive(:mktmpdir).and_return('some/tmp/dir')
           expect(subject).to receive(:collect_diagnostics).and_call_original
-          expect(::VCAP::CloudController::Diagnostics).to receive(:collect).with('some/tmp/dir')
+          expect(diagnostics).to receive(:collect).with('some/tmp/dir', periodic_updater)
 
           callback.call
         end
@@ -404,7 +423,7 @@ module VCAP::CloudController
         it 'memoizes the temporary directory' do
           expect(Dir).to receive(:mktmpdir).and_return('some/tmp/dir')
           expect(subject).to receive(:collect_diagnostics).twice.and_call_original
-          expect(::VCAP::CloudController::Diagnostics).to receive(:collect).with('some/tmp/dir').twice
+          expect(diagnostics).to receive(:collect).with('some/tmp/dir', periodic_updater).twice
 
           callback.call
           callback.call
@@ -425,7 +444,7 @@ module VCAP::CloudController
         it 'uses the configured directory' do
           expect(Dir).not_to receive(:mktmpdir)
           expect(subject).to receive(:collect_diagnostics).and_call_original
-          expect(::VCAP::CloudController::Diagnostics).to receive(:collect).with('diagnostics/dir')
+          expect(diagnostics).to receive(:collect).with('diagnostics/dir', periodic_updater)
 
           callback.call
         end

@@ -6,14 +6,15 @@ module VCAP::CloudController
 
     add_association_dependencies routes: :destroy
 
-    export_attributes :name
-    import_attributes :name
+    export_attributes :name, :router_group_guid
+    import_attributes :name, :router_group_guid
     strip_attributes :name
 
     def as_summary_json
       {
         guid: guid,
         name: name,
+        router_group_guid: router_group_guid,
       }
     end
 

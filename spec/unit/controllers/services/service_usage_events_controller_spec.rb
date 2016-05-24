@@ -164,7 +164,7 @@ module VCAP::CloudController
       context 'when the user is not an admin (i.e. is not authorized)' do
         it 'returns 403' do
           user_headers = headers_for(VCAP::CloudController::User.make(admin: false))
-          get '/v2/service_usage_events', {}, json_headers(user_headers)
+          get '/v2/service_usage_events', {}, user_headers
           expect(last_response.status).to eq(403)
         end
       end
@@ -177,6 +177,13 @@ module VCAP::CloudController
         expect(last_response).to be_successful
         expect(decoded_response['metadata']['guid']).to eq(event_guid1)
         expect(decoded_response['metadata']['url']).to eq(url)
+      end
+
+      it 'returns 403 as a non-admin' do
+        user_headers = headers_for(VCAP::CloudController::User.make(admin: false))
+        url = "/v2/service_usage_events/#{event_guid1}"
+        get url, {}, user_headers
+        expect(last_response.status).to eq(403)
       end
     end
 

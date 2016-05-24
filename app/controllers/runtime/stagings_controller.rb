@@ -153,19 +153,21 @@ module VCAP::CloudController
       raise ApiError.new_from_details('StagingError', "malformed buildpack cache upload request for #{guid}") unless upload_path
       check_file_md5
 
-      blobstore_upload = Jobs::Runtime::BlobstoreUpload.new(upload_path, "#{stack_name}-#{guid}", :buildpack_cache_blobstore)
+      cache_key = CacheKeyPresenter.cache_key(guid: guid, stack_name: stack_name)
+
+      blobstore_upload = Jobs::Runtime::BlobstoreUpload.new(upload_path, cache_key, :buildpack_cache_blobstore)
       Jobs::Enqueuer.new(blobstore_upload, queue: Jobs::LocalQueue.new(config)).enqueue
       HTTP::OK
     end
 
     get "#{V3_APP_BUILDPACK_CACHE_PATH}/:stack/:guid/download", :download_v3_app_buildpack_cache
-    def download_v3_app_buildpack_cache(stack, guid)
+    def download_v3_app_buildpack_cache(stack_name, guid)
       app_model = AppModel.find(guid: guid)
       raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', 'App not found') if app_model.nil?
 
-      logger.info 'v3-droplet.begin-download', app_guid: guid, stack: stack
+      logger.info 'v3-droplet.begin-download', app_guid: guid, stack: stack_name
 
-      blob = buildpack_cache_blobstore.blob("#{stack}-#{guid}")
+      blob = buildpack_cache_blobstore.blob("#{guid}/#{stack_name}")
       blob_name = 'buildpack cache'
 
       @missing_blob_handler.handle_missing_blob!(guid, blob_name) unless blob
@@ -224,8 +226,10 @@ module VCAP::CloudController
     end
 
     def check_file_md5
-      file_md5 = Digest::MD5.base64digest(File.read(upload_path))
+      digester = Digester.new(algorithm: Digest::MD5, type: :base64digest)
+      file_md5 = digester.digest_path(upload_path)
       header_md5 = env['HTTP_CONTENT_MD5']
+
       if header_md5.present? && file_md5 != header_md5
         raise ApiError.new_from_details('StagingError', 'content md5 did not match')
       end

@@ -4,7 +4,9 @@ module VCAP::CloudController
       PENDING_STATE = 'PROCESSING_UPLOAD',
       READY_STATE   = 'READY',
       FAILED_STATE  = 'FAILED',
-      CREATED_STATE = 'AWAITING_UPLOAD'
+      CREATED_STATE = 'AWAITING_UPLOAD',
+      COPYING_STATE = 'COPYING',
+      EXPIRED_STATE = 'EXPIRED'
     ].map(&:freeze).freeze
 
     PACKAGE_TYPES = [
@@ -12,11 +14,18 @@ module VCAP::CloudController
       DOCKER_TYPE = 'docker'
     ].map(&:freeze).freeze
 
+    one_to_many :droplets, class: 'VCAP::CloudController::DropletModel', key: :package_guid, primary_key: :guid
     many_to_one :app, class: 'VCAP::CloudController::AppModel', key: :app_guid, primary_key: :guid, without_guid_generation: true
     one_through_one :space, join_table: AppModel.table_name, left_key: :guid, left_primary_key: :app_guid, right_primary_key: :guid, right_key: :space_guid
 
+    one_to_one :docker_data,
+      class: 'VCAP::CloudController::PackageDockerDataModel',
+      key: :package_guid,
+      primary_key: :guid
+
     def validate
       validates_includes PACKAGE_STATES, :state, allow_missing: true
+      errors.add(:type, 'cannot have docker data if type is bits') if docker_data && type != DOCKER_TYPE
     end
 
     def self.user_visible(user)

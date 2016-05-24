@@ -3,6 +3,7 @@ require 'jobs/audit_event_job'
 require 'actions/services/service_instance_create'
 require 'actions/services/service_instance_update'
 require 'controllers/services/lifecycle/service_instance_deprovisioner'
+require 'controllers/services/lifecycle/service_instance_purger'
 require 'queries/service_instance_fetcher'
 
 module VCAP::CloudController
@@ -11,10 +12,12 @@ module VCAP::CloudController
     define_attributes do
       attribute :name, String
       attribute :parameters, Hash, default: nil
+      attribute :tags, [String], default: []
       to_one :space
       to_one :service_plan
       to_many :service_bindings
       to_many :service_keys
+      to_many :routes, route_for: [:get, :put, :delete], exclude_in: [:create, :update]
     end
 
     query_parameters :name, :space_guid, :service_plan_guid, :service_binding_guid, :gateway_name, :organization_guid, :service_key_guid
@@ -23,30 +26,33 @@ module VCAP::CloudController
     # searching on parameters that are not directly associated with the model
 
     def self.translate_validation_exception(e, attributes)
-      space_and_name_errors = e.errors.on([:space_id, :name])
-      quota_errors = e.errors.on(:quota)
-      service_plan_errors = e.errors.on(:service_plan)
-      service_instance_name_errors = e.errors.on(:name)
-      if space_and_name_errors && space_and_name_errors.include?(:unique)
+      space_and_name_errors = errors_on(e, [:space_id, :name])
+      quota_errors = errors_on(e, :quota)
+      service_plan_errors = errors_on(e, :service_plan)
+      service_instance_errors = errors_on(e, :service_instance)
+      service_instance_name_errors = errors_on(e, :name)
+      service_instance_tags_errors = errors_on(e, :tags)
+
+      if space_and_name_errors.include?(:unique)
         return Errors::ApiError.new_from_details('ServiceInstanceNameTaken', attributes['name'])
-      elsif quota_errors
-        if quota_errors.include?(:service_instance_space_quota_exceeded)
-          return Errors::ApiError.new_from_details('ServiceInstanceSpaceQuotaExceeded')
-        elsif quota_errors.include?(:service_instance_quota_exceeded)
-          return Errors::ApiError.new_from_details('ServiceInstanceQuotaExceeded')
-        end
-      elsif service_plan_errors
-        if service_plan_errors.include?(:paid_services_not_allowed_by_space_quota)
-          return Errors::ApiError.new_from_details('ServiceInstanceServicePlanNotAllowedBySpaceQuota')
-        elsif service_plan_errors.include?(:paid_services_not_allowed_by_quota)
-          return Errors::ApiError.new_from_details('ServiceInstanceServicePlanNotAllowed')
-        end
-      elsif service_instance_name_errors
-        if service_instance_name_errors.include?(:max_length)
-          return Errors::ApiError.new_from_details('ServiceInstanceNameTooLong')
-        else
-          return Errors::ApiError.new_from_details('ServiceInstanceNameEmpty', attributes['name'])
-        end
+      elsif quota_errors.include?(:service_instance_space_quota_exceeded)
+        return Errors::ApiError.new_from_details('ServiceInstanceSpaceQuotaExceeded')
+      elsif quota_errors.include?(:service_instance_quota_exceeded)
+        return Errors::ApiError.new_from_details('ServiceInstanceQuotaExceeded')
+      elsif service_plan_errors.include?(:paid_services_not_allowed_by_space_quota)
+        return Errors::ApiError.new_from_details('ServiceInstanceServicePlanNotAllowedBySpaceQuota')
+      elsif service_plan_errors.include?(:paid_services_not_allowed_by_quota)
+        return Errors::ApiError.new_from_details('ServiceInstanceServicePlanNotAllowed')
+      elsif service_instance_name_errors.include?(:max_length)
+        return Errors::ApiError.new_from_details('ServiceInstanceNameTooLong')
+      elsif service_instance_name_errors.include?(:presence)
+        return Errors::ApiError.new_from_details('ServiceInstanceNameEmpty', attributes['name'])
+      elsif service_instance_tags_errors.include?(:too_long)
+        return Errors::ApiError.new_from_details('ServiceInstanceTagsTooLong')
+      elsif service_instance_errors.include?(:route_binding_not_allowed)
+        return Errors::ApiError.new_from_details('ServiceDoesNotSupportRoutes')
+      elsif service_instance_errors.include?(:space_mismatch)
+        return Errors::ApiError.new_from_details('ServiceInstanceRouteBindingSpaceMismatch')
       end
 
       Errors::ApiError.new_from_details('ServiceInstanceInvalid', e.errors.full_messages)
@@ -76,7 +82,12 @@ module VCAP::CloudController
 
       invalid_service_instance!(service_instance) unless service_instance.valid?
       space_not_found! unless space
-      org_not_authorized! unless plan_visible_to_org?(organization, service_plan)
+
+      if service_plan.broker_private?
+        space_not_authorized! unless (service_plan.service_broker.space == space)
+      else
+        org_not_authorized! unless plan_visible_to_org?(organization, service_plan)
+      end
 
       service_instance = ServiceInstanceCreate.new(@services_event_repository, logger).
                              create(request_attrs, accepts_incomplete)
@@ -92,6 +103,8 @@ module VCAP::CloudController
       accepts_incomplete = convert_flag_to_bool(params['accepts_incomplete'])
 
       service_instance, related_objects = ServiceInstanceFetcher.new.fetch(guid)
+      not_found!(guid) if !service_instance
+
       validate_access(:read_for_update, service_instance)
       validate_access(:update, service_instance)
 
@@ -123,12 +136,22 @@ module VCAP::CloudController
     def delete(guid)
       accepts_incomplete = convert_flag_to_bool(params['accepts_incomplete'])
       async = convert_flag_to_bool(params['async'])
+      purge = convert_flag_to_bool(params['purge'])
 
       service_instance = find_guid(guid, ServiceInstance)
 
+      if purge
+        validate_access(:purge, service_instance)
+        ServiceInstancePurger.new(@services_event_repository).purge(service_instance)
+        return [HTTP::NO_CONTENT, nil]
+      end
+
       validate_access(:delete, service_instance)
-      association_not_empty!(:service_bindings) if has_bindings?(service_instance) && !recursive?
-      association_not_empty!(:service_keys) if has_keys?(service_instance) && !recursive?
+      has_assocations = has_routes?(service_instance) ||
+                        has_bindings?(service_instance) ||
+                        has_keys?(service_instance)
+
+      association_not_empty! if has_assocations && !recursive?
 
       deprovisioner = ServiceInstanceDeprovisioner.new(@services_event_repository, self, logger)
       delete_job = deprovisioner.deprovision_service_instance(service_instance, accepts_incomplete, async)
@@ -246,6 +269,50 @@ module VCAP::CloudController
     define_messages
     define_routes
 
+    def add_related(guid, name, other_guid)
+      return super(guid, name, other_guid) if name != :routes
+      bind_route(other_guid, guid)
+    end
+
+    def bind_route(route_guid, instance_guid)
+      logger.debug 'cc.association.add', model: self.class.model_class_name, guid: instance_guid, assocation: :routes, other_guid: route_guid
+
+      binding_manager = ServiceInstanceBindingManager.new(@services_event_repository, self, logger)
+      route_binding = binding_manager.create_route_service_instance_binding(route_guid, instance_guid)
+
+      [HTTP::CREATED, object_renderer.render_json(self.class, route_binding.service_instance, @opts)]
+    rescue ServiceInstanceBindingManager::ServiceInstanceNotBindable
+      raise VCAP::Errors::ApiError.new_from_details('UnbindableService')
+    rescue ServiceInstanceBindingManager::RouteNotFound
+      raise VCAP::Errors::ApiError.new_from_details('RouteNotFound', route_guid)
+    rescue ServiceInstanceBindingManager::RouteAlreadyBoundToServiceInstance
+      raise VCAP::Errors::ApiError.new_from_details('RouteAlreadyBoundToServiceInstance')
+    rescue ServiceInstanceBindingManager::ServiceInstanceNotFound
+      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceNotFound', instance_guid)
+    rescue ServiceInstanceBindingManager::RouteServiceRequiresDiego
+      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceRouteServiceRequiresDiego')
+    end
+
+    def remove_related(guid, name, other_guid)
+      return super(guid, name, other_guid) if name != :routes
+      unbind_route(other_guid, guid)
+    end
+
+    def unbind_route(route_guid, instance_guid)
+      logger.debug 'cc.association.remove', guid: instance_guid, association: :routes, other_guid: route_guid
+
+      binding_manager = ServiceInstanceBindingManager.new(@services_event_repository, self, logger)
+      binding_manager.delete_route_service_instance_binding(route_guid, instance_guid)
+
+      [HTTP::NO_CONTENT]
+    rescue ServiceInstanceBindingManager::RouteBindingNotFound
+      invalid_relation!("Route #{route_guid} is not bound to service instance #{instance_guid}.")
+    rescue ServiceInstanceBindingManager::RouteNotFound
+      raise VCAP::Errors::ApiError.new_from_details('RouteNotFound', route_guid)
+    rescue ServiceInstanceBindingManager::ServiceInstanceNotFound
+      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceNotFound', instance_guid)
+    end
+
     private
 
     def validate_create_request
@@ -266,7 +333,7 @@ module VCAP::CloudController
       requested_plan_guid = request_attrs['service_plan_guid']
       if plan_update_requested?(requested_plan_guid, current_plan)
         plan_not_updateable! if service_disallows_plan_update?(service)
-        invalid_relation! if invalid_plan?(requested_plan_guid, service)
+        invalid_relation!('Plan') if invalid_plan?(requested_plan_guid, service)
       end
     end
 
@@ -282,6 +349,10 @@ module VCAP::CloudController
       raise Errors::ApiError.new_from_details('ServiceInstanceOrganizationNotAuthorized')
     end
 
+    def space_not_authorized!
+      raise Errors::ApiError.new_from_details('ServiceInstanceSpaceNotAuthorized')
+    end
+
     def space_not_found!
       raise Errors::ApiError.new_from_details('ServiceInstanceInvalid', 'not a valid space')
     end
@@ -294,20 +365,25 @@ module VCAP::CloudController
       raise Errors::ApiError.new_from_details('ServicePlanNotUpdateable')
     end
 
-    def invalid_relation!
-      raise Errors::ApiError.new_from_details('InvalidRelation', 'Plan')
+    def invalid_relation!(message)
+      raise Errors::ApiError.new_from_details('InvalidRelation', message)
     end
 
     def invalid_request!
       raise Errors::ApiError.new_from_details('InvalidRequest')
     end
 
-    def association_not_empty!(association)
-      raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', association, :service_instances)
+    def association_not_empty!
+      asscociations = 'service_bindings, service_keys, and routes'
+      raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', asscociations, :service_instances)
     end
 
     def space_change_not_allowed!
       raise Errors::ApiError.new_from_details('ServiceInstanceSpaceChangeNotAllowed')
+    end
+
+    def not_found!(guid)
+      raise Errors::ApiError.new_from_details('ServiceInstanceNotFound', guid)
     end
 
     def plan_visible_to_org?(organization, service_plan)
@@ -321,6 +397,10 @@ module VCAP::CloudController
 
     def plan_update_requested?(requested_plan_guid, old_plan)
       requested_plan_guid && requested_plan_guid != old_plan.guid
+    end
+
+    def has_routes?(service_instance)
+      !service_instance.routes.empty?
     end
 
     def has_bindings?(service_instance)
@@ -359,6 +439,10 @@ module VCAP::CloudController
     def convert_flag_to_bool(flag)
       raise Errors::ApiError.new_from_details('InvalidRequest') unless ['true', 'false', nil].include? flag
       flag == 'true'
+    end
+
+    def self.errors_on(e, fields)
+      e.errors.on(fields).to_a
     end
   end
 end

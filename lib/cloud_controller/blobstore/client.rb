@@ -10,6 +10,9 @@ module CloudController
     class Client
       class FileNotFound < StandardError
       end
+
+      DEFAULT_BATCH_SIZE = 1000
+
       def initialize(connection_config, directory_key, cdn=nil, root_dir=nil, min_size=nil, max_size=nil)
         @root_dir = root_dir
         @connection_config = connection_config
@@ -27,12 +30,13 @@ module CloudController
         !file(key).nil?
       end
 
-      def download_from_blobstore(source_key, destination_path)
+      def download_from_blobstore(source_key, destination_path, mode: nil)
         FileUtils.mkdir_p(File.dirname(destination_path))
-        File.open(destination_path, 'w') do |file|
+        File.open(destination_path, 'wb') do |file|
           (@cdn || files).get(partitioned_key(source_key)) do |*chunk|
             file.write(chunk[0])
           end
+          file.chmod(mode) if mode
         end
       end
 
@@ -41,7 +45,7 @@ module CloudController
           next unless File.file?(path)
           next unless within_limits?(File.size(path))
 
-          sha1 = Digest::SHA1.file(path).hexdigest
+          sha1 = Digester.new.digest_path(path)
           next if exists?(sha1)
 
           cp_to_blobstore(path, sha1)
@@ -104,6 +108,27 @@ module CloudController
         dest_file.save
       end
 
+      def delete_all(page_size=DEFAULT_BATCH_SIZE)
+        logger.info("Attempting to delete all files in #{@directory_key}/#{@root_dir} blobstore")
+
+        delete_files(files_for(@root_dir), page_size)
+      end
+
+      def delete_all_in_path(path)
+        logger.info("Attempting to delete all files in blobstore #{@directory_key} under path #{@directory_key}/#{partitioned_key(path)}")
+
+        delete_files(files_for(partitioned_key(path)), DEFAULT_BATCH_SIZE)
+      end
+
+      def files_for(prefix)
+        if connection.is_a? Fog::Storage::Local::Real
+          directory = connection.directories.get(File.join(dir.key, prefix || ''))
+          directory ? directory.files : []
+        else
+          connection.directories.get(dir.key, prefix: prefix).files
+        end
+      end
+
       def delete(key)
         blob_file = file(key)
         delete_file(blob_file) if blob_file
@@ -134,6 +159,35 @@ module CloudController
         file.destroy
       end
 
+      def delete_files(files_to_delete, page_size)
+        if connection.respond_to?(:delete_multiple_objects)
+          # AWS needs the file key to work; other providers with multiple delete
+          # are currently not supported. When support is added this code may
+          # need an update.
+          each_slice(files_to_delete, page_size) do |file_group|
+            connection.delete_multiple_objects(@directory_key, file_group.map(&:key))
+          end
+        else
+          files_to_delete.each { |f| delete_file(f) }
+        end
+      end
+
+      def each_slice(files, batch_size, &blk)
+        batch = []
+        files.each do |f|
+          batch << f
+
+          if batch.length == batch_size
+            blk.call(batch)
+            batch = []
+          end
+        end
+
+        if batch.length > 0
+          blk.call(batch)
+        end
+      end
+
       def file(key)
         files.head(partitioned_key(key))
       end
@@ -158,7 +212,7 @@ module CloudController
       def connection
         options = @connection_config
         options = options.merge(endpoint: '') if local?
-        Fog::Storage.new(options)
+        @connection ||= Fog::Storage.new(options)
       end
 
       def logger

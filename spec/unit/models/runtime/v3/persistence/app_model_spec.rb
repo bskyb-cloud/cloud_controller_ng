@@ -119,44 +119,60 @@ module VCAP::CloudController
       end
 
       describe 'environment_variables' do
-        it 'validates that the input is a hash' do
+        it 'validates them' do
           expect {
             AppModel.make(environment_variables: '')
-          }.to raise_error(Sequel::ValidationFailed, /must be a JSON hash/)
+          }.to raise_error(Sequel::ValidationFailed, /must be a hash/)
+        end
+      end
 
-          expect {
-            AppModel.make(environment_variables: 3)
-          }.to raise_error(Sequel::ValidationFailed, /must be a JSON hash/)
+      describe 'droplet' do
+        let(:droplet) { DropletModel.make(app: app_model) }
+
+        it 'does not allow droplets that are not STAGED' do
+          states = DropletModel::DROPLET_STATES - [DropletModel::STAGED_STATE]
+          states.each do |state|
+            droplet.state = state
+            expect {
+              app_model.droplet = droplet
+              app_model.save
+            }.to raise_error(Sequel::ValidationFailed, /must be in staged state/)
+          end
         end
 
-        it 'does not allow variables that start with CF_' do
-          expect {
-            AppModel.make(environment_variables: { CF_POTATO: 'muy bueno' })
-          }.to raise_error(Sequel::ValidationFailed, /cannot start with CF_/)
+        it 'is valid with droplets that are STAGED' do
+          droplet.state = DropletModel::STAGED_STATE
+          app_model.droplet = droplet
+          expect(app_model).to be_valid
         end
+      end
+    end
 
-        it 'does not allow variables that start with cf_' do
-          expect {
-            AppModel.make(environment_variables: { cf_potato: 'muy bueno' })
-          }.to raise_error(Sequel::ValidationFailed, /cannot start with CF_/)
-        end
+    describe '#lifecycle_type' do
+      let!(:lifecycle_data) { BuildpackLifecycleDataModel.make(app: app_model) }
 
-        it 'does not allow variables that start with VCAP_' do
-          expect {
-            AppModel.make(environment_variables: { VCAP_BANANA: 'no bueno' })
-          }.to raise_error(Sequel::ValidationFailed, /cannot start with VCAP_/)
-        end
+      it 'returns the string "buildpack" if buildpack_lifecycle_data is on the model' do
+        expect(app_model.lifecycle_type).to eq('buildpack')
+      end
+    end
 
-        it 'does not allow variables that start with vcap_' do
-          expect {
-            AppModel.make(environment_variables: { vcap_banana: 'no bueno' })
-          }.to raise_error(Sequel::ValidationFailed, /cannot start with VCAP_/)
-        end
+    describe '#lifecycle_data' do
+      let!(:lifecycle_data) { BuildpackLifecycleDataModel.make(app: app_model) }
 
-        it 'does not allow PORT' do
-          expect {
-            AppModel.make(environment_variables: { PORT: 'el martes nos ponemos camisetas naranjas' })
-          }.to raise_error(Sequel::ValidationFailed, /cannot set PORT/)
+      it 'returns buildpack_lifecycle_data if it is on the model' do
+        expect(app_model.lifecycle_data).to eq(lifecycle_data)
+      end
+
+      it 'is a persistable hash' do
+        expect(app_model.reload.lifecycle_data.buildpack).to eq(lifecycle_data.buildpack)
+        expect(app_model.reload.lifecycle_data.stack).to eq(lifecycle_data.stack)
+      end
+
+      context 'lifecycle_data is nil' do
+        let(:non_buildpack_app_model) { AppModel.make }
+
+        it 'returns nil if no lifecycle data types are present' do
+          expect(non_buildpack_app_model.lifecycle_data).to eq(nil)
         end
       end
     end

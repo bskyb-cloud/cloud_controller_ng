@@ -10,6 +10,18 @@ module ServiceBrokerHelpers
     end
   end
 
+  def stub_update(service_instance, opts={}, &block)
+    status = opts[:status] || 200
+    body = opts[:body] || '{}'
+    accepts_incomplete = opts[:accepts_incomplete]
+    url = update_url_for_broker(service_instance, accepts_incomplete: accepts_incomplete)
+    if block
+      stub_request(:patch, url).to_return(&block)
+    else
+      stub_request(:patch, url).to_return(status: status, body: body)
+    end
+  end
+
   def stub_deprovision(service_instance, opts={}, &block)
     status = opts[:status] || 200
     body = opts[:body] || '{}'
@@ -59,22 +71,29 @@ module ServiceBrokerHelpers
   end
 
   def provision_url_for_broker(broker, accepts_incomplete: nil)
-    query = "accepts_incomplete=#{accepts_incomplete}" if accepts_incomplete
     path = "/v2/service_instances/#{guid_pattern}"
+    async_query = "accepts_incomplete=#{accepts_incomplete}" if !accepts_incomplete.nil?
+    query_params = async_query ? "\\?#{async_query}" : ''
 
-    /#{build_broker_url(broker.client.attrs)}#{path}(\?#{query})?/
+    /#{build_broker_url(broker.client.attrs)}#{path}#{query_params}/
   end
 
   def update_url_for_broker(broker, accepts_incomplete: nil)
-    query = "accepts_incomplete=#{accepts_incomplete}" if accepts_incomplete
     path = "/v2/service_instances/#{guid_pattern}"
+    async_query = "accepts_incomplete=#{accepts_incomplete}" if !accepts_incomplete.nil?
+    query_params = async_query ? "\\?#{async_query}" : ''
 
-    /#{build_broker_url(broker.client.attrs)}#{path}(\?#{query})?/
+    /#{build_broker_url(broker.client.attrs)}#{path}#{query_params}/
+  end
+
+  def update_url(service_instance)
+    service_instance_url(service_instance, '')
   end
 
   def bind_url(service_instance, query: nil)
     path = "/v2/service_instances/#{service_instance.guid}/service_bindings/#{guid_pattern}"
-    /#{build_broker_url(service_instance.client.attrs)}#{path}(\?#{query})?/
+    query_params = !query.nil? ? "\\?#{query}" : ''
+    /#{build_broker_url(service_instance.client.attrs)}#{path}#{query_params}/
   end
 
   def unbind_url(service_binding)

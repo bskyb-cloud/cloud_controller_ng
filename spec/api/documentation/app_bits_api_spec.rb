@@ -52,6 +52,8 @@ resource 'Apps', type: [:api, :legacy_api] do
     resources_desc = <<-eos
       Fingerprints of the application bits that have previously been pushed to Cloud Foundry.
       Each fingerprint must include the file path, sha1 hash, and file size in bytes.
+      Each fingerprint may include the file mode, which must be an octal string with at least read and write permissions for owners.
+      If a mode is not provided, the default mode of 0744 will be used.
       Fingerprinted bits MUST exist in the Cloud Foundry resource cache or the request (or job, if async) will fail.
     eos
     field :resources, resources_desc,
@@ -59,7 +61,8 @@ resource 'Apps', type: [:api, :legacy_api] do
           example_values: [
             [
               { fn: 'path/to/content.txt', size: 123, sha1: 'b907173290db6a155949ab4dc9b2d019dea0c901' },
-              { fn: 'path/to/code.jar', size: 123, sha1: 'ff84f89760317996b9dd180ab996b079f418396f' }
+              { fn: 'path/to/code.jar', size: 123, sha1: 'ff84f89760317996b9dd180ab996b079f418396f' },
+              { fn: 'path/to/code.jar', size: 123, sha1: 'ff84f89760317996b9dd180ab996b079f418396f', mode: '644' }
             ].to_json
           ]
 
@@ -70,6 +73,8 @@ resource 'Apps', type: [:api, :legacy_api] do
         Defines and uploads the bits (artifacts and dependencies) that this application needs to run, using a multipart PUT request.
         Bits that have already been uploaded can be referenced by their resource fingerprint(s).
         Bits that have not already been uploaded to Cloud Foundry must be included as a zipped binary file named "application".
+        File mode bits are only presevered for applications run on a Diego backend. If left blank, mode will default to 749, which
+        are also the default bits for a DEA backend. File mode bits are required to have at least the minimum permissions of 0600.
       eos
 
       # rubocop:disable LineLength
@@ -108,6 +113,8 @@ resource 'Apps', type: [:api, :legacy_api] do
     example 'Downloads the bits for an App' do
       explanation <<-eos
         When using a remote blobstore, such as AWS, the response is a redirect to the actual location of the bits.
+        If the client is automatically following redirects, then the OAuth token that was used to communicate with Cloud Controller will be replayed on the new redirect request.
+        Some blobstores may reject the request in that case. Clients may need to follow the redirect without including the OAuth token.
       eos
 
       no_doc { client.put "/v2/apps/#{app_obj.guid}/bits", app_bits_put_params, headers }
@@ -117,12 +124,45 @@ resource 'Apps', type: [:api, :legacy_api] do
     end
   end
 
+  get '/v2/apps/:guid/droplet/download' do
+    let(:async) { false }
+    let(:blobstore) do
+      CloudController::DependencyLocator.instance.droplet_blobstore
+    end
+
+    before do
+      app_obj.droplet_hash = 'abcdef'
+      app_obj.save
+
+      droplet_file = Tempfile.new(app_obj.guid)
+      droplet_file.write('droplet contents')
+      droplet_file.close
+
+      droplet = CloudController::DropletUploader.new(app_obj, blobstore)
+      droplet.upload(droplet_file.path)
+    end
+
+    example 'Downloads the staged droplet for an App' do
+      explanation <<-eos
+        When using a remote blobstore, such as AWS, the response is a redirect to the actual location of the bits.
+        If the client is automatically following redirects, then the OAuth token that was used to communicate with Cloud Controller will be replayed on the new redirect request.
+        Some blobstores may reject the request in that case. Clients may need to follow the redirect without including the OAuth token.
+      eos
+
+      client.get "/v2/apps/#{app_obj.guid}/droplet/download", {}, headers
+      expect(status).to eq(302)
+      expect(response_headers['Location']).to include('cc-droplets.s3.amazonaws.com')
+    end
+  end
+
   post '/v2/apps/:guid/copy_bits' do
     let(:src_app) { VCAP::CloudController::AppFactory.make }
     let(:dest_app) { VCAP::CloudController::AppFactory.make }
     let(:json_payload) { { source_app_guid: src_app.guid }.to_json }
 
     field :source_app_guid, 'The guid for the source app', required: true
+
+    let(:raw_post) { body_parameters }
 
     example 'Copy the app bits for an App' do
       explanation <<-eos

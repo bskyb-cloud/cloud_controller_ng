@@ -204,24 +204,6 @@ module VCAP::CloudController
       end
     end
 
-    describe 'GET /v2/organizations/:guid/quota_usage' do
-      context 'for an organization that does not exist' do
-        it 'returns a 404' do
-          get '/v2/organizations/foobar/quota_usage', {}, admin_headers
-          expect(last_response.status).to eq(404)
-        end
-      end
-
-      context 'when the user does not have permissions to read' do
-        let(:user) { User.make }
-
-        it 'returns a 403' do
-          get "/v2/organizations/#{org.guid}/quota_usage", {}, headers_for(user)
-          expect(last_response.status).to eq(403)
-        end
-      end
-    end
-
     describe 'GET', '/v2/organizations/:guid/services' do
       let(:other_org) { Organization.make }
       let(:space_one) { Space.make(organization: org) }
@@ -320,10 +302,37 @@ module VCAP::CloudController
       end
 
       it 'calls the organization memory usage calculator' do
-        allow(OrganizationMemoryCalculator).to receive(:get_memory_usage)
+        allow(OrganizationMemoryCalculator).to receive(:get_memory_usage).and_return(2)
         get "/v2/organizations/#{org.guid}/memory_usage", {}, admin_headers
         expect(last_response.status).to eq(200)
-        expect(OrganizationMemoryCalculator).to have_received(:get_memory_usage)
+        expect(OrganizationMemoryCalculator).to have_received(:get_memory_usage).with(org)
+        expect(MultiJson.load(last_response.body)).to eq({ 'memory_usage_in_mb' => 2 })
+      end
+    end
+
+    describe 'GET /v2/organizations/:guid/instance_usage' do
+      context 'for an organization that does not exist' do
+        it 'returns a 404' do
+          get '/v2/organizations/foobar/instance_usage', {}, admin_headers
+          expect(last_response.status).to eq(404)
+        end
+      end
+
+      context 'when the user does not have permissions to read' do
+        let(:user) { User.make }
+
+        it 'returns a 403' do
+          get "/v2/organizations/#{org.guid}/instance_usage", {}, headers_for(user)
+          expect(last_response.status).to eq(403)
+        end
+      end
+
+      it 'calls the organization instance usage calculator' do
+        allow(OrganizationInstanceUsageCalculator).to receive(:get_instance_usage).and_return(2)
+        get "/v2/organizations/#{org.guid}/instance_usage", {}, admin_headers
+        expect(last_response.status).to eq(200)
+        expect(OrganizationInstanceUsageCalculator).to have_received(:get_instance_usage).with(org)
+        expect(MultiJson.load(last_response.body)).to eq({ 'instance_usage' => 2 })
       end
     end
 
@@ -386,7 +395,7 @@ module VCAP::CloudController
               org.add_space(org_space_empty)
               expect(org.users).to include(user)
               delete "/v2/organizations/#{org.guid}/users/#{user.guid}", {}, admin_headers
-              expect(last_response.status).to eql(201)
+              expect(last_response.status).to eql(204)
 
               org.refresh
               expect(org.user_guids).not_to include(user)
@@ -409,7 +418,7 @@ module VCAP::CloudController
               org.add_space(org_space_full)
               ['developers', 'auditors', 'managers'].each { |type| expect(org_space_full.send(type)).to include(user) }
               delete "/v2/organizations/#{org.guid}/users/#{user.guid}?recursive=true", {}, admin_headers
-              expect(last_response.status).to eql(201)
+              expect(last_response.status).to eql(204)
 
               org_space_full.refresh
               ['developers', 'auditors', 'managers'].each { |type| expect(org_space_full.send(type)).not_to include(user) }
@@ -419,7 +428,7 @@ module VCAP::CloudController
               org.add_space(org_space_full)
               expect(org.users).to include(user)
               delete "/v2/organizations/#{org.guid}/users/#{user.guid}?recursive=true", {}, admin_headers
-              expect(last_response.status).to eql(201)
+              expect(last_response.status).to eql(204)
 
               org.refresh
               expect(org.users).not_to include(user)
@@ -435,7 +444,7 @@ module VCAP::CloudController
               org_2.add_space(org2_space)
               [org, org_2].each { |organization| expect(organization.users).to include(user) }
               delete "/v2/organizations/#{org.guid}/users/#{user.guid}?recursive=true", {}, admin_headers
-              expect(last_response.status).to eql(201)
+              expect(last_response.status).to eql(204)
 
               [org, org_2].each(&:refresh)
               expect(org.users).not_to include(user)
@@ -448,7 +457,7 @@ module VCAP::CloudController
               ['developers', 'auditors', 'managers'].each { |type| expect(org_space_full.send(type)).to include(user) }
               expect(org2_space.developers).to include(user)
               delete "/v2/organizations/#{org.guid}/users/#{user.guid}?recursive=true", {}, admin_headers
-              expect(last_response.status).to eql(201)
+              expect(last_response.status).to eql(204)
 
               [org_space_full, org2_space].each(&:refresh)
               ['developers', 'auditors', 'managers'].each { |type| expect(org_space_full.send(type)).not_to include(user) }
@@ -473,6 +482,41 @@ module VCAP::CloudController
           expect(last_response.status).to eql(400)
           org.refresh
           expect(org.users).to include(user)
+        end
+      end
+
+      context 'PUT /v2/organizations/org_guid/private_domains/domain_guid' do
+        context 'when PrivateDomain is shared' do
+          let(:org1) { Organization.make }
+          let(:org2) { Organization.make }
+          let(:private_domain) { PrivateDomain.make(owning_organization: org1) }
+          let(:user) { User.make }
+          let(:manager) { User.make }
+          let(:target_manager) { User.make }
+
+          before do
+            org1.add_manager(manager)
+            org2.add_manager(manager)
+
+            org1.add_auditor(target_manager)
+            org2.add_manager(target_manager)
+          end
+
+          it 'should allow a user who is a manager of both the target org and the owning org to share a private domain' do
+            put "/v2/organizations/#{org2.guid}/private_domains/#{private_domain.guid}", {}, headers_for(manager)
+            expect(last_response.status).to eq(201)
+            expect(org2.private_domains).to include(private_domain)
+          end
+
+          it 'should not allow the user to share domains to an org that the user is not a org manager of' do
+            put "/v2/organizations/#{org2.guid}/private_domains/#{private_domain.guid}", {}, headers_for(user)
+            expect(last_response.status).to eq(403)
+          end
+
+          it 'should not allow the user to share domains that user is not a manager in the owning organization of' do
+            put "/v2/organizations/#{org2.guid}/private_domains/#{private_domain.guid}", {}, headers_for(target_manager)
+            expect(last_response.status).to eq(403)
+          end
         end
       end
     end
@@ -551,6 +595,7 @@ module VCAP::CloudController
         context 'when one of the spaces has a v3 app in it' do
           let!(:space) { Space.make(organization: org) }
           let!(:app_model) { AppModel.make(space_guid: space.guid) }
+          let(:user) { User.make }
 
           it 'deletes the v3 app' do
             delete "/v2/organizations/#{org.guid}?recursive=true", '', admin_headers
@@ -559,12 +604,12 @@ module VCAP::CloudController
           end
 
           it 'records an audit event that the app was deleted' do
-            delete "/v2/organizations/#{org.guid}?recursive=true", '', admin_headers
+            delete "/v2/organizations/#{org.guid}?recursive=true", '', admin_headers_for(user)
             expect(last_response).to have_status_code 204
 
             event = Event.find(type: 'audit.app.delete-request', actee: app_model.guid)
             expect(event).not_to be_nil
-            expect(event.actor).to eq admin_user.guid
+            expect(event.actor).to eq user.guid
           end
         end
 
@@ -632,9 +677,15 @@ module VCAP::CloudController
             expect(ServiceInstance.find(guid: service_instance_guid)).not_to be_nil
             expect(Route.find(guid: route_guid)).not_to be_nil
 
-            successes, _ = Delayed::Worker.new.work_off
+            org_delete_jobs = Delayed::Job.where("handler like '%OrganizationDelete%'")
+            expect(org_delete_jobs.count).to eq 1
+            job = org_delete_jobs.first
 
-            expect(successes).to eq 1
+            Delayed::Worker.new.work_off
+
+            # a successfully completed job is removed from the table
+            expect(Delayed::Job.find(id: job.id)).to be_nil
+
             expect(Organization.find(guid: org.guid)).to be_nil
             expect(Space.find(guid: space_guid)).to be_nil
             expect(AppModel.find(guid: app_guid)).to be_nil
@@ -679,6 +730,9 @@ module VCAP::CloudController
             end
 
             it 'fails the job with a OrganizationDeleteTimeout error' do
+              service_instance_error_string = ["#{service_instance.name}: The service broker returned an invalid",
+                                               "response for the request to #{service_instance.dashboard_url}"].join(' ')
+
               delete "/v2/organizations/#{org.guid}?recursive=true&async=true", '', json_headers(admin_headers)
               expect(last_response).to have_status_code(202)
               job_guid = decoded_response['metadata']['guid']
@@ -690,6 +744,7 @@ module VCAP::CloudController
               expect(decoded_response['entity']['error_details']['error_code']).to eq 'CF-OrganizationDeletionFailed'
               expect(decoded_response['entity']['error_details']['description']).to include "Deletion of organization #{org.name}"
               expect(decoded_response['entity']['error_details']['description']).to include "Deletion of space #{space.name}"
+              expect(decoded_response['entity']['error_details']['description']).to include service_instance_error_string
               expect(decoded_response['entity']['error_details']['description']).to include 'The service broker returned an invalid response for the request'
             end
           end
@@ -726,9 +781,195 @@ module VCAP::CloudController
           Route.make(space: space, domain: private_domain)
 
           delete "/v2/organizations/#{space.organization.guid}/private_domains/#{private_domain.guid}", {}, admin_headers
-          expect(last_response.status).to eq(201)
+          expect(last_response.status).to eq(204)
 
           expect(private_domain.routes.count).to eq(0)
+        end
+      end
+    end
+
+    describe 'DELETE /v2/organizations/:guid/managers/:user_guid' do
+      let(:org_manager) { User.make }
+
+      before do
+        org.add_manager org_manager
+        org.save
+      end
+
+      describe 'removing the last org manager' do
+        context 'as an admin' do
+          it 'is allowed' do
+            delete "/v2/organizations/#{org.guid}/managers/#{org_manager.guid}", {}, admin_headers
+            expect(last_response.status).to eq(204)
+          end
+        end
+
+        context 'as the manager' do
+          it 'is not allowed' do
+            delete "/v2/organizations/#{org.guid}/managers/#{org_manager.guid}", {}, headers_for(org_manager)
+            expect(last_response.status).to eql(403)
+            expect(decoded_response['code']).to eq(10003)
+          end
+        end
+      end
+    end
+
+    describe 'adding user roles by username' do
+      [:user, :manager, :billing_manager, :auditor].each do |role|
+        plural_role = role.to_s.pluralize
+        describe "PUT /v2/organizations/:guid/#{plural_role}" do
+          let(:user) { User.make(username: 'larry_the_user') }
+
+          before do
+            allow_any_instance_of(UaaClient).to receive(:id_for_username).with(user.username).and_return(user.guid)
+          end
+
+          it "makes the user an org #{role}" do
+            put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+            expect(last_response.status).to eq(201)
+            expect(org.send(plural_role)).to include(user)
+            expect(decoded_response['metadata']['guid']).to eq(org.guid)
+          end
+
+          it "makes the user an org #{role}, and creates a user record when one does not exist" do
+            expect_any_instance_of(UaaClient).to receive(:id_for_username).with('uaa-only-user@example.com').and_return('user-guid')
+            put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: 'uaa-only-user@example.com' }), admin_headers
+
+            expect(last_response.status).to eq(201)
+            expect(org.send("#{plural_role}_dataset").where(guid: 'user-guid')).to_not be_empty
+          end
+
+          it 'verifies the user has update access to the org' do
+            expect_any_instance_of(OrganizationsController).to receive(:find_guid_and_validate_access).with(:update, org.guid).and_call_original
+            put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+          end
+
+          it 'returns a 404 when the user does not exist in UAA' do
+            expect_any_instance_of(UaaClient).to receive(:id_for_username).with('fake@example.com').and_return(nil)
+
+            put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: 'fake@example.com' }), admin_headers
+
+            expect(last_response.status).to eq(404)
+            expect(decoded_response['code']).to eq(20003)
+          end
+
+          it 'returns an error when UAA is not available' do
+            expect_any_instance_of(UaaClient).to receive(:id_for_username).and_raise(UaaUnavailable)
+
+            put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+            expect(last_response.status).to eq(503)
+            expect(decoded_response['code']).to eq(20004)
+          end
+
+          it 'returns an error when UAA endpoint is disabled' do
+            expect_any_instance_of(UaaClient).to receive(:id_for_username).and_raise(UaaEndpointDisabled)
+
+            put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+            expect(last_response.status).to eq(501)
+            expect(decoded_response['code']).to eq(20005)
+          end
+
+          context 'when the feature flag "set_roles_by_username" is disabled' do
+            before do
+              FeatureFlag.new(name: 'set_roles_by_username', enabled: false).save
+            end
+
+            it 'raises a feature flag error for non-admins' do
+              put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), headers_for(user)
+
+              expect(last_response.status).to eq(403)
+              expect(decoded_response['code']).to eq(330002)
+            end
+
+            it 'succeeds for admins' do
+              put "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+              expect(last_response.status).to eq(201)
+              expect(org.send(plural_role)).to include(user)
+              expect(decoded_response['metadata']['guid']).to eq(org.guid)
+            end
+          end
+        end
+      end
+    end
+
+    describe 'removing user roles by username' do
+      [:user, :manager, :billing_manager, :auditor].each do |role|
+        plural_role = role.to_s.pluralize
+        describe "DELETE /v2/organizations/:guid/#{plural_role}" do
+          let(:user) { User.make(username: 'larry_the_user') }
+
+          before do
+            allow_any_instance_of(UaaClient).to receive(:id_for_username).with(user.username).and_return(user.guid)
+            org.send("add_#{role}", user)
+          end
+
+          it "unsets the user as an org #{role}" do
+            expect(org.send(plural_role)).to include(user)
+
+            delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+            expect(last_response.status).to eq(200)
+            expect(org.reload.send(plural_role)).to_not include(user)
+            expect(decoded_response['metadata']['guid']).to eq(org.guid)
+          end
+
+          it 'verifies the user has update access to the org' do
+            expect_any_instance_of(OrganizationsController).to receive(:find_guid_and_validate_access).with(:update, org.guid).and_call_original
+            delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+          end
+
+          it 'returns a 404 when the user does not exist in CC' do
+            expect_any_instance_of(UaaClient).to receive(:id_for_username).with('fake@example.com').and_return('not-a-guid')
+
+            delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: 'fake@example.com' }), admin_headers
+
+            expect(last_response.status).to eq(404)
+            expect(decoded_response['code']).to eq(20003)
+          end
+
+          it 'returns an error when UAA is not available' do
+            expect_any_instance_of(UaaClient).to receive(:id_for_username).and_raise(UaaUnavailable)
+
+            delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+            expect(last_response.status).to eq(503)
+            expect(decoded_response['code']).to eq(20004)
+          end
+
+          it 'returns an error when UAA endpoint is disabled' do
+            expect_any_instance_of(UaaClient).to receive(:id_for_username).and_raise(UaaEndpointDisabled)
+
+            delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+            expect(last_response.status).to eq(501)
+            expect(decoded_response['code']).to eq(20005)
+          end
+
+          context 'when the feature flag "set_roles_by_username" is disabled' do
+            before do
+              FeatureFlag.new(name: 'unset_roles_by_username', enabled: false).save
+            end
+
+            it 'raises a feature flag error for non-admins' do
+              delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), headers_for(user)
+
+              expect(last_response.status).to eq(403)
+              expect(decoded_response['code']).to eq(330002)
+            end
+
+            it 'succeeds for admins' do
+              expect(org.send(plural_role)).to include(user)
+              delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
+
+              expect(last_response.status).to eq(200)
+              expect(org.reload.send(plural_role)).to_not include(user)
+              expect(decoded_response['metadata']['guid']).to eq(org.guid)
+            end
+          end
         end
       end
     end

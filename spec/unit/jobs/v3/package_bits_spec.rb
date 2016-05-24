@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  module Jobs::Runtime
+  module Jobs::V3
     describe PackageBits do
       let(:uploaded_path) { 'tmp/uploaded.zip' }
       let(:package_guid) { SecureRandom.uuid }
@@ -39,6 +39,9 @@ module VCAP::CloudController
 
         it 'knows its job name' do
           expect(job.job_name_in_configuration).to equal(:package_bits)
+        end
+
+        it 'expires any old packages' do
         end
       end
     end

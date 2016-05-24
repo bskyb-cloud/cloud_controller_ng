@@ -7,6 +7,7 @@ module VCAP::CloudController
     class InvalidDomainRelation < VCAP::Errors::InvalidRelation; end
     class InvalidAppRelation < VCAP::Errors::InvalidRelation; end
     class InvalidOrganizationRelation < VCAP::Errors::InvalidRelation; end
+    class DockerDisabled < VCAP::Errors::InvalidRelation; end
 
     many_to_one :domain
     many_to_one :space, after_set: :validate_changed_space
@@ -18,13 +19,20 @@ module VCAP::CloudController
       after_add:    :handle_add_app,
       after_remove: :handle_remove_app
 
+    one_to_one :route_binding
+    one_through_one :service_instance, join_table: :route_bindings
+
     add_association_dependencies apps: :nullify
 
-    export_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid
-    import_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :app_guids
+    export_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :service_instance_guid, :port
+    import_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :app_guids, :port
 
     def fqdn
       host.empty? ? domain.name : "#{host}.#{domain.name}"
+    end
+
+    def uri
+      "#{fqdn}#{path}"
     end
 
     def as_summary_json
@@ -43,8 +51,17 @@ module VCAP::CloudController
       old_path.nil? ? '' : old_path
     end
 
+    alias_method :old_port, :port
+    def port
+      old_port.nil? ? 0 : old_port
+    end
+
     def organization
       space.organization if space
+    end
+
+    def route_service_url
+      route_binding && route_binding.route_service_url
     end
 
     def before_create
@@ -71,12 +88,16 @@ module VCAP::CloudController
 
       validates_format /^([\w\-\[\]]+|\*)$/, :host if host && !host.empty?
 
-      if path.empty?
+      if path.empty? && port == 0
         validates_unique [:host, :domain_id]  do |ds|
-          ds.where(path: '')
+          ds.where(path: '', port: 0)
         end
-      else
-        validates_unique [:host, :domain_id, :path]
+      elsif !path.empty? && port == 0
+        validates_unique [:host, :domain_id, :path]  do |ds|
+          ds.where(port: 0)
+        end
+      else # port > 0
+        validates_unique [:domain_id, :port]
       end
 
       validate_path
@@ -85,6 +106,7 @@ module VCAP::CloudController
 
       validate_domain
       validate_total_routes
+      validate_ports
       errors.add(:host, :domain_conflict) if domains_match?
     end
     
@@ -114,6 +136,10 @@ module VCAP::CloudController
       end      
     end 
 
+    def validate_ports
+      errors.add(:port, :invalid_port) if port < 0 || port > 65535
+    end
+
     def validate_path
       return if path == ''
 
@@ -137,6 +163,10 @@ module VCAP::CloudController
     def domains_match?
       return false if domain.nil? || host.nil? || host.empty?
       !Domain.find(name: fqdn).nil?
+    end
+
+    def all_apps_diego?
+      apps.all?(&:diego?)
     end
 
     def validate_app(app)
@@ -176,6 +206,16 @@ module VCAP::CloudController
 
     private
 
+    def before_destroy
+      destroy_route_bindings
+      super
+    end
+
+    def destroy_route_bindings
+      errors = ServiceBindingDelete.new.delete(self.route_binding_dataset)
+      raise errors.first unless errors.empty?
+    end
+
     def around_destroy
       loaded_apps = apps
       super
@@ -207,7 +247,7 @@ module VCAP::CloudController
       domain_change = column_change(:domain_id)
       return false if !new? && domain_change && domain_change[0] != domain_change[1]
 
-      if (domain.shared? && !host.present?) ||
+      if (domain.shared? && (!host.present? && !old_port.present?)) ||
           (space && !domain.usable_by_organization?(space.organization))
         return false
       end

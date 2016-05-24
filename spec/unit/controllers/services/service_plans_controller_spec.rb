@@ -161,6 +161,29 @@ module VCAP::CloudController
         }
       end
 
+      context 'as a space developer' do
+        context 'with private service brokers' do
+          it 'returns service plans from private brokers that are in the same space as the user' do
+            user = User.make
+            space = Space.make
+            space.organization.add_user user
+            private_broker = ServiceBroker.make(space: space)
+            service = Service.make(service_broker: private_broker)
+            space.add_developer(user)
+            private_broker_service_plan = ServicePlan.make(service: service, public: false)
+
+            get '/v2/service_plans', {}, headers_for(user)
+            expect(last_response.status).to eq 200
+
+            returned_plan_guids = decoded_response.fetch('resources').map do |res|
+              res['metadata']['guid']
+            end
+
+            expect(returned_plan_guids).to include(private_broker_service_plan.guid)
+          end
+        end
+      end
+
       context 'as an admin' do
         it 'displays all service plans' do
           get '/v2/service_plans', {}, admin_headers
@@ -287,7 +310,7 @@ module VCAP::CloudController
           other_service_plan = ServicePlan.make
           payload = MultiJson.dump({ 'unique_id' => other_service_plan.unique_id })
 
-          put "/v2/service_plans/#{service_plan.guid}", payload, json_headers(admin_headers)
+          put "/v2/service_plans/#{service_plan.guid}", payload, admin_headers
 
           expect(last_response.status).to be == 400
           expect(decoded_response.fetch('code')).to eql(110001)

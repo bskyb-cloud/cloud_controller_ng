@@ -10,6 +10,7 @@ module VCAP::CloudController
     let(:blobstore) do
       CloudController::DependencyLocator.instance.droplet_blobstore
     end
+    let(:digester) { Digester.new(algorithm: Digest::MD5, type: :base64digest) }
 
     let(:buildpack_cache_blobstore) do
       CloudController::DependencyLocator.instance.buildpack_cache_blobstore
@@ -182,7 +183,7 @@ module VCAP::CloudController
             end
 
             it 'succeeds if the value matches the md5 of the body' do
-              content_md5 = Digest::MD5.base64digest(file_content)
+              content_md5 = digester.digest(file_content)
               post "/staging/droplets/#{app_obj.guid}/upload", upload_req, 'HTTP_CONTENT_MD5' => content_md5
               expect(last_response.status).to eq(200)
             end
@@ -225,15 +226,13 @@ module VCAP::CloudController
         end
 
         it "returns a JSON body with full url and basic auth to query for job's status" do
-          TestConfig.config[:external_domain] = ['www.example.com', TestConfig.config[:external_domain]]
-
           post "/staging/droplets/#{app_obj.guid}/upload?async=true", upload_req
 
           job = Delayed::Job.last
           config = VCAP::CloudController::Config.config
           user = config[:staging][:auth][:user]
           password = config[:staging][:auth][:password]
-          polling_url = "http://#{user}:#{password}@#{config[:external_domain].first}/staging/jobs/#{job.guid}"
+          polling_url = "http://#{user}:#{password}@#{config[:external_domain]}/staging/jobs/#{job.guid}"
 
           expect(decoded_response.fetch('metadata').fetch('url')).to eql(polling_url)
         end
@@ -287,7 +286,7 @@ module VCAP::CloudController
         zipname = File.join(tmpdir, 'test.zip')
         TestZip.create(zipname, 10, 1024)
         file_contents = File.read(zipname)
-        Jobs::Runtime::PackageBits.new(package.guid, zipname).perform
+        Jobs::V3::PackageBits.new(package.guid, zipname).perform
         FileUtils.rm_rf(tmpdir)
         file_contents
       end
@@ -370,15 +369,13 @@ module VCAP::CloudController
       end
 
       it "returns a JSON body with full url and basic auth to query for job's status" do
-        TestConfig.config[:external_domain] = ['www.example.com', TestConfig.config[:external_domain]]
-
         post "/staging/v3/droplets/#{droplet.guid}/upload", upload_req
 
         job = Delayed::Job.last
         config = VCAP::CloudController::Config.config
         user = config[:staging][:auth][:user]
         password = config[:staging][:auth][:password]
-        polling_url = "http://#{user}:#{password}@#{config[:external_domain].first}/staging/jobs/#{job.guid}"
+        polling_url = "http://#{user}:#{password}@#{config[:external_domain]}/staging/jobs/#{job.guid}"
 
         expect(decoded_response.fetch('metadata').fetch('url')).to eql(polling_url)
       end
@@ -396,7 +393,7 @@ module VCAP::CloudController
         end
 
         it 'succeeds if the value matches the md5 of the body' do
-          content_md5 = Digest::MD5.base64digest(file_content)
+          content_md5 = digester.digest(file_content)
           post "/staging/v3/droplets/#{droplet.guid}/upload", upload_req, 'HTTP_CONTENT_MD5' => content_md5
           expect(last_response.status).to eq(200)
         end
@@ -567,7 +564,7 @@ module VCAP::CloudController
           expect(last_response.status).to eq 200
         end
 
-        it 'prepends the apps stack to the key' do
+        it 'uses the current stack as the key' do
           expect {
             post "/staging/buildpack_cache/#{app_obj.guid}/upload", upload_req
           }.to change {
@@ -575,7 +572,7 @@ module VCAP::CloudController
           }.by(1)
 
           job = Delayed::Job.last
-          expect(job.handler).to include("#{app_obj.stack.name}-#{app_obj.guid}")
+          expect(job.handler).to include("#{app_obj.guid}/#{app_obj.stack.name}")
         end
 
         context 'when a content-md5 is specified' do
@@ -585,7 +582,7 @@ module VCAP::CloudController
           end
 
           it 'succeeds if the value matches the md5 of the body' do
-            content_md5 = Digest::MD5.base64digest(file_content)
+            content_md5 = digester.digest(file_content)
             post "/staging/buildpack_cache/#{app_obj.guid}/upload", upload_req, 'HTTP_CONTENT_MD5' => content_md5
             expect(last_response.status).to eq(200)
           end
@@ -632,12 +629,12 @@ module VCAP::CloudController
           it 'redirects nginx to serve staged droplet' do
             buildpack_cache_blobstore.cp_to_blobstore(
                 buildpack_cache.path,
-                "#{app_obj.stack.name}-#{app_obj.guid}"
+                "#{app_obj.guid}/#{app_obj.stack.name}"
             )
 
             make_request
             expect(last_response.status).to eq(200)
-            expect(last_response.headers['X-Accel-Redirect']).to match("/cc-droplets/.*/#{app_obj.stack.name}-#{app_obj.guid}")
+            expect(last_response.headers['X-Accel-Redirect']).to match("/cc-droplets/.*/#{app_obj.guid}/#{app_obj.stack.name}")
           end
         end
 
@@ -649,7 +646,7 @@ module VCAP::CloudController
           it 'should return the buildpack cache' do
             buildpack_cache_blobstore.cp_to_blobstore(
                 buildpack_cache.path,
-                "#{app_obj.stack.name}-#{app_obj.guid}"
+                "#{app_obj.guid}/#{app_obj.stack.name}"
             )
 
             make_request
@@ -729,7 +726,7 @@ module VCAP::CloudController
           }.by(1)
 
           job = Delayed::Job.last
-          expect(job.handler).to include("#{stack}-#{app_model.guid}")
+          expect(job.handler).to include("#{app_model.guid}/#{stack}")
           expect(job.handler).to include('ngx.uploads')
           expect(job.handler).to include('buildpack_cache_blobstore')
           expect(job.queue).to eq('cc-datacenter1-api_z1-99')
@@ -744,7 +741,7 @@ module VCAP::CloudController
           end
 
           it 'succeeds if the value matches the md5 of the body' do
-            content_md5 = Digest::MD5.base64digest(file_content)
+            content_md5 = digester.digest(file_content)
             post "/staging/v3/buildpack_cache/#{stack}/#{app_model.guid}/upload", upload_req, 'HTTP_CONTENT_MD5' => content_md5
             expect(last_response.status).to eq(200)
           end
@@ -796,12 +793,12 @@ module VCAP::CloudController
           it 'redirects nginx to serve staged droplet' do
             buildpack_cache_blobstore.cp_to_blobstore(
               buildpack_cache.path,
-              "#{stack}-#{app_model.guid}"
+              "#{app_model.guid}/#{stack}"
             )
 
             make_request
             expect(last_response.status).to eq(200)
-            expect(last_response.headers['X-Accel-Redirect']).to match("/cc-droplets/.*/#{stack}-#{app_model.guid}")
+            expect(last_response.headers['X-Accel-Redirect']).to match("/cc-droplets/.*/#{app_model.guid}/#{stack}")
           end
         end
 
@@ -813,7 +810,7 @@ module VCAP::CloudController
           it 'should return the buildpack cache' do
             buildpack_cache_blobstore.cp_to_blobstore(
               buildpack_cache.path,
-              "#{stack}-#{app_model.guid}"
+              "#{app_model.guid}/#{stack}"
             )
 
             make_request

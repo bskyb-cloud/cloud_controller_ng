@@ -9,6 +9,7 @@ module VCAP::CloudController
     def initialize(service_instance, type='update')
       @service_instance = service_instance
       @type = type
+      @needs_unlock = false
     end
 
     def lock!
@@ -18,32 +19,34 @@ module VCAP::CloudController
 
         raise_if_locked(service_instance)
 
-        service_instance.save_with_new_operation(
-          last_operation: {
-            type: @type,
-            state: 'in progress'
-          }
-        )
+        service_instance.save_with_new_operation({}, { type: @type, state: 'in progress' })
+        @needs_unlock = true
       end
     end
 
     def unlock_and_fail!
-      service_instance.save_and_update_operation(
-        last_operation: {
-          type: @type,
-          state: 'failed'
-        }
-      )
+      ServiceInstanceOperation.db.transaction do
+        service_instance.last_operation.update_attributes(
+            type: @type,
+            state: 'failed'
+        )
+      end
+      @needs_unlock = false
     end
 
-    def synchronous_unlock!(attributes_to_update)
-      service_instance.save_and_update_operation(attributes_to_update)
+    def synchronous_unlock!
+      service_instance.update_last_operation(state: 'succeeded')
+      @needs_unlock = false
     end
 
-    def enqueue_unlock!(attributes_to_update, job)
-      service_instance.save_and_update_operation(attributes_to_update)
+    def enqueue_unlock!(job)
       enqueuer = Jobs::Enqueuer.new(job, queue: 'cc-generic')
       enqueuer.enqueue
+      @needs_unlock = false
+    end
+
+    def needs_unlock?
+      @needs_unlock
     end
   end
 end

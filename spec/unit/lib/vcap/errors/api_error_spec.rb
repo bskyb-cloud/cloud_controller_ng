@@ -25,6 +25,7 @@ module VCAP::Errors
 
     before do
       @original_load_paths = I18n.load_path.dup
+      I18n.fallbacks = nil
       I18n.enforce_available_locales = true # this will be the default in a future version, so test that we cope with it
       ApiError.setup_i18n(translations, 'en_US')
 
@@ -60,7 +61,7 @@ module VCAP::Errors
         end
 
         it 'explodes' do
-          expect { api_error }.to raise_error
+          expect { api_error }.to raise_error(KeyError, /key not found/)
         end
       end
     end

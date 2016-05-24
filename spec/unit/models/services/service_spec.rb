@@ -116,8 +116,8 @@ module VCAP::CloudController
         expect {
           subject
         }.to_not change {
-          ServiceAuthToken.count(label: service.label, provider: service.provider)
-        }
+                   ServiceAuthToken.count(label: service.label, provider: service.provider)
+                 }
       end
     end
 
@@ -125,8 +125,8 @@ module VCAP::CloudController
       let(:private_service) { Service.make }
       let(:public_service) { Service.make }
       let(:nonadmin_org) { Organization.make }
-      let(:admin_user) { User.make(admin: true, active: true) }
-      let(:nonadmin_user) { User.make(admin: false, active: true) }
+      let(:admin_user) { User.make }
+      let(:nonadmin_user) { User.make }
       let!(:private_plan) { ServicePlan.make service: private_service, public: false }
       before do
         ServicePlan.make service: public_service, public: true
@@ -137,7 +137,7 @@ module VCAP::CloudController
       end
 
       def records(user)
-        Service.user_visible(user, user.admin?).all
+        Service.user_visible(user, user == admin_user).all
       end
 
       it 'returns all services for admins' do
@@ -161,9 +161,76 @@ module VCAP::CloudController
         records = Service.user_visible(nil).all
         expect(records).to eq [public_service]
       end
+
+      describe 'services from private brokers' do
+        it 'does not return the services to users with no roles in the space' do
+          space = Space.make
+          space_developer = User.make
+
+          space.organization.add_user space_developer
+
+          private_broker = ServiceBroker.make space: space
+          service = Service.make(service_broker: private_broker, active: true)
+          ServicePlan.make(service: service, active: true, public: false)
+
+          records = Service.user_visible(space_developer).all
+          expect(records.map(&:guid)).not_to include service.guid
+        end
+
+        it "returns services from private brokers to space developers in that private broker's space" do
+          space = Space.make
+          space_developer = User.make
+
+          space.organization.add_user space_developer
+
+          space.add_developer space_developer
+
+          private_broker = ServiceBroker.make space: space
+          service = Service.make(service_broker: private_broker, active: true)
+          ServicePlan.make(service: service, active: true, public: false)
+
+          records = Service.user_visible(space_developer).all
+          expect(records.map(&:guid)).to include service.guid
+        end
+
+        it "returns services from private brokers to space auditors in that private broker's space" do
+          space = Space.make
+          space_auditor = User.make
+
+          space.organization.add_user space_auditor
+
+          space.add_auditor space_auditor
+
+          private_broker = ServiceBroker.make space: space
+          service = Service.make(service_broker: private_broker, active: true)
+          ServicePlan.make(service: service, active: true, public: false)
+          records = Service.user_visible(space_auditor).all
+          expect(records.map(&:guid)).to include service.guid
+        end
+
+        it "returns services from private brokers to space managers in that private broker's space" do
+          space = Space.make
+          space_manager = User.make
+
+          space.organization.add_user space_manager
+
+          space.add_manager space_manager
+
+          private_broker = ServiceBroker.make space: space
+          service = Service.make(service_broker: private_broker, active: true)
+          ServicePlan.make(service: service, active: true, public: false)
+          records = Service.user_visible(space_manager).all
+          expect(records).to include service
+        end
+      end
     end
 
     describe '#tags' do
+      it 'returns the provided service tags' do
+        service = Service.make(tags: %w(a b c))
+        expect(service.tags).to match_array(%w(a b c))
+      end
+
       context 'null tags in the database' do
         it 'returns an empty array' do
           service = Service.make(tags: nil)
@@ -214,6 +281,7 @@ module VCAP::CloudController
     end
 
     describe '#purge' do
+      let!(:event_repository) { double(Repositories::Services::ServiceUsageEventRepository) }
       let!(:service_plan) { ServicePlan.make(service: service) }
       let!(:service_plan_visibility) { ServicePlanVisibility.make(service_plan: service_plan) }
       let!(:service_instance) { ManagedServiceInstance.make(service_plan: service_plan) }
@@ -224,11 +292,18 @@ module VCAP::CloudController
       let!(:service_instance_2) { ManagedServiceInstance.make(service_plan: service_plan_2) }
       let!(:service_binding_2) { ServiceBinding.make(service_instance: service_instance_2) }
 
+      before do
+        allow(Repositories::Services::ServiceUsageEventRepository).to receive(:new).and_return(event_repository)
+        allow(event_repository).to receive(:record_service_binding_event)
+        allow(event_repository).to receive(:deleted_event_from_service_instance)
+        allow(event_repository).to receive(:record_service_instance_event)
+      end
+
       context 'for v1 services' do
         let!(:service) { Service.make(:v1) }
 
         it 'destroys all models that depend on it' do
-          service.purge
+          service.purge(event_repository)
 
           expect(Service.find(guid: service.guid)).to be_nil
           expect(ServicePlan.first(guid: service_plan.guid)).to be_nil
@@ -242,7 +317,7 @@ module VCAP::CloudController
         end
 
         it 'does not make any requests to the service broker' do
-          service.purge
+          service.purge(event_repository)
           http_client_stub = VCAP::Services::ServiceBrokers::V1::HttpClient.new
           expect(http_client_stub).not_to have_received(:unbind)
           expect(http_client_stub).not_to have_received(:deprovision)
@@ -250,7 +325,7 @@ module VCAP::CloudController
 
         it 'does not mark apps for restaging that were bound to the deleted service' do
           service_binding.app.update(package_state: 'STAGED')
-          expect { service.purge }.not_to change { service_binding.app.reload.pending? }
+          expect { service.purge(event_repository) }.not_to change { service_binding.app.reload.pending? }
         end
       end
 
@@ -258,7 +333,7 @@ module VCAP::CloudController
         let!(:service) { Service.make(:v2) }
 
         it 'destroys all models that depend on it' do
-          service.purge
+          service.purge(event_repository)
 
           expect(Service.find(guid: service.guid)).to be_nil
           expect(ServicePlan.first(guid: service_plan.guid)).to be_nil
@@ -272,17 +347,51 @@ module VCAP::CloudController
         end
 
         it 'does not make any requests to the service broker' do
-          service.purge
+          service.purge(event_repository)
           expect(a_request(:delete, /.*/)).not_to have_been_made
         end
 
         it 'does not mark apps for restaging that were bound to the deleted service' do
           service_binding.app.update(package_state: 'STAGED')
-          expect { service.purge }.not_to change { service_binding.app.reload.pending? }
+          expect { service.purge(event_repository) }.not_to change { service_binding.app.reload.pending? }
+        end
+
+        context 'there is a service instance with state `in progress`' do
+          before do
+            service_instance.save_with_new_operation({}, state: VCAP::CloudController::ManagedServiceInstance::IN_PROGRESS_STRING)
+          end
+
+          it 'destroys all models that depend on it' do
+            service.purge(event_repository)
+
+            expect(Service.find(guid: service.guid)).to be_nil
+            expect(ServicePlan.first(guid: service_plan.guid)).to be_nil
+            expect(ServicePlan.first(guid: service_plan_2.guid)).to be_nil
+            expect(ServicePlanVisibility.first(guid: service_plan_visibility.guid)).to be_nil
+            expect(ServicePlanVisibility.first(guid: service_plan_visibility_2.guid)).to be_nil
+            expect(ServiceInstance.first(guid: service_instance.guid)).to be_nil
+            expect(ServiceInstance.first(guid: service_instance_2.guid)).to be_nil
+            expect(ServiceBinding.first(guid: service_binding.guid)).to be_nil
+            expect(ServiceBinding.first(guid: service_binding_2.guid)).to be_nil
+          end
         end
       end
 
-      context 'when deleting one of the records fails' do
+      context 'when deleting a service instance fails' do
+        let(:service) { Service.make }
+
+        before do
+          allow_any_instance_of(VCAP::CloudController::ServiceInstance).to receive(:destroy).and_raise('Boom')
+        end
+
+        it 'raises the same error' do
+          expect {
+            service.purge(event_repository)
+          }.to raise_error(RuntimeError, /Boom/)
+        end
+      end
+
+      context 'when deleting a service plan fails' do
         let(:service) { Service.make }
 
         before do
@@ -290,7 +399,7 @@ module VCAP::CloudController
         end
 
         it 'rolls back the transaction and does not destroy any records' do
-          service.purge rescue nil
+          service.purge(event_repository) rescue nil
 
           expect(Service.find(guid: service.guid)).to be
           expect(ServicePlan.first(guid: service_plan.guid)).to be
@@ -304,7 +413,7 @@ module VCAP::CloudController
         end
 
         it "does not leave the service in 'purging' state" do
-          service.purge rescue nil
+          service.purge(event_repository) rescue nil
           expect(service.reload.purging).to be false
         end
       end
@@ -326,6 +435,50 @@ module VCAP::CloudController
         expect(visible).to include(visible_public_service)
         expect(visible).to include(visible_private_service)
         expect(visible).not_to include(hidden_private_service)
+      end
+    end
+
+    describe '.space_or_org_visible_for_user' do
+      let(:org) { Organization.make }
+      let(:space) { Space.make(organization: org) }
+      let(:dev) { make_developer_for_space(space) }
+      let(:outside_dev) { User.make(admin: false, active: true) }
+
+      before(:each) do
+        @private_broker = ServiceBroker.make(space: space)
+        @private_service = Service.make(service_broker: @private_broker, active: true, label: 'Private Service')
+        @private_plan = ServicePlan.make(service: @private_service, public: false, name: 'Private Plan')
+
+        @public_broker = ServiceBroker.make
+        @visible_service = Service.make(service_broker: @public_broker, active: true, label: 'Visible Service')
+        @visible_plan = ServicePlan.make(service: @visible_service, name: 'Visible Plan')
+        @hidden_service = Service.make(service_broker: @public_broker, active: true, label: 'Hidden Service')
+        @hidden_plan = ServicePlan.make(service: @hidden_service, public: false, name: 'Hidden Plan')
+      end
+
+      it 'returns services that are visible to the spaces org and to the user in that space' do
+        visible_services = Service.space_or_org_visible_for_user(space, dev).all
+        expected_service_names = [@private_service, @visible_service].map(&:label)
+        expect(visible_services.map(&:label)).to match_array expected_service_names
+      end
+
+      it 'only returns private broker services to Space<Managers/Auditors/Developers>' do
+        expected_service_names = [@private_service, @visible_service].map(&:label)
+
+        visible_services = Service.space_or_org_visible_for_user(space, dev).all
+        expect(visible_services.map(&:label)).to match_array expected_service_names
+
+        auditor = make_developer_for_space(space)
+        visible_services = Service.space_or_org_visible_for_user(space, auditor).all
+        expect(visible_services.map(&:label)).to match_array expected_service_names
+
+        manager = make_manager_for_space(space)
+        visible_services = Service.space_or_org_visible_for_user(space, manager).all
+        expect(visible_services.map(&:label)).to match_array expected_service_names
+
+        user = make_user_for_org(space.organization)
+        visible_services = Service.space_or_org_visible_for_user(space, user).all
+        expect(visible_services.map(&:label)).to match_array [@visible_service.label]
       end
     end
 
@@ -368,12 +521,12 @@ module VCAP::CloudController
           expect(client).to eq(v1_client)
 
           expect(VCAP::Services::ServiceBrokers::V1::Client).to have_received(:new).with(
-            hash_including(
-              url: service.url,
-              auth_token: service.service_auth_token.token,
-              timeout: service.timeout
+              hash_including(
+                url: service.url,
+                auth_token: service.service_auth_token.token,
+                timeout: service.timeout
+              )
             )
-          )
         end
       end
 

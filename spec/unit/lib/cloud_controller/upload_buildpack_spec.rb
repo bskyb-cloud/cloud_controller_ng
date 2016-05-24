@@ -10,10 +10,8 @@ module VCAP::CloudController
     let(:tmpdir) { Dir.mktmpdir }
     let(:filename) { 'file.zip' }
 
-    let(:sha_valid_zip) do
-      File.new(valid_zip.path).hexdigest
-    end
-    let(:sha_valid_zip2) { File.new(valid_zip2.path).hexdigest }
+    let(:sha_valid_zip) { Digester.new.digest_file(valid_zip) }
+    let(:sha_valid_zip2) { Digester.new.digest_file(valid_zip2) }
 
     let(:valid_zip) do
       zip_name = File.join(tmpdir, filename)
@@ -137,7 +135,7 @@ module VCAP::CloudController
         end
 
         it 'should not update the key and filename on the existing buildpack' do
-          expect { upload_buildpack.upload_buildpack(buildpack, valid_zip, filename) }.to raise_error
+          expect { upload_buildpack.upload_buildpack(buildpack, valid_zip, filename) }.to raise_error(RuntimeError)
           bp = Buildpack.find(name: buildpack.name)
           expect(bp).to_not be_nil
           expect(bp.key).to eq(previous_key)

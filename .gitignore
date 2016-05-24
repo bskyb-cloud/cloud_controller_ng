@@ -6,6 +6,7 @@
 .bundle
 bundler
 spec/artifacts
+spec/examples.txt
 ci-artifacts-dir
 ci-working-dir
 coverage
@@ -17,3 +18,5 @@ doc
 log
 tmp
 tags
+test.err
+test.out

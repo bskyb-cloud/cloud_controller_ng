@@ -28,6 +28,7 @@ module VCAP::CloudController
         expect(hash['api_version']).to eq(VCAP::CloudController::Constants::API_VERSION)
         expect(hash['app_ssh_endpoint']).to eq(TestConfig.config[:info][:app_ssh_endpoint])
         expect(hash['app_ssh_host_key_fingerprint']).to eq(TestConfig.config[:info][:app_ssh_host_key_fingerprint])
+        expect(hash['app_ssh_oauth_client']).to eq(TestConfig.config[:info][:app_ssh_oauth_client])
       end
 
       it 'includes login url when configured' do
@@ -42,6 +43,27 @@ module VCAP::CloudController
         get '/v2/info', {}, {}
         hash = MultiJson.load(last_response.body)
         expect(hash['logging_endpoint']).to eq('loggregator_url')
+      end
+
+      it 'includes the routing api endpoint when configured' do
+        TestConfig.override(routing_api: { url: 'some_routing_api' })
+        get '/v2/info', {}, {}
+        hash = MultiJson.load(last_response.body)
+        expect(hash['routing_endpoint']).to eq('some_routing_api')
+      end
+
+      it 'includes the doppler_logging_endpoint when enabled' do
+        TestConfig.override(doppler: { enabled: true, url: 'doppler_url' })
+        get '/v2/info', {}, {}
+        hash = MultiJson.load(last_response.body)
+        expect(hash['doppler_logging_endpoint']).to eq('doppler_url')
+      end
+
+      it 'excludes the doppler_logging_endpoint when disabled' do
+        TestConfig.override(doppler: { enabled: false })
+        get '/v2/info', {}, {}
+        hash = MultiJson.load(last_response.body)
+        expect(hash['doppler_logging_endpoint']).to be_nil
       end
 
       it 'includes cli version info when confgired' do

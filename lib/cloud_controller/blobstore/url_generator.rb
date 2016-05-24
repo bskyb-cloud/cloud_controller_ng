@@ -23,7 +23,7 @@ module CloudController
       end
 
       def v3_app_buildpack_cache_download_url(app_guid, stack)
-        generate_download_url(@buildpack_cache_blobstore, "/staging/v3/buildpack_cache/#{stack}/#{app_guid}/download", "#{stack}-#{app_guid}")
+        generate_download_url(@buildpack_cache_blobstore, "/staging/v3/buildpack_cache/#{stack}/#{app_guid}/download", "#{app_guid}/#{stack}")
       end
 
       def admin_buildpack_download_url(buildpack)
@@ -47,6 +47,16 @@ module CloudController
 
       def perma_droplet_download_url(app_guid)
         staging_uri("/staging/droplets/#{app_guid}/download")
+      end
+
+      def unauthorized_perma_droplet_download_url(app)
+        return nil unless app.droplet_hash
+
+        URI::HTTP.build(
+          host: @blobstore_options[:blobstore_host],
+          port: @blobstore_options[:blobstore_port],
+          path: "/internal/v2/droplets/#{app.guid}/#{app.droplet_hash}/download",
+        ).to_s
       end
 
       # Uploads

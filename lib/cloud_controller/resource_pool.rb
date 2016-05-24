@@ -52,7 +52,7 @@ class VCAP::CloudController::ResourcePool
   end
 
   def add_path(path)
-    sha1 = Digest::SHA1.file(path).hexdigest
+    sha1 = Digester.new.digest_path(path)
     key = key_from_sha1(sha1)
     return if blobstore.files.head(sha1)
 
@@ -101,6 +101,9 @@ class VCAP::CloudController::ResourcePool
       key = key_from_sha1(sha1)
       blobstore.files.head(key)
     end
+  rescue => e
+    logger.error('Fog connection error: ' + e)
+    raise e
   end
 
   def resource_allowed?(path)
@@ -131,7 +134,7 @@ class VCAP::CloudController::ResourcePool
       logger.debug 'resource_pool.download.using-cdn'
 
       uri = "#{@cdn[:uri]}/#{s3_key}"
-      for_real_uri = AWS::CF::Signer.is_configured? ? AWS::CF::Signer.sign_url(uri) : uri
+      for_real_uri = Aws::CF::Signer.is_configured? ? Aws::CF::Signer.sign_url(uri) : uri
 
       File.open(destination, 'w') do |file|
         HTTPClient.new.get(for_real_uri) do |chunk|

@@ -67,4 +67,76 @@ module VCAP::CloudController
       end
     end
   end
+
+  describe '#staged?' do
+    context 'when the droplet has been staged' do
+      let!(:droplet_model) { DropletModel.make(state: 'STAGED') }
+
+      it 'returns true' do
+        expect(droplet_model.staged?).to be true
+      end
+    end
+
+    context 'when the droplet has not been staged' do
+      let!(:droplet_model) { DropletModel.make(state: 'PENDING') }
+
+      it 'returns false' do
+        expect(droplet_model.staged?).to be false
+      end
+    end
+  end
+
+  describe '#mark_as_staged' do
+    let!(:droplet_model) { DropletModel.make }
+
+    it 'changes the droplet state to STAGED' do
+      droplet_model.mark_as_staged
+      expect(droplet_model.state).to be DropletModel::STAGED_STATE
+    end
+  end
+
+  describe 'process_types' do
+    let(:droplet_model) { DropletModel.make }
+
+    it 'is a persistable hash' do
+      info = { web: 'started', worker: 'started' }
+      droplet_model.process_types = info
+      droplet_model.save
+      expect(droplet_model.reload.process_types['web']).to eq('started')
+      expect(droplet_model.reload.process_types['worker']).to eq('started')
+    end
+  end
+
+  describe '#lifecycle_type' do
+    let(:droplet_model) { DropletModel.make }
+    let!(:lifecycle_data) { BuildpackLifecycleDataModel.make(droplet: droplet_model) }
+
+    before do
+      droplet_model.buildpack_lifecycle_data = lifecycle_data
+      droplet_model.save
+    end
+
+    it 'returns the string "buildpack" if buildpack_lifecycle_data is on the model' do
+      expect(droplet_model.lifecycle_type).to eq('buildpack')
+    end
+  end
+
+  describe '#lifecycle_data' do
+    let(:droplet_model) { DropletModel.make }
+    let!(:lifecycle_data) { BuildpackLifecycleDataModel.make(droplet: droplet_model) }
+
+    before do
+      droplet_model.buildpack_lifecycle_data = lifecycle_data
+      droplet_model.save
+    end
+
+    it 'returns buildpack_lifecycle_data if it is on the model' do
+      expect(droplet_model.lifecycle_data).to eq(lifecycle_data)
+    end
+
+    it 'is a persistable hash' do
+      expect(droplet_model.reload.lifecycle_data.buildpack).to eq(lifecycle_data.buildpack)
+      expect(droplet_model.reload.lifecycle_data.stack).to eq(lifecycle_data.stack)
+    end
+  end
 end

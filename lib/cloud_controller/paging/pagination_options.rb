@@ -1,4 +1,5 @@
 require 'active_model'
+require 'mappers/order_by_mapper'
 
 module VCAP::CloudController
   class PaginationOptions
@@ -21,7 +22,7 @@ module VCAP::CloudController
         message:               "must be between 1 and #{PER_PAGE_MAX}" }
     validates :order_by, inclusion: {
         in:      %w(created_at updated_at id),
-        message: "can only be ordered by 'created_at' or 'updated_at'"
+        message: "can only be 'created_at' or 'updated_at'"
       }
     validates :order_direction, inclusion: {
         in:      %w(asc desc),
@@ -38,13 +39,13 @@ module VCAP::CloudController
     end
 
     def self.from_params(params)
-      page            = params.delete('page')
-      page            = page.to_i if !page.nil?
-      per_page        = params.delete('per_page')
-      per_page        = per_page.to_i if !per_page.nil?
-      order_by        = params.delete('order_by')
-      order_direction = params.delete('order_direction')
-      options         = { page: page, per_page: per_page, order_by: order_by, order_direction: order_direction }
+      page                      = params.delete('page')
+      page                      = page.to_i unless page.nil?
+      per_page                  = params.delete('per_page')
+      per_page                  = per_page.to_i unless per_page.nil?
+      raw_order_by              = params.delete('order_by')
+      order_by, order_direction = raw_order_by ? OrderByMapper.from_param(raw_order_by) : nil
+      options                   = { page: page, per_page: per_page, order_by: order_by, order_direction: order_direction }
       PaginationOptions.new(options)
     end
 

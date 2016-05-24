@@ -77,8 +77,7 @@ module VCAP::CloudController
 
     define_user_group :users
     define_user_group :managers,
-                      reciprocal: :managed_organizations,
-                      before_remove: proc { |org, user| org.manager_guids.count > 1 }
+                      reciprocal: :managed_organizations
     define_user_group :billing_managers, reciprocal: :billing_managed_organizations
     define_user_group :auditors, reciprocal: :audited_organizations
 
@@ -121,21 +120,6 @@ module VCAP::CloudController
       validate_quota
 
       super
-    end
-
-    def after_save
-      super
-      # We cannot start billing events without the guid being assigned to the org.
-      if @is_billing_enabled
-        OrganizationStartEvent.create_from_org(self)
-        # retroactively emit start events for services
-        spaces.map(&:service_instances).flatten.each do |si|
-          ServiceCreateEvent.create_from_service_instance(si)
-        end
-        spaces.map(&:apps).flatten.each do |app|
-          AppStartEvent.create_from_app(app) if app.started?
-        end
-      end
     end
 
     def validate

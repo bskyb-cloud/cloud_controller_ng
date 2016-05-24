@@ -61,6 +61,12 @@ describe AppBitsPackage do
       create
     end
 
+    it 'expires any old packages' do
+      allow(VCAP::CloudController::Config).to receive(:config) { {} }
+      expect_any_instance_of(VCAP::CloudController::BitsExpiration).to receive(:expire_packages!)
+      create
+    end
+
     context 'when there is no package uploaded' do
       let(:compressed_path) { nil }
 
@@ -75,14 +81,22 @@ describe AppBitsPackage do
 
       it 'raises an error and removes the compressed path' do
         expect(FileUtils).to receive(:rm_f).with(compressed_path)
-        expect { create }.to raise_error
+        expect { create }.to raise_error(AppBitsPackage::PackageNotFound)
+      end
+    end
+
+    context 'when the zip file uploaded is invalid' do
+      let(:compressed_path) { File.expand_path('../../../fixtures/bad.zip', File.dirname(__FILE__)) }
+
+      it 'raises an informative error' do
+        (expect { create }).to raise_error(AppBitsPackage::InvalidZip)
       end
     end
 
     context 'when copying to the blobstore fails' do
       it 'logs the exception on the package and reraises the exception' do
         allow(package_blobstore).to receive(:cp_to_blobstore).and_raise('BOOM')
-        expect { create }.to raise_error
+        expect { create }.to raise_error('BOOM')
         expect(package.reload.state).to eq('FAILED')
         expect(package.error).to eq('BOOM')
       end
@@ -136,14 +150,75 @@ describe AppBitsPackage do
 
     it 'uploads the new app bits to the package blob store' do
       create
+
       package_blobstore.download_from_blobstore(app.guid, File.join(local_tmp_dir, 'package.zip'))
       expect(`unzip -l #{local_tmp_dir}/package.zip`).to include('bye')
     end
 
-    it 'uploads the old app bits already in the app bits cache to the package blob store' do
-      create
-      package_blobstore.download_from_blobstore(app.guid, File.join(local_tmp_dir, 'package.zip'))
-      expect(`unzip -l #{local_tmp_dir}/package.zip`).to include('path/to/content.txt')
+    describe 'cached/old app bits' do
+      it 'uploads the old app bits already in the app bits cache to the package blob store' do
+        create
+
+        package_blobstore.download_from_blobstore(app.guid, File.join(local_tmp_dir, 'package.zip'))
+        expect(`unzip -l #{local_tmp_dir}/package.zip`).to include('path/to/content.txt')
+      end
+
+      it 'defaults the files to 744 permissions' do
+        create
+
+        package_blobstore.download_from_blobstore(app.guid, File.join(local_tmp_dir, 'package.zip'))
+        `unzip #{local_tmp_dir}/package.zip path/to/content.txt -d #{local_tmp_dir}`
+        expect(sprintf('%o', File.stat(File.join(local_tmp_dir, 'path/to/content.txt')).mode)).to eq('100744')
+      end
+
+      context 'when specific file permissions are requested' do
+        let(:fingerprints_in_app_cache) do
+          path = File.join(local_tmp_dir, 'content')
+          sha = 'some_fake_sha'
+          File.open(path, 'w') { |f| f.write 'content'  }
+          global_app_bits_cache.cp_to_blobstore(path, sha)
+
+          CloudController::Blobstore::FingerprintsCollection.new([{ 'fn' => 'path/to/content.txt', 'size' => 123, 'sha1' => sha, 'mode' => mode }])
+        end
+
+        let(:mode) { '0653' }
+
+        it 'uploads the old app bits with the requested permissions' do
+          create
+
+          package_blobstore.download_from_blobstore(app.guid, File.join(local_tmp_dir, 'package.zip'))
+          `unzip #{local_tmp_dir}/package.zip path/to/content.txt -d #{local_tmp_dir}`
+          expect(sprintf('%o', File.stat(File.join(local_tmp_dir, 'path/to/content.txt')).mode)).to eq('100653')
+        end
+
+        describe 'bad file permissions' do
+          context 'when the write permissions are too-restrictive' do
+            let(:mode) { '344' }
+
+            it 'errors' do
+              expect {
+                create
+              }.to raise_error do |error|
+                expect(error.name).to eq 'AppResourcesFileModeInvalid'
+                expect(error.response_code).to eq 400
+              end
+            end
+          end
+
+          context 'when the permissions are nonsense' do
+            let(:mode) { 'banana' }
+
+            it 'errors' do
+              expect {
+                create
+              }.to raise_error do |error|
+                expect(error.name).to eq 'AppResourcesFileModeInvalid'
+                expect(error.response_code).to eq 400
+              end
+            end
+          end
+        end
+      end
     end
 
     it 'uploads the package zip to the package blob store' do
@@ -184,7 +259,7 @@ describe AppBitsPackage do
 
       it 'removes the compressed path afterwards' do
         expect(FileUtils).to receive(:rm_f).with(compressed_path)
-        expect { create }.to raise_exception
+        expect { create }.to raise_exception VCAP::Errors::ApiError, /package.+larger/i
       end
     end
 

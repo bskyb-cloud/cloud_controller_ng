@@ -16,9 +16,10 @@ module VCAP::CloudController
     many_to_one :organization, before_set: :validate_change_organization
     one_to_many :apps
     one_to_many :app_models, primary_key: :guid, key: :space_guid
-    one_to_many :events
+    one_to_many :events, primary_key: :guid, key: :space_guid
     one_to_many :service_instances
     one_to_many :managed_service_instances
+    one_to_many :service_brokers
     one_to_many :routes
     many_to_many :security_groups,
     dataset: -> {
@@ -78,7 +79,6 @@ module VCAP::CloudController
       default_users: :nullify,
       apps: :destroy,
       routes: :destroy,
-      events: :nullify,
       security_groups: :nullify,
     )
 
@@ -94,6 +94,15 @@ module VCAP::CloudController
         join(:spaces_developers, spaces_developers__space_id: :spaces__id).
           where(spaces_developers__user_id: users.map(&:id)).select_all(:spaces)
       end
+    end
+
+    def has_developer?(user)
+      developers.include?(user)
+    end
+
+    def has_member?(user)
+      members = developers | managers | auditors
+      members.include?(user)
     end
 
     def in_organization?(user)

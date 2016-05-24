@@ -23,7 +23,9 @@ resource 'Space Quota Definitions', type: [:api, :legacy_api] do
       'The maximum amount of memory in megabytes an application instance can have. (-1 represents an unlimited amount)',
       default: -1,
       example_values: [-1, 10_024]
-
+    field :app_instance_limit,
+      'How many app instances a space can create. (-1 represents an unlimited amount)',
+      example_values: [-1, 10, 23], default: -1, experimental: true
     field :organization_guid, 'The owning organization of the space quota', required: opts[:required], example_values: [Sham.guid]
   end
 
@@ -64,6 +66,8 @@ resource 'Space Quota Definitions', type: [:api, :legacy_api] do
       let(:space_guid) { space.guid }
       let(:associated_space) { VCAP::CloudController::Space.make(organization_guid: space_quota_definition.organization_guid) }
       let(:associated_space_guid) { associated_space.guid }
+
+      parameter :space_guid, 'The guid of the space'
 
       standard_model_list :space, VCAP::CloudController::SpacesController, outer_model: :space_quota_definition
       nested_model_associate :space, :space_quota_definition

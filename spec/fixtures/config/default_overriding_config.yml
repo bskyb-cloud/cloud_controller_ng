@@ -56,7 +56,7 @@ bulk_api:
   auth_user: bulk_user
   auth_password: bulk_password
 
-internal_service_hostname: cloud_controller_ng.service.consul
+internal_service_hostname: cloud_controller_ng.service.cf.internal
 internal_api:
   auth_user: internal_user
   auth_password: internal_password
@@ -97,11 +97,13 @@ resource_pool:
     provider: Local
 
 packages:
+  max_valid_packages_stored: 10
   app_package_directory_key: cc-packages
   fog_connection:
     provider: Local
 
 droplets:
+  max_staged_droplets_stored: 10
   droplet_directory_key: cc-droplets
   fog_connection:
     provider: Local
@@ -115,7 +117,6 @@ db_encryption_key: some-key
 
 loggregator:
   router: "127.0.0.1:8080"
-  shared_secret: "loggregator-secret"
 
 renderer:
   max_results_per_page: 100
@@ -126,7 +127,6 @@ default_app_disk_in_mb: 512
 maximum_app_disk_in_mb: 3
 directories:
   some: "value"
-billing_event_writing_enabled: false
 request_timeout_in_seconds: 600
 skip_cert_verify: true
 app_bits_upload_grace_period_in_seconds: 600
@@ -147,9 +147,11 @@ allowed_cors_domains:
 - http://sharon.corr
 
 users_can_select_backend: false
-diego_docker: true
 default_to_diego_backend: true
 allow_app_ssh_access: true
 
 broker_client_timeout_seconds: 120
 broker_client_default_async_poll_interval_seconds: 120
+expiration:
+  num_of_valid_packages_per_app_to_store: 10
+  num_of_staged_droplets_per_app_to_store: 10

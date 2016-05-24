@@ -3,12 +3,14 @@ require 'rspec_api_documentation/dsl'
 require 'uri'
 
 resource 'Service Instances', type: [:api, :legacy_api] do
+  tags = %w(accounting mongodb)
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let(:service_broker) { VCAP::CloudController::ServiceBroker.make }
   let(:service) { VCAP::CloudController::Service.make(service_broker: service_broker) }
   let(:service_plan) { VCAP::CloudController::ServicePlan.make(service: service, public: true) }
   let!(:service_instance) do
-    service_instance = VCAP::CloudController::ManagedServiceInstance.make(service_plan: service_plan)
+    service_instance = VCAP::CloudController::ManagedServiceInstance.make(
+      service_plan: service_plan, tags: tags)
     service_instance.service_instance_operation = VCAP::CloudController::ServiceInstanceOperation.make(
       state: 'succeeded',
       description: 'service broker-provided description'
@@ -46,20 +48,19 @@ resource 'Service Instances', type: [:api, :legacy_api] do
     response_field 'dashboard_url', 'The service broker-provided URL to access administrative features of the service instance. May be null.'
     response_field 'type', 'The type of service instance.',
       valid_values: ['managed_service_instance', 'user_provided_service_instance']
-    response_field 'last_operation', 'The status of the last operation requested on the service instance. May be null.',
-      experimental: true
+    response_field 'last_operation', 'The status of the last operation requested on the service instance. May be null.'
     response_field 'last_operation.type', 'The type of operation that was last performed or currently being performed on the service instance',
-      experimental: true,
       valid_values: ['create', 'update', 'delete']
     response_field 'last_operation.state', 'The status of the last operation or current operation being performed on the service instance.',
-      experimental: true,
       valid_values: ['in progress', 'succeeded', 'failed']
-    response_field 'last_operation.description', 'The service broker-provided description of the operation. May be null.', experimental: true
-    response_field 'last_operation.updated_at', 'The timestamp that the Cloud Controller last checked the service instance state from the broker.',
-      experimental: true
+    response_field 'last_operation.description', 'The service broker-provided description of the operation. May be null.'
+    response_field 'last_operation.updated_at', 'The timestamp that the Cloud Controller last checked the service instance state from the broker.'
     response_field 'space_url', 'The relative path to the space resource that this service instance belongs to.'
     response_field 'service_plan_url', 'The relative path to the service plan resource that this service instance belongs to.'
     response_field 'service_binding_url', 'The relative path to the service bindings that this service instance is bound to.'
+    response_field 'routes_url', 'Routes bound to the service instance. Requests to these routes will be forwarded to the service instance.',
+      experimental: true
+    response_field 'tags', 'A list of tags for the service instance'
 
     standard_model_list :managed_service_instance, VCAP::CloudController::ServiceInstancesController, path: :service_instance
     standard_model_get :managed_service_instance, path: :service_instance, nested_attributes: [:space, :service_plan]
@@ -70,11 +71,13 @@ resource 'Service Instances', type: [:api, :legacy_api] do
       field :space_guid, 'The guid of the space in which the instance will be created', required: true
       field :parameters, 'Arbitrary parameters to pass along to the service broker. Must be a JSON object', required: false
       field :gateway_data, 'Configuration information for the broker gateway in v1 services', required: false, deprecated: true
+      field :tags, 'A list of tags for the service instance',
+            required: false, example_values: [%w(db), tags], default: []
 
       param_description = <<EOF
 Set to `true` if the client allows asynchronous provisioning. The cloud controller may respond before the service is ready for use.
 EOF
-      parameter :accepts_incomplete, param_description, valid_values: [true, false], experimental: true
+      parameter :accepts_incomplete, param_description, valid_values: [true, false]
 
       before do
         uri = URI(service_broker.broker_url)
@@ -92,7 +95,8 @@ EOF
           service_plan_guid: service_plan.guid,
           parameters: {
             the_service_broker: 'wants this object'
-          }
+          },
+          tags: tags
         }
 
         client.post '/v2/service_instances?accepts_incomplete=true', MultiJson.dump(request_hash, pretty: true), headers
@@ -110,11 +114,13 @@ EOF
       field :name, 'The new name for the service instance', required: false, example_values: ['my-new-service-instance']
       field :service_plan_guid, 'The new plan guid for the service instance', required: false, example_values: ['6c4bd80f-4593-41d1-a2c9-b20cb65ec76e']
       field :parameters, 'Arbitrary parameters to pass along to the service broker. Must be a JSON object', required: false
+      field :tags, 'A list of tags for the service instance. NOTE: Updating the tags will overwrite any old tags.',
+            required: false, example_values: [['db'], ['accounting', 'mongodb']]
 
       param_description = <<EOF
 Set to `true` if the client allows asynchronous provisioning. The cloud controller may respond before the service is ready for use.
 EOF
-      parameter :accepts_incomplete, param_description, valid_values: [true, false], experimental: true
+      parameter :accepts_incomplete, param_description, valid_values: [true, false]
 
       before do
         uri = URI(service_broker.broker_url)
@@ -135,15 +141,22 @@ EOF
         client.put "/v2/service_instances/#{service_instance.guid}?accepts_incomplete=true", request_json, headers
 
         expect(status).to eq 202
+        expect(service_instance.reload.last_operation.state).to eq 'in progress'
         expect(service_instance.reload.service_plan.guid).to eq old_plan.guid
       end
     end
 
     delete '/v2/service_instances/:guid' do
-      param_description = <<EOF
+      accepts_incomplete_description = <<EOF
 Set to `true` if the client allows asynchronous provisioning. The cloud controller may respond before the service is ready for use.
 EOF
-      parameter :accepts_incomplete, param_description, valid_values: [true, false], experimental: true
+      purge_description = <<EOF
+Recursively remove a service instance and child objects from Cloud Foundry database without making requests to a service broker.
+The user must have the cloud_controller.admin scope on their OAuth token in order to perform a purge.
+EOF
+
+      parameter :accepts_incomplete, accepts_incomplete_description, valid_values: [true, false]
+      parameter :purge, purge_description, valid_values: [true, false]
 
       before do
         uri = URI(service_broker.broker_url)
@@ -171,6 +184,41 @@ EOF
       end
 
       standard_model_list :service_binding, VCAP::CloudController::ServiceBindingsController, outer_model: :service_instance
+    end
+
+    describe 'Routes' do
+      let(:service_instance) { VCAP::CloudController::ManagedServiceInstance.make(:routing) }
+      let(:route) { VCAP::CloudController::Route.make(space: service_instance.space) }
+      let!(:route_binding) { VCAP::CloudController::RouteBinding.make(service_instance: service_instance) }
+
+      put '/v2/service_instances/:service_instance_guid/routes/:route_guid' do
+        before do
+          stub_bind(service_instance)
+        end
+
+        example 'Binding a service instance to a route (experimental)' do
+          client.put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}.to_json, headers
+
+          expect(status).to eq(201)
+          expect(parsed_response['metadata']['guid']).to eq(service_instance.guid)
+          expect(parsed_response['entity']['routes_url']).to eq("/v2/service_instances/#{service_instance.guid}/routes")
+        end
+      end
+
+      delete '/v2/service_instances/:service_instance_guid/routes/:route_guid' do
+        before do
+          binding = VCAP::CloudController::RouteBinding.make(service_instance: service_instance, route: route)
+          stub_unbind(binding)
+        end
+
+        example 'Unbinding a service instance from a route (experimental)' do
+          client.delete "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}.to_json, headers
+          expect(status).to eq(204)
+          expect(response_body).to be_empty
+        end
+      end
+
+      standard_model_list :route, VCAP::CloudController::RoutesController, outer_model: :service_instance
     end
   end
 

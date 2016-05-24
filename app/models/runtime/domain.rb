@@ -73,7 +73,7 @@ module VCAP::CloudController
 
     def validate
       validates_presence :name
-      validates_unique :name
+      validates_unique :name, dataset: Domain.dataset
 
       validates_format DOMAIN_REGEX, :name
       validates_length_range 3..255, :name
@@ -117,6 +117,8 @@ module VCAP::CloudController
         dataset.db[:organizations_auditors].where(user_id: user.id).select(:organization_id)
       ).union(
         Space.dataset.join_table(:inner, :spaces_developers, space_id: :spaces__id, user_id: user.id).select(:organization_id)
+      ).union(
+        Space.dataset.join_table(:inner, :spaces_auditors, space_id: :spaces__id, user_id: user.id).select(:organization_id)
       ).select(:organization_id)
 
       shared_private_domains_filter = dataset.db[:organizations_private_domains].where(organization_id: organizations_filter).select(:private_domain_id)

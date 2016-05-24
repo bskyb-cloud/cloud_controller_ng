@@ -16,11 +16,20 @@ module VCAP::CloudController
         min_recommended_cli_version: @config[:info][:min_recommended_cli_version],
         api_version: VCAP::CloudController::Constants::API_VERSION,
         app_ssh_endpoint: @config[:info][:app_ssh_endpoint],
-        app_ssh_host_key_fingerprint: @config[:info][:app_ssh_host_key_fingerprint]
+        app_ssh_host_key_fingerprint: @config[:info][:app_ssh_host_key_fingerprint],
+        app_ssh_oauth_client: @config[:info][:app_ssh_oauth_client],
       }
+
+      if @config[:routing_api] && @config[:routing_api][:url]
+        info[:routing_endpoint] = @config[:routing_api][:url]
+      end
 
       if @config[:loggregator] && @config[:loggregator][:url]
         info[:logging_endpoint] = @config[:loggregator][:url]
+      end
+
+      if @config[:doppler][:enabled]
+        info[:doppler_logging_endpoint] = @config[:doppler][:url]
       end
 
       if @config[:info][:custom]

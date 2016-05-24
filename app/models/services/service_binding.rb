@@ -49,7 +49,7 @@ module VCAP::CloudController
     end
 
     def to_hash(opts={})
-      if !VCAP::CloudController::SecurityContext.admin? && !app.space.developers.include?(VCAP::CloudController::SecurityContext.current_user)
+      if !VCAP::CloudController::SecurityContext.admin? && !app.space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
         opts.merge!({ redact: ['credentials'] })
       end
       super(opts)
@@ -93,6 +93,10 @@ module VCAP::CloudController
       val = super
       val = MultiJson.load(val) if val
       val
+    end
+
+    def required_parameters
+      { app_guid: app_guid }
     end
 
     def logger

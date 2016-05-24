@@ -12,6 +12,8 @@ module VCAP::CloudController
         process.lock!
 
         process.instances = message.instances if message.requested?(:instances)
+        process.memory = message.memory_in_mb if message.requested?(:memory_in_mb)
+        process.disk_quota = message.disk_in_mb if message.requested?(:disk_in_mb)
 
         process.save
 
@@ -20,7 +22,7 @@ module VCAP::CloudController
           process.space,
           @user.guid,
           @user_email,
-          message.as_json({ only: message.requested_keys.map(&:to_s) })
+          message.audit_hash
         )
       end
     rescue Sequel::ValidationFailed => e

@@ -7,13 +7,13 @@ module VCAP::CloudController
         @logger_prefix = logger_prefix
       end
 
-      def staging_complete(staging_guid, payload)
+      def staging_complete(entity_or_id, payload)
         logger.info(@logger_prefix + 'finished', response: payload)
 
         if payload[:error]
-          handle_failure(staging_guid, payload)
+          handle_failure(entity_or_id, payload)
         else
-          handle_success(staging_guid, payload)
+          handle_success(entity_or_id, payload)
         end
       end
 
@@ -30,23 +30,29 @@ module VCAP::CloudController
         app = get_app(staging_guid)
         return if app.nil?
 
-        error = payload[:error]
-        id = error[:id] || 'StagingError'
+        error   = payload[:error]
+        id      = error[:id] || 'StagingError'
         message = error[:message]
         app.mark_as_failed_to_stage(id)
         Loggregator.emit_error(app.guid, "Failed to stage application: #{message}")
       end
 
       def handle_success(staging_guid, payload)
+        app = get_app(staging_guid)
+        return if app.nil?
+
         begin
+          if payload[:result]
+            payload[:result][:process_types] ||= {}
+          end
+
           self.class.success_parser.validate(payload)
         rescue Membrane::SchemaValidationError => e
           logger.error('diego.staging.success.invalid-message', staging_guid: staging_guid, payload: payload, error: e.to_s)
+          Loggregator.emit_error(app.guid, 'Malformed message from Diego stager')
+
           raise Errors::ApiError.new_from_details('InvalidRequest', payload)
         end
-
-        app = get_app(staging_guid)
-        return if app.nil?
 
         begin
           save_staging_result(app, payload)

@@ -395,36 +395,6 @@ describe CloudController::DependencyLocator do
     end
   end
 
-  describe '#quota_usage_populating_renderer' do
-    it 'returns collection renderer with a QuotaUsagePopulator transformer' do
-      renderer = locator.quota_usage_populating_renderer
-      expect(renderer.transformer).to be_a(VCAP::CloudController::QuotaUsagePopulator)
-    end
-
-    it 'returns object renderer' do
-      expect(locator.quota_usage_populating_renderer).to be_an_instance_of(VCAP::CloudController::RestController::ObjectRenderer)
-    end
-
-    it 'returns object renderer configured via config' do
-      eager_loader = instance_of(VCAP::CloudController::RestController::SecureEagerLoader)
-      serializer = instance_of(VCAP::CloudController::RestController::PreloadedObjectSerializer)
-      opt = {
-        max_inline_relations_depth: 100_002,
-      }
-
-      TestConfig.override(renderer: opt)
-
-      expect(VCAP::CloudController::RestController::ObjectRenderer).
-        to receive(:new).
-        with(eager_loader, serializer, an_instance_of(Hash)) do |loader, ser, opts|
-          expect(opts[:max_inline_relations_depth]).to eql(100_002)
-          expect(opts[:transformer]).to be_an_instance_of(VCAP::CloudController::QuotaUsagePopulator)
-        end
-
-      locator.quota_usage_populating_renderer
-    end
-  end
-
   describe '#username_lookup_uaa_client' do
     it 'returns a uaa client with credentials for lookuping up usernames' do
       uaa_client = locator.username_lookup_uaa_client
@@ -440,6 +410,36 @@ describe CloudController::DependencyLocator do
         uaa_client = locator.username_lookup_uaa_client
         expect(uaa_client.options[:skip_ssl_validation]).to be true
       end
+    end
+  end
+
+  describe '#routing_api_client' do
+    let(:config) do
+      TestConfig.override(routing_api:
+                          {
+        url: 'routing-api-url',
+        routing_client_name: 'routing-client',
+        routing_client_secret: 'routing-secret',
+      }
+                         )
+      TestConfig.config
+    end
+
+    it 'returns a routing_api_client' do
+      name = config[:routing_api][:routing_client_name]
+      secret = config[:routing_api][:routing_client_secret]
+      uaa = config[:uaa][:url]
+      opts = { skip_ssl_validation: config[:skip_cert_verify] }
+
+      token_issuer = double('token_issuer')
+      expect(CF::UAA::TokenIssuer).to receive(:new).with(uaa, name, secret, opts).and_return(token_issuer)
+
+      client = locator.routing_api_client
+
+      expect(client).to be_an_instance_of(VCAP::CloudController::RoutingApi::Client)
+      expect(client.token_issuer).to eq token_issuer
+      expect(client.routing_api_uri.to_s).to eq(config[:routing_api][:url])
+      expect(client.skip_cert_verify).to eq(config[:skip_cert_verify])
     end
   end
 

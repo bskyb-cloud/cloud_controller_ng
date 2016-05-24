@@ -56,7 +56,8 @@ module VCAP::CloudController
     many_to_one :service_plan
 
     export_attributes :name, :credentials, :service_plan_guid,
-      :space_guid, :gateway_data, :dashboard_url, :type, :last_operation
+      :space_guid, :gateway_data, :dashboard_url, :type, :last_operation,
+      :tags
 
     import_attributes :name, :service_plan_guid,
       :space_guid, :gateway_data
@@ -64,6 +65,8 @@ module VCAP::CloudController
     strip_attributes :name
 
     plugin :after_initialize
+
+    serialize_attributes :json, :tags
 
     # This only applies to V1 services
     alias_attribute :broker_provided_id, :gateway_name
@@ -89,21 +92,11 @@ module VCAP::CloudController
       super
       validates_presence :service_plan
       validation_policies.map(&:validate)
+      validate_tags_length
     end
 
     def last_operation
       service_instance_operation
-    end
-
-    def after_create
-      super
-      ServiceCreateEvent.create_from_service_instance(self)
-    end
-
-    def after_destroy
-      super
-
-      ServiceDeleteEvent.create_from_service_instance(self)
     end
 
     def after_initialize
@@ -154,6 +147,14 @@ module VCAP::CloudController
       service_plan.service
     end
 
+    def service_broker
+      service_plan.service_broker
+    end
+
+    def route_service?
+      service.requires.include? 'route_forwarding'
+    end
+
     def create_snapshot(name)
       NGServiceGatewayClient.new(service, gateway_name).create_snapshot(name)
     end
@@ -171,7 +172,18 @@ module VCAP::CloudController
     end
 
     def tags
-      service.tags
+      super || []
+    end
+
+    def dashboard_url
+      unless VCAP::CloudController::SecurityContext.admin? || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
+        return ''
+      end
+      super
+    end
+
+    def merged_tags
+      (service.tags + tags).uniq
     end
 
     def terminal_state?
@@ -185,19 +197,18 @@ module VCAP::CloudController
       false
     end
 
-    def save_with_new_operation(attributes_to_update)
-      ManagedServiceInstance.db.transaction do
-        lock!
+    def save_with_new_operation(instance_attributes, last_operation)
+      update_attributes(instance_attributes)
 
-        instance_attrs, operation_attrs = extract_operation_attrs(attributes_to_update)
-        update_attributes(instance_attrs)
-
-        if self.last_operation
-          self.last_operation.destroy
-        end
-
-        self.service_instance_operation = ServiceInstanceOperation.create(operation_attrs)
+      if self.last_operation
+        self.last_operation.destroy
       end
+
+      self.service_instance_operation = ServiceInstanceOperation.new(last_operation)
+    end
+
+    def update_service_instance(attributes_to_update)
+      update_attributes(attributes_to_update)
     end
 
     def save_and_update_operation(attributes_to_update)
@@ -213,20 +224,26 @@ module VCAP::CloudController
       end
     end
 
-    private
-
-    def update_attributes(instance_attrs)
-      set_all(instance_attrs)
-      save
+    def extract_operation_attrs(attributes_to_update)
+      operation_attrs = attributes_to_update.delete(:last_operation)
+      [attributes_to_update, operation_attrs]
     end
 
     def update_last_operation(operation_attrs)
       self.last_operation.update_attributes operation_attrs
     end
 
-    def extract_operation_attrs(attributes_to_update)
-      operation_attrs = attributes_to_update.delete(:last_operation)
-      [attributes_to_update, operation_attrs]
+    private
+
+    def update_attributes(instance_attrs)
+      set_all(instance_attrs)
+      save_changes
+    end
+
+    def validate_tags_length
+      if tags.join('').length > 255
+        @errors[:tags] = [:too_long]
+      end
     end
   end
 end

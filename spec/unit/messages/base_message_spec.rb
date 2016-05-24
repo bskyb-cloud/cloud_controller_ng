@@ -5,90 +5,180 @@ module VCAP::CloudController
   describe BaseMessage do
     describe '#requested?' do
       it 'returns true if the key was requested, false otherwise' do
-        message = BaseMessage.new({ requested: 'thing' })
+        FakeClass = Class.new(BaseMessage) do
+          def allowed_keys
+            []
+          end
+        end
+
+        message = FakeClass.new({ requested: 'thing' })
 
         expect(message.requested?(:requested)).to be_truthy
         expect(message.requested?(:notrequested)).to be_falsey
       end
     end
 
-    describe 'additional keys validation' do
-      class AdditionalKeysMessage < VCAP::CloudController::BaseMessage
-        validates_with NoAdditionalKeysValidator
-
-        attr_accessor :allowed
+    describe '#audit_hash' do
+      class AuditMessage < BaseMessage
+        attr_accessor :field1, :field2
 
         def allowed_keys
-          [:allowed]
+          [:field1, :field2]
+        end
+      end
+
+      it 'returns only requested keys in a json object' do
+        message  = AuditMessage.new({ field1: 'value1' })
+        response = message.audit_hash
+        expect(response).to eq({ 'field1' => 'value1' })
+      end
+
+      it 'recursively includes keys' do
+        message  = AuditMessage.new({ field1: 'value1', field2: { 'subfield' => 'subfield' } })
+        response = message.audit_hash
+        expect(response).to eq({ 'field1' => 'value1', 'field2' => { 'subfield' => 'subfield' } })
+      end
+    end
+
+    describe '#to_param_hash' do
+      ParamsClass = Class.new(BaseMessage) do
+        attr_accessor :array_field, :num_field, :string_field, :nil_field
+
+        def allowed_keys
+          [:array_field, :num_field, :string_field, :nil_field]
+        end
+      end
+
+      let(:opts) do
+        {
+            array_field:  ['st ate1', 'sta,te2'],
+            num_field:    1.2,
+            string_field: 'stringval&',
+            nil_field:    nil
+        }
+      end
+
+      it 'returns query param hash with escaped array members' do
+        expected_params = {
+          array_field:  'st+ate1,sta%2Cte2',
+          num_field:    1.2,
+          string_field: 'stringval&',
+          nil_field:    nil,
+        }
+        expect(ParamsClass.new(opts).to_param_hash).to eq(expected_params)
+      end
+
+      it 'does not return params that are not requested during initialization' do
+        opts.delete(:nil_field)
+        expected_params = {
+          array_field:  'st+ate1,sta%2Cte2',
+          num_field:    1.2,
+          string_field: 'stringval&',
+        }
+        expect(ParamsClass.new(opts).to_param_hash).to eq(expected_params)
+      end
+
+      it 'can exclude params' do
+        expected_params = {
+          array_field:  'st+ate1,sta%2Cte2',
+          string_field: 'stringval&',
+          nil_field:    nil,
+        }
+        expect(ParamsClass.new(opts).to_param_hash({ exclude: [:num_field] })).to eq(expected_params)
+      end
+    end
+
+    describe '.to_array!' do
+      let(:escaped_comma) { '%2C' }
+      let(:params) do
+        {
+            array_field:                     'state1,state2',
+            array_with_comma_in_value_field: "st ate1,sta#{escaped_comma}te2",
+            array_with_nil_field:            'state1,state2,',
+            num_field:                       1.2,
+            string_field:                    'stringval&',
+            nil_field:                       nil
+        }
+      end
+
+      it 'separates on commas' do
+        expect(BaseMessage.to_array!(params, :array_field)).to eq(['state1', 'state2'])
+      end
+
+      it 'url query decodes individual array values' do
+        expect(BaseMessage.to_array!(params, :array_with_comma_in_value_field)).to eq(['st ate1', 'sta,te2'])
+      end
+
+      it 'handles nil array values' do
+        expect(BaseMessage.to_array!(params, :array_with_nil_field)).to eq(['state1', 'state2'])
+      end
+
+      it 'handles single numeric values' do
+        expect(BaseMessage.to_array!(params, :num_field)).to eq(['1.2'])
+      end
+
+      it 'handles single string values' do
+        expect(BaseMessage.to_array!(params, :string_field)).to eq(['stringval&'])
+      end
+
+      it 'handles single nil values' do
+        expect(BaseMessage.to_array!(params, :nil_field)).to eq(nil)
+      end
+    end
+
+    describe 'additional keys validation' do
+      let(:fake_class) do
+        Class.new(BaseMessage) do
+          validates_with VCAP::CloudController::BaseMessage::NoAdditionalKeysValidator
+
+          def allowed_keys
+            [:allowed]
+          end
+
+          def allowed=(_)
+          end
         end
       end
 
       it 'is valid with an allowed message' do
-        message = AdditionalKeysMessage.new({ allowed: 'something' })
+        message = fake_class.new({ allowed: 'something' })
 
         expect(message).to be_valid
       end
 
       it 'is NOT valid with not allowed keys in the message' do
-        message = AdditionalKeysMessage.new({ notallowed: 'something', extra: 'stuff' })
+        message = fake_class.new({ notallowed: 'something', extra: 'stuff' })
 
         expect(message).to be_invalid
         expect(message.errors.full_messages[0]).to include("Unknown field(s): 'notallowed', 'extra'")
       end
     end
 
-    describe 'guid validation' do
-      class GuidMessage < VCAP::CloudController::BaseMessage
-        attr_accessor :guid
-        validates :guid, guid: true
+    describe 'additional params validation' do
+      let(:fake_class) do
+        Class.new(BaseMessage) do
+          validates_with VCAP::CloudController::BaseMessage::NoAdditionalParamsValidator
 
-        def allowed_keys
-          [:guid]
+          def allowed_keys
+            [:allowed]
+          end
+
+          def allowed=(_)
+          end
         end
       end
 
-      context 'when guid is not a string' do
-        let(:params) { { guid: 4 } }
+      it 'is valid with an allowed message' do
+        message = fake_class.new({ allowed: 'something' })
 
-        it 'is not valid' do
-          message = GuidMessage.new(params)
-
-          expect(message).not_to be_valid
-          expect(message.errors.full_messages[0]).to include('must be a string')
-        end
+        expect(message).to be_valid
       end
 
-      context 'when guid is nil' do
-        let(:params) { { guid: 4 } }
+      it 'is NOT valid with not allowed keys in the message' do
+        message = fake_class.new({ notallowed: 'something', extra: 'stuff' })
 
-        it 'is not valid' do
-          message = GuidMessage.new(params)
-
-          expect(message).not_to be_valid
-          expect(message.errors.full_messages[0]).to include('must be a string')
-        end
-      end
-
-      context 'when guid is too long' do
-        let(:params) { { guid: 'a' * 201 } }
-
-        it 'is not valid' do
-          message = GuidMessage.new(params)
-
-          expect(message).not_to be_valid
-          expect(message.errors.full_messages[0]).to include('must be between 1 and 200 characters')
-        end
-      end
-
-      context 'when guid is empty' do
-        let(:params) { { guid: '' } }
-
-        it 'is not valid' do
-          message = GuidMessage.new(params)
-
-          expect(message).not_to be_valid
-          expect(message.errors.full_messages[0]).to include('must be between 1 and 200 characters')
-        end
+        expect(message).to be_invalid
+        expect(message.errors.full_messages[0]).to include("Unknown query parameter(s): 'notallowed', 'extra'")
       end
     end
   end

@@ -46,6 +46,7 @@ module VCAP::CloudController
     guid     { Sham.guid }
     state    { VCAP::CloudController::DropletModel::STAGING_STATE }
     app_guid { AppModel.make.guid }
+    buildpack_lifecycle_data  { BuildpackLifecycleDataModel.make(droplet: object.save) }
   end
 
   User.blueprint do
@@ -130,6 +131,10 @@ module VCAP::CloudController
   Service.blueprint(:v2) do
   end
 
+  Service.blueprint(:routing) do
+    requires { ['route_forwarding'] }
+  end
+
   ServiceInstance.blueprint do
     name              { Sham.name }
     credentials       { Sham.service_credentials }
@@ -157,9 +162,22 @@ module VCAP::CloudController
   ManagedServiceInstance.blueprint(:v2) do
   end
 
+  ManagedServiceInstance.blueprint(:routing) do
+    service_plan      { ServicePlan.make(:routing) }
+  end
+
   UserProvidedServiceInstance.blueprint do
     name              { Sham.name }
     credentials       { Sham.service_credentials }
+    syslog_drain_url  { Sham.url }
+    space             { Space.make }
+    is_gateway_service { false }
+  end
+
+  UserProvidedServiceInstance.blueprint(:routing) do
+    name              { Sham.name }
+    credentials       { Sham.service_credentials }
+    route_service_url { Sham.url }
     syslog_drain_url  { Sham.url }
     space             { Space.make }
     is_gateway_service { false }
@@ -185,6 +203,12 @@ module VCAP::CloudController
     stack             { Stack.make }
     instances         { 1 }
     type              { 'web' }
+  end
+
+  RouteBinding.blueprint do
+    service_instance  { ManagedServiceInstance.make(:routing) }
+    route { Route.make space: service_instance.space }
+    route_service_url { Sham.url }
   end
 
   ServiceBinding.blueprint do
@@ -233,15 +257,13 @@ module VCAP::CloudController
   ServicePlan.blueprint(:v2) do
   end
 
+  ServicePlan.blueprint(:routing) do
+    service { Service.make(:routing) }
+  end
+
   ServicePlanVisibility.blueprint do
     service_plan { ServicePlan.make }
     organization { Organization.make }
-  end
-
-  BillingEvent.blueprint do
-    timestamp         { Time.now.utc }
-    organization_guid { Sham.guid }
-    organization_name { Sham.name }
   end
 
   Event.blueprint do
@@ -256,31 +278,6 @@ module VCAP::CloudController
     space      { Space.make }
   end
 
-  OrganizationStartEvent.blueprint do
-    BillingEvent.blueprint
-  end
-
-  AppStartEvent.blueprint do
-    BillingEvent.blueprint
-    space_guid        { Sham.guid }
-    space_name        { Sham.name }
-    app_guid          { Sham.guid }
-    app_name          { Sham.name }
-    app_run_id        { Sham.guid }
-    app_plan_name     { 'free' }
-    app_memory        { 256 }
-    app_instance_count { 1 }
-  end
-
-  AppStopEvent.blueprint do
-    BillingEvent.blueprint
-    space_guid        { Sham.guid }
-    space_name        { Sham.name }
-    app_guid          { Sham.guid }
-    app_name          { Sham.name }
-    app_run_id        { Sham.guid }
-  end
-
   AppEvent.blueprint do
     app               { AppFactory.make }
     instance_guid     { Sham.guid }
@@ -288,28 +285,6 @@ module VCAP::CloudController
     exit_status       { Random.rand(256) }
     exit_description  { Sham.description }
     timestamp         { Time.now.utc }
-  end
-
-  ServiceCreateEvent.blueprint do
-    BillingEvent.blueprint
-    space_guid        { Sham.guid }
-    space_name        { Sham.name }
-    service_instance_guid { Sham.guid }
-    service_instance_name { Sham.name }
-    service_guid      { Sham.guid }
-    service_label     { Sham.label }
-    service_provider  { Sham.provider }
-    service_version   { Sham.version }
-    service_plan_guid { Sham.guid }
-    service_plan_name { Sham.name }
-  end
-
-  ServiceDeleteEvent.blueprint do
-    BillingEvent.blueprint
-    space_guid        { Sham.guid }
-    space_name        { Sham.name }
-    service_instance_guid { Sham.guid }
-    service_instance_name { Sham.name }
   end
 
   QuotaDefinition.blueprint do
@@ -327,6 +302,11 @@ module VCAP::CloudController
     enabled { true }
     filename { Sham.name }
     locked { false }
+  end
+
+  BuildpackLifecycleDataModel.blueprint do
+    buildpack { Sham.name }
+    stack { Sham.name }
   end
 
   AppUsageEvent.blueprint do
@@ -408,5 +388,8 @@ module VCAP::CloudController
   end
 
   TestModelSecondLevel.blueprint do
+  end
+
+  TestModelRedact.blueprint do
   end
 end

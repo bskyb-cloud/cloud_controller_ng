@@ -9,6 +9,16 @@ module VCAP::CloudController
       it { is_expected.to have_associated :space, associated_instance: ->(route) { Space.make(organization: route.domain.owning_organization) } }
       it { is_expected.to have_associated :apps, associated_instance: ->(route) { App.make(space: route.space) } }
 
+      context 'when bound to a service instance' do
+        let(:route) { Route.make }
+        let(:service_instance) { ManagedServiceInstance.make(:routing, space: route.space) }
+        let!(:route_binding) { RouteBinding.make(route: route, service_instance: service_instance) }
+
+        it 'has a service instance' do
+          expect(route.service_instance).to eq service_instance
+        end
+      end
+
       context 'changing space' do
         context 'apps' do
           it 'succeeds with no mapped apps' do
@@ -68,7 +78,7 @@ module VCAP::CloudController
           it "fails if it's different" do
             route        = Route.make(domain: SharedDomain.make)
             route.domain = SharedDomain.make
-            expect { route.save }.to raise_error
+            expect(route.valid?).to be_falsey
           end
         end
 
@@ -84,18 +94,59 @@ module VCAP::CloudController
           it 'fails if its a different domain' do
             route        = Route.make(space: space, domain: domain)
             route.domain = PrivateDomain.make(owning_organization: space.organization)
-            expect { route.save }.to raise_error
+            expect(route.valid?).to be_falsey
           end
         end
       end
     end
 
     describe 'Validations' do
-      let(:route) { Route.make }
+      let!(:route) { Route.make }
 
       it { is_expected.to validate_presence :domain }
       it { is_expected.to validate_presence :space }
       it { is_expected.to validate_presence :host }
+
+      context 'route ports' do
+        let(:domain) { SharedDomain.make }
+        let(:route) { Route.make(domain: domain, host: '', port: 1) }
+
+        it 'validates that the port is greater than equal to 0' do
+          route.port = -1
+          expect(route).not_to be_valid
+        end
+
+        it 'validates that the port is less than 65536' do
+          route.port = 65536
+          expect(route).not_to be_valid
+        end
+
+        it 'does not require a host' do
+          route.host = ''
+          route.port = 15000
+          expect(route).to be_valid
+        end
+
+        it 'requires a host or port' do
+          route.host = nil
+          route.port = nil
+          expect(route).not_to be_valid
+        end
+
+        context 'when port is specified' do
+          it 'does not validate uniqueness of host' do
+            expect {
+              Route.make(port: 10, host: '', domain: domain)
+            }.not_to raise_error
+          end
+
+          it 'validates the uniqueness of the port' do
+            new_route = Route.new(port: 1, host: '', domain: domain)
+            expect(new_route).not_to be_valid
+            expect(new_route.errors.on([:domain_id, :port])).to include :unique
+          end
+        end
+      end
 
       context 'unescaped paths' do
         it 'validates uniqueness' do
@@ -275,9 +326,10 @@ module VCAP::CloudController
           space.space_quota_definition = space_quota
         end
 
-        subject(:route) { Route.new(space: space) }
+        let(:domain) { PrivateDomain.make(owning_organization: space.organization) }
+        subject(:route) { Route.new(space: space, domain: domain, host: 'bar') }
 
-        context 'for organizatin quotas' do
+        context 'for organization quotas' do
           context 'on create' do
             context 'when not exceeding total allowed routes' do
               before do
@@ -306,12 +358,14 @@ module VCAP::CloudController
 
           context 'on update' do
             it 'should not validate the total routes limit if already existing' do
-              expect {
-                org_quota.total_routes = 0
-                org_quota.save
-              }.not_to change {
-                subject.valid?
-              }
+              subject.save
+
+              expect(subject).to be_valid
+
+              org_quota.total_routes = 0
+              org_quota.save
+
+              expect(subject).to be_valid
             end
           end
         end
@@ -347,12 +401,14 @@ module VCAP::CloudController
 
           context 'on update' do
             it 'should not validate the total routes limit if already existing' do
-              expect {
-                space_quota.total_routes = 0
-                space_quota.save
-              }.not_to change {
-                subject.valid?
-              }
+              subject.save
+
+              expect(subject).to be_valid
+
+              space_quota.total_routes = 0
+              space_quota.save
+
+              expect(subject).to be_valid
             end
           end
         end
@@ -378,8 +434,8 @@ module VCAP::CloudController
     end
 
     describe 'Serialization' do
-      it { is_expected.to export_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid}
-      it { is_expected.to import_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :app_guids}
+      it { is_expected.to export_attributes :host, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :path, :service_instance_guid, :port }
+      it { is_expected.to import_attributes :host, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :app_guids, :path, :port }
     end
 
     describe 'instance methods' do
@@ -429,6 +485,49 @@ module VCAP::CloudController
         end
       end
 
+      describe 'route_service_url' do
+        context 'with a route_binding' do
+          let(:route_binding) { RouteBinding.make }
+          let(:route) { route_binding.route }
+
+          it 'returns the route_service_url associated with the binding' do
+            expect(route.route_service_url).to eq route_binding.route_service_url
+          end
+        end
+
+        context 'without a route_binding' do
+          let(:route) { Route.make }
+          it 'returns nil' do
+            expect(route.route_service_url).to be_nil
+          end
+        end
+      end
+
+      describe '#uri' do
+        context 'for a non-nil path' do
+          it 'should return the fqdn with path' do
+            r = Route.make(
+              host: 'www',
+              domain: domain,
+              space: space,
+              path: '/path'
+            )
+            expect(r.uri).to eq("www.#{domain.name}/path")
+          end
+        end
+
+        context 'for a nil path' do
+          it 'should return the fqdn' do
+            r = Route.make(
+              host: 'www',
+              domain: domain,
+              space: space
+            )
+            expect(r.uri).to eq("www.#{domain.name}")
+          end
+        end
+      end
+
       describe '#as_summary_json' do
         it 'returns a hash containing the route id, host, and domain details' do
           r = Route.make(
@@ -466,6 +565,31 @@ module VCAP::CloudController
           end
         end
       end
+
+      describe 'all_apps_diego?' do
+        let(:diego_app) { AppFactory.make(diego: true) }
+        let(:route) { Route.make(space: diego_app.space, domain: SharedDomain.make) }
+
+        before do
+          diego_app.add_route(route)
+        end
+
+        it 'returns true' do
+          expect(route.all_apps_diego?).to eq(true)
+        end
+
+        context 'when some apps are not using diego' do
+          let(:non_diego_app) { AppFactory.make(diego: false, space: diego_app.space) }
+
+          before do
+            non_diego_app.add_route(route)
+          end
+
+          it 'returns false' do
+            expect(route.all_apps_diego?).to eq(false)
+          end
+        end
+      end
     end
 
     describe 'relations' do
@@ -495,6 +619,28 @@ module VCAP::CloudController
           )
         }.to raise_error Sequel::ValidationFailed
       end
+
+      context 'when docker is disabled' do
+        subject(:route) { Route.make(space: space_a, domain: domain_a) }
+
+        context 'when docker app is added to a route' do
+          before do
+            FeatureFlag.create(name: 'diego_docker', enabled: true)
+          end
+
+          let!(:docker_app) do
+            AppFactory.make(space: space_a, docker_image: 'some-image', state: 'STARTED')
+          end
+
+          before do
+            FeatureFlag.find(name: 'diego_docker').update(enabled: false)
+          end
+
+          it 'should associate with the docker app' do
+            expect { route.add_app(docker_app) }.not_to raise_error
+          end
+        end
+      end
     end
 
     describe '#destroy' do
@@ -514,6 +660,41 @@ module VCAP::CloudController
         expect(Dea::Client).to receive(:update_uris).with(app2)
 
         route.destroy
+      end
+
+      context 'with route bindings' do
+        let(:route_binding) { RouteBinding.make }
+        let(:route) { route_binding.route }
+        let(:app) { AppFactory.make(space: route.space, diego: true) }
+
+        before do
+          app.add_route(route)
+          stub_unbind(route_binding)
+        end
+
+        it 'deletes any associated route_bindings' do
+          route_binding_guid = route_binding.guid
+
+          route.destroy
+          expect(RouteBinding.find(guid: route_binding_guid)).to be_nil
+          expect(app.reload.routes).to be_empty
+        end
+
+        context 'when deleting the route binding errors' do
+          before do
+            stub_unbind(route_binding, status: 500)
+          end
+
+          it 'does not delete the route or associated data and raises an error' do
+            route_binding_guid = route_binding.guid
+
+            expect {
+              route.destroy
+            }.to raise_error VCAP::Services::ServiceBrokers::V2::Errors::ServiceBrokerBadResponse
+            expect(RouteBinding.find(guid: route_binding_guid)).to eq route_binding
+            expect(app.reload.routes[0]).to eq route
+          end
+        end
       end
     end
 

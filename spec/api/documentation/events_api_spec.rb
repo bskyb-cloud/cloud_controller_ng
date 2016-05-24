@@ -37,6 +37,8 @@ resource 'Events', type: [:api, :legacy_api] do
     audit.user_provided_service_instance.delete
     audit.service_binding.create
     audit.service_binding.delete
+    audit.service_key.create
+    audit.service_key.delete
   )
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   authenticated_request
@@ -88,7 +90,12 @@ resource 'Events', type: [:api, :legacy_api] do
         'instances' => 1,
         'memory' => 84,
         'state' => 'STOPPED',
-        'environment_json' => { 'super' => 'secret' }
+        'environment_json' => { 'super' => 'secret' },
+        'docker_credentials_json' => {
+          'docker_user' => 'user',
+          'docker_password' => 'password',
+          'docker_email' => 'email'
+        }
       }
     end
     let(:space_request) do
@@ -108,6 +115,7 @@ resource 'Events', type: [:api, :legacy_api] do
     let(:expected_app_request) do
       expected_request = app_request
       expected_request['environment_json'] = 'PRIVATE DATA HIDDEN'
+      expected_request['docker_credentials_json'] = 'PRIVATE DATA HIDDEN'
       expected_request
     end
 
@@ -222,7 +230,7 @@ resource 'Events', type: [:api, :legacy_api] do
     end
 
     example 'List App SSH Authorized Events' do
-      app_event_repository.record_app_ssh_authorized(test_app, test_user.guid, test_user_email)
+      app_event_repository.record_app_ssh_authorized(test_app, test_user.guid, test_user_email, 1)
 
       client.get '/v2/events?q=type:audit.app.ssh-authorized', {}, headers
       expect(status).to eq(200)
@@ -234,11 +242,11 @@ resource 'Events', type: [:api, :legacy_api] do
                                actee: test_app.guid,
                                actee_name: test_app.name,
                                space_guid: test_app.space.guid,
-                               metadata: {}
+                               metadata: { 'index' => 1 }
     end
 
     example 'List App SSH Unauthorized Events' do
-      app_event_repository.record_app_ssh_unauthorized(test_app, test_user.guid, test_user_email)
+      app_event_repository.record_app_ssh_unauthorized(test_app, test_user.guid, test_user_email, 1)
 
       client.get '/v2/events?q=type:audit.app.ssh-unauthorized', {}, headers
       expect(status).to eq(200)
@@ -250,7 +258,7 @@ resource 'Events', type: [:api, :legacy_api] do
                                actee: test_app.guid,
                                actee_name: test_app.name,
                                space_guid: test_app.space.guid,
-                               metadata: {}
+                               metadata: { 'index' => 1 }
     end
 
     example 'List events associated with an App since January 1, 2014' do
@@ -844,6 +852,53 @@ resource 'Events', type: [:api, :legacy_api] do
                                metadata: {
                                  'request' => {}
                                }
+    end
+
+    example 'List Service Key Create Events' do
+      space = VCAP::CloudController::Space.make
+      instance = VCAP::CloudController::ManagedServiceInstance.make(space: space)
+      service_key = VCAP::CloudController::ServiceKey.make(service_instance: instance)
+
+      service_event_repository.record_service_key_event(:create, service_key)
+
+      client.get '/v2/events?q=type:audit.service_key.create', {}, headers
+      expect(status).to eq(200)
+      standard_entity_response parsed_response['resources'][0], :event,
+        actor_type: 'user',
+        actor: test_user.guid,
+        actor_name: test_user_email,
+        actee_type: 'service_key',
+        actee: service_key.guid,
+        actee_name: service_key.name,
+        space_guid: instance.space_guid,
+        metadata: {
+          'request' => {
+            'service_instance_guid' => instance.guid,
+            'name' => service_key.name,
+          }
+        }
+    end
+
+    example 'List Service Key Delete Events' do
+      space = VCAP::CloudController::Space.make
+      instance = VCAP::CloudController::ManagedServiceInstance.make(space: space)
+      service_key = VCAP::CloudController::ServiceKey.make(service_instance: instance)
+
+      service_event_repository.record_service_key_event(:delete, service_key)
+
+      client.get '/v2/events?q=type:audit.service_key.delete', {}, headers
+      expect(status).to eq(200)
+      standard_entity_response parsed_response['resources'][0], :event,
+        actor_type: 'user',
+        actor: test_user.guid,
+        actor_name: test_user_email,
+        actee_type: 'service_key',
+        actee: service_key.guid,
+        actee_name: service_key.name,
+        space_guid: instance.space_guid,
+        metadata: {
+          'request' => {}
+        }
     end
   end
 end

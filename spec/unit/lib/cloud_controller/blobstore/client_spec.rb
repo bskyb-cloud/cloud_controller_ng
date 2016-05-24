@@ -1,10 +1,11 @@
 require 'spec_helper'
+require 'webrick'
 
 module CloudController
   module Blobstore
     describe Client do
       let(:content) { 'Some Nonsense' }
-      let(:sha_of_content) { Digest::SHA1.hexdigest(content) }
+      let(:sha_of_content) { Digester.new.digest(content) }
       let(:local_dir) { Dir.mktmpdir }
       let(:directory_key) { 'a-directory-key' }
       let(:connection_config) do
@@ -97,7 +98,7 @@ module CloudController
           describe 'a file existence' do
             it 'does not exist if not present' do
               different_content = 'foobar'
-              sha_of_different_content = Digest::SHA1.hexdigest(different_content)
+              sha_of_different_content = Digester.new.digest(different_content)
 
               expect(client.exists?(sha_of_different_content)).to be false
 
@@ -110,7 +111,7 @@ module CloudController
         end
 
         describe '#cp_r_to_blobstore' do
-          let(:sha_of_nothing) { Digest::SHA1.hexdigest('') }
+          let(:sha_of_nothing) { Digester.new.digest('') }
 
           it 'ensure that the sha of nothing and sha of content are different for subsequent tests' do
             expect(sha_of_nothing[0..1]).not_to eq(sha_of_content[0..1])
@@ -222,6 +223,36 @@ module CloudController
               }.from(false).to(true)
 
               expect(File.read(destination)).to eq(content)
+            end
+          end
+
+          describe 'file permissions' do
+            before do
+              upload_tmpfile(client, sha_of_content)
+              @original_umask = File.umask
+              File.umask(0022)
+            end
+
+            after do
+              File.umask(@original_umask)
+            end
+
+            context 'when not specifying a mode' do
+              it 'does not change permissions on the file' do
+                destination = File.join(local_dir, 'some_directory_to_place_file', 'downloaded_file')
+                client.download_from_blobstore(sha_of_content, destination)
+
+                expect(sprintf('%o', File.stat(destination).mode)).to eq('100644')
+              end
+            end
+
+            context 'when specifying a mode' do
+              it 'does change permissions on the file' do
+                destination = File.join(local_dir, 'some_directory_to_place_file', 'downloaded_file')
+                client.download_from_blobstore(sha_of_content, destination, mode: 0753)
+
+                expect(sprintf('%o', File.stat(destination).mode)).to eq('100753')
+              end
             end
           end
         end
@@ -471,6 +502,199 @@ module CloudController
           end
         end
 
+        describe '#delete_all' do
+          let(:connection_config) { { provider: 'Local', local_root: local_dir } }
+
+          before do
+            Fog.unmock!
+          end
+
+          after do
+            Fog.mock!
+          end
+
+          it 'deletes all the files' do
+            first_path = File.join(local_dir, 'first_empty_file')
+            FileUtils.touch(first_path)
+            path = File.join(local_dir, 'empty_file')
+            FileUtils.touch(path)
+
+            client.cp_to_blobstore(first_path, 'ab56')
+            expect(client.exists?('ab56')).to be true
+            client.cp_to_blobstore(path, 'abcdef123456')
+            expect(client.exists?('abcdef123456')).to be true
+
+            client.delete_all
+
+            expect(client.exists?('ab56')).to be false
+            expect(client.exists?('abcdef123456')).to be false
+          end
+
+          it 'should be ok if there are no files' do
+            expect(client.files).to have(0).items
+            expect {
+              client.delete_all
+            }.to_not raise_error
+          end
+
+          context 'when the underlying blobstore allows multiple deletes in a single request' do
+            let(:connection_config) do
+              {
+                provider: 'AWS',
+                aws_access_key_id: 'fake_access_key_id',
+                aws_secret_access_key: 'fake_secret_access_key',
+              }
+            end
+
+            it 'should be ok if there are no files' do
+              Fog.mock!
+              expect(client.files).to have(0).items
+              expect {
+                client.delete_all
+              }.to_not raise_error
+            end
+
+            it 'deletes in groups of the page_size' do
+              Fog.mock!
+              connection = client.send(:connection)
+              allow(connection).to receive(:delete_multiple_objects)
+
+              file = File.join(local_dir, 'empty_file')
+              FileUtils.touch(file)
+
+              client.cp_to_blobstore(file, 'abcdef1')
+              client.cp_to_blobstore(file, 'abcdef2')
+              client.cp_to_blobstore(file, 'abcdef3')
+              expect(client.exists?('abcdef1')).to be_truthy
+              expect(client.exists?('abcdef2')).to be_truthy
+              expect(client.exists?('abcdef3')).to be_truthy
+
+              page_size = 2
+              client.delete_all(page_size)
+
+              expect(connection).to have_received(:delete_multiple_objects).with(directory_key, ['ab/cd/abcdef1', 'ab/cd/abcdef2'])
+              expect(connection).to have_received(:delete_multiple_objects).with(directory_key, ['ab/cd/abcdef3'])
+            end
+          end
+
+          context 'when a root dir is provided' do
+            let(:client_with_root) do
+              Client.new(connection_config, directory_key, nil, 'root-dir')
+            end
+
+            it 'only deletes files at the root' do
+              allow(client_with_root).to receive(:delete_files).and_call_original
+
+              file = File.join(local_dir, 'empty_file')
+              FileUtils.touch(file)
+
+              client.cp_to_blobstore(file, 'abcdef1')
+              client_with_root.cp_to_blobstore(file, 'abcdef2')
+
+              client_with_root.delete_all
+
+              expect(client_with_root).to have_received(:delete_files) do |files|
+                expect(files.length).to eq(1)
+              end
+            end
+          end
+        end
+
+        describe '#delete_all_in_path' do
+          let(:connection_config) { { provider: 'Local', local_root: local_dir } }
+
+          before do
+            Fog.unmock!
+          end
+
+          after do
+            Fog.mock!
+          end
+
+          it 'deletes all the files within a specific path' do
+            path = File.join(local_dir, 'empty_file')
+            FileUtils.touch(path)
+
+            remote_path_1 = 'aaaaguid'
+
+            remote_key_1 = "#{remote_path_1}/stack_1"
+            remote_key_2 = "#{remote_path_1}/stack_2"
+
+            remote_path_2 = 'bbbbguid'
+            remote_key_3 = "#{remote_path_2}/stack_3"
+
+            client.cp_to_blobstore(path, remote_key_1)
+            client.cp_to_blobstore(path, remote_key_2)
+            client.cp_to_blobstore(path, remote_key_3)
+            expect(client.exists?(remote_key_1)).to be true
+            expect(client.exists?(remote_key_2)).to be true
+            expect(client.exists?(remote_key_3)).to be true
+
+            client.delete_all_in_path(remote_path_1)
+
+            expect(client.exists?(remote_key_1)).to be false
+            expect(client.exists?(remote_key_2)).to be false
+            expect(client.exists?(remote_key_3)).to be true
+          end
+
+          it 'should be ok if there are no files' do
+            expect(client.files).to have(0).items
+            expect {
+              client.delete_all_in_path('nonsense_path')
+            }.to_not raise_error
+          end
+
+          context 'when the underlying blobstore allows multiple deletes in a single request' do
+            let(:connection_config) do
+              {
+                provider: 'AWS',
+                aws_access_key_id: 'fake_access_key_id',
+                aws_secret_access_key: 'fake_secret_access_key',
+              }
+            end
+
+            it 'should be ok if there are no files' do
+              Fog.mock!
+              expect(client.files).to have(0).items
+              expect {
+                client.delete_all_in_path('path!')
+              }.to_not raise_error
+            end
+          end
+
+          context 'when a root dir is provided' do
+            let(:client_with_root) do
+              Client.new(connection_config, directory_key, nil, 'root-dir')
+            end
+
+            it 'only deletes files at the root' do
+              path = File.join(local_dir, 'empty_file')
+              FileUtils.touch(path)
+
+              remote_path_1 = 'aaaaguid'
+
+              remote_key_1 = "#{remote_path_1}/stack_1"
+              remote_key_2 = "#{remote_path_1}/stack_2"
+
+              remote_path_2 = 'bbbbguid'
+              remote_key_3 = "#{remote_path_2}/stack_3"
+
+              client_with_root.cp_to_blobstore(path, remote_key_1)
+              client_with_root.cp_to_blobstore(path, remote_key_2)
+              client_with_root.cp_to_blobstore(path, remote_key_3)
+              expect(client_with_root.exists?(remote_key_1)).to be true
+              expect(client_with_root.exists?(remote_key_2)).to be true
+              expect(client_with_root.exists?(remote_key_3)).to be true
+
+              client_with_root.delete_all_in_path(remote_path_1)
+
+              expect(client_with_root.exists?(remote_key_1)).to be false
+              expect(client_with_root.exists?(remote_key_2)).to be false
+              expect(client_with_root.exists?(remote_key_3)).to be true
+            end
+          end
+        end
+
         describe '#delete' do
           it 'deletes the file' do
             path = File.join(local_dir, 'empty_file')
@@ -523,6 +747,87 @@ module CloudController
           expect(client.exists?('abcdef')).to be true
           expect(client.blob('abcdef')).to be
           expect(client.download_uri('abcdef')).to match(%r{my-root/ab/cd/abcdef})
+        end
+      end
+
+      describe 'downloading without mocking' do
+        def wait_for_server_to_accept_requests(uri)
+          code       = nil
+          total_time = 0
+          while code != '200' && total_time < 10
+            begin
+              res  = Net::HTTP.get_response(URI(uri))
+              code = res.code
+              total_time += 0.1
+              sleep 0.1
+            rescue
+            end
+          end
+        end
+
+        describe 'from a CDN' do
+          let(:port) { 9875 } # TODO: Can we find a free port?
+
+          around(:each) do |example|
+            WebMock.disable_net_connect!(allow_localhost: true)
+            example.run
+            WebMock.disable_net_connect!
+          end
+
+          it 'correctly downloads byte streams' do
+            uri    = "http://localhost:#{port}"
+            cdn    = Cdn.make(uri)
+            client = Client.new(connection_config, directory_key, cdn)
+
+            source_directory_path = File.expand_path('../../../../fixtures/', File.dirname(__FILE__))
+            source_file_path = File.join(source_directory_path, 'pa/rt/partitioned_key')
+            source_hexdigest = Digest::SHA2.file(source_file_path).hexdigest
+
+            pid = spawn("ruby -rwebrick -e'WEBrick::HTTPServer.new(:Port => #{port}, :DocumentRoot => \"#{source_directory_path}\").start'", out: 'test.out', err: 'test.err')
+
+            begin
+              Process.detach(pid)
+
+              wait_for_server_to_accept_requests(uri)
+
+              destination_file_path = File.join(Dir.mktmpdir, 'hard_file.xyz')
+
+              client.download_from_blobstore('partitioned_key', destination_file_path)
+
+              destination_hexdigest = Digest::SHA2.file(destination_file_path).hexdigest
+
+              expect(destination_hexdigest).to eq(source_hexdigest)
+            ensure
+              Process.kill(9, pid)
+            end
+          end
+        end
+
+        describe 'from a blobstore' do
+          around(:each) do |example|
+            Fog.unmock!
+            example.run
+            Fog.mock!
+          end
+
+          it 'correctly downloads byte streams' do
+            Fog.unmock!
+            local_root = File.expand_path('../../../../', File.dirname(__FILE__))
+            source_directory_path = File.join(local_root, 'fixtures')
+
+            client = Client.new({ provider: 'Local', local_root: local_root }, 'fixtures')
+
+            source_file_path = File.join(source_directory_path, 'pa/rt/partitioned_key')
+            source_hexdigest = Digest::SHA2.file(source_file_path).hexdigest
+
+            destination_file_path = File.join(Dir.mktmpdir, 'hard_file.xyz')
+
+            client.download_from_blobstore('partitioned_key', destination_file_path)
+
+            destination_hexdigest = Digest::SHA2.file(destination_file_path).hexdigest
+
+            expect(destination_hexdigest).to eq(source_hexdigest)
+          end
         end
       end
     end

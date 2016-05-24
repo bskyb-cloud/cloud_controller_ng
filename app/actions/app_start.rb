@@ -1,4 +1,4 @@
-require 'actions/procfile_parse'
+require 'actions/current_process_types'
 
 module VCAP::CloudController
   class AppStart
@@ -12,9 +12,9 @@ module VCAP::CloudController
     end
 
     def start(app)
-      raise DropletNotFound if !app.desired_droplet
+      raise DropletNotFound if !app.droplet
 
-      package = PackageModel.find(guid: app.desired_droplet.package_guid)
+      package = PackageModel.find(guid: app.droplet.package_guid)
       package_hash = package.nil? ? 'unknown' : package.package_hash
 
       app.db.transaction do
@@ -29,12 +29,14 @@ module VCAP::CloudController
 
         app.processes.each do |process|
           process.update({
-            state: 'STARTED',
-            package_hash: package_hash,
-            package_state: 'STAGED',
-            package_pending_since: nil,
-            environment_json: app.environment_variables
-          })
+              state:                 'STARTED',
+              diego:                 true,
+              droplet_hash:          app.droplet.droplet_hash,
+              package_hash:          package_hash,
+              package_state:         'STAGED',
+              package_pending_since: nil,
+              environment_json:      app.environment_variables
+            })
         end
       end
     rescue Sequel::ValidationFailed => e

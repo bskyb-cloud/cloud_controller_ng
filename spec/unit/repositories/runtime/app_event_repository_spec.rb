@@ -15,6 +15,12 @@ module VCAP::CloudController
             'memory' => 84,
             'state' => 'STOPPED',
             'environment_json' => { 'foo' => 1 },
+            'docker_credentials_json' => {
+              'docker_login_server' => 'server',
+              'docker_user' => 'user',
+              'docker_password' => 'password',
+              'docker_email' => 'email'
+            }
           }
         end
 
@@ -30,6 +36,7 @@ module VCAP::CloudController
            'memory' => 84,
            'state' => 'STOPPED',
            'environment_json' => 'PRIVATE DATA HIDDEN',
+           'docker_credentials_json' => 'PRIVATE DATA HIDDEN',
           }
 
           expect(Loggregator).to receive(:emit).with(app.guid, "Updated app with guid #{app.guid} (#{expected_request_field})")
@@ -57,7 +64,13 @@ module VCAP::CloudController
             'instances' => 1,
             'memory' => 84,
             'state' => 'STOPPED',
-            'environment_json' => { 'super' => 'secret ' }
+            'environment_json' => { 'super' => 'secret ' },
+            'docker_credentials_json' => {
+              'docker_login_server' => 'server',
+              'docker_user' => 'user',
+              'docker_password' => 'password',
+              'docker_email' => 'email'
+            }
           }
         end
 
@@ -82,6 +95,7 @@ module VCAP::CloudController
                                'memory' => 84,
                                'state' => 'STOPPED',
                                'environment_json' => 'PRIVATE DATA HIDDEN',
+                               'docker_credentials_json' => 'PRIVATE DATA HIDDEN',
                              )
         end
 
@@ -124,21 +138,21 @@ module VCAP::CloudController
         end
       end
 
-      describe '#record_app_set_current_droplet' do
+      describe '#record_app_map_droplet' do
         let(:space) { Space.make }
-        let(:app) { AppFactory.make(space: space) }
+        let(:app) { AppModel.make(space: space) }
         let(:user) { User.make }
         let(:user_email) { 'user email' }
 
-        it 'creates a new audit.app.delete-request event' do
-          event = app_event_repository.record_app_set_current_droplet(app, space, user.guid, user_email, { a: 1 })
+        it 'creates a new audit.app.droplet_mapped event' do
+          event = app_event_repository.record_app_map_droplet(app, space, user.guid, user_email, { a: 1 })
           event.reload
           expect(event.actor).to eq(user.guid)
           expect(event.actor_type).to eq('user')
           expect(event.actor_name).to eq(user_email)
-          expect(event.type).to eq('audit.app.update')
+          expect(event.type).to eq('audit.app.droplet_mapped')
           expect(event.actee).to eq(app.guid)
-          expect(event.actee_type).to eq('app')
+          expect(event.actee_type).to eq('v3-app')
           expect(event.actee_name).to eq(app.name)
           expect(event.metadata).to eq({ 'request' => { 'a' => 1 } })
         end
@@ -309,9 +323,10 @@ module VCAP::CloudController
         let(:app) { AppFactory.make }
         let(:user) { User.make }
         let(:user_email) { 'user@example.com' }
+        let(:instance_index) { 3 }
 
         it 'creates a new app.ssh-unauthorized event for the app' do
-          event = app_event_repository.record_app_ssh_unauthorized(app, user.guid, user_email)
+          event = app_event_repository.record_app_ssh_unauthorized(app, user.guid, user_email, instance_index)
 
           expect(event.type).to eq('audit.app.ssh-unauthorized')
           expect(event.actor).to eq(user.guid)
@@ -319,6 +334,7 @@ module VCAP::CloudController
           expect(event.actee).to eq(app.guid)
           expect(event.actor_name).to eq('user@example.com')
           expect(event.actee_type).to eq('app')
+          expect(event.metadata).to eq({ index: instance_index })
         end
       end
 
@@ -326,9 +342,10 @@ module VCAP::CloudController
         let(:app) { AppFactory.make }
         let(:user) { User.make }
         let(:user_email) { 'user@example.com' }
+        let(:instance_index) { 3 }
 
         it 'creates a new app.ssh-authorized event for the app' do
-          event = app_event_repository.record_app_ssh_authorized(app, user.guid, user_email)
+          event = app_event_repository.record_app_ssh_authorized(app, user.guid, user_email, instance_index)
 
           expect(event.type).to eq('audit.app.ssh-authorized')
           expect(event.actor).to eq(user.guid)
@@ -336,6 +353,7 @@ module VCAP::CloudController
           expect(event.actee).to eq(app.guid)
           expect(event.actor_name).to eq('user@example.com')
           expect(event.actee_type).to eq('app')
+          expect(event.metadata).to eq({ index: instance_index })
         end
       end
 

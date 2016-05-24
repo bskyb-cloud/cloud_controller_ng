@@ -6,6 +6,8 @@ module VCAP::CloudController
     let(:runners) { double(:runners, runner_for_app: runner) }
     let(:stager) { double(:stager) }
     let(:runner) { double(:runner, stop: nil, start: nil) }
+    let(:app_active) { true }
+    let(:diego) { false }
     let(:app) do
       double(
         :app,
@@ -14,7 +16,9 @@ module VCAP::CloudController
         previous_changes: previous_changes,
         started?: app_started,
         needs_staging?: app_needs_staging,
+        active?: app_active,
         buildpack_cache_key: key,
+        diego: diego
       )
     end
     let(:app_started) { false }
@@ -34,6 +38,15 @@ module VCAP::CloudController
       it 'stops the app' do
         expect(runner).to receive(:stop)
         subject
+      end
+
+      context 'diego app' do
+        let(:diego) { true }
+
+        it 'does not care if diego is unavailable' do
+          allow(runner).to receive(:stop).and_raise(VCAP::CloudController::Diego::Runner::CannotCommunicateWithDiegoError)
+          expect { subject }.not_to raise_error
+        end
       end
 
       it "deletes the app's buildpack cache" do
@@ -70,10 +83,10 @@ module VCAP::CloudController
     describe '.updated' do
       subject { AppObserver.updated(app) }
 
-      context 'when the app state has changed' do
-        let(:previous_changes) { { state: 'state-change' } }
+      context 'when the app state is changed' do
+        let(:previous_changes) { { state: 'original-state' } }
 
-        context 'if the app has not been started' do
+        context 'if the desired app state is stopped' do
           let(:app_started) { false }
 
           it 'stops the app' do
@@ -87,7 +100,7 @@ module VCAP::CloudController
           end
         end
 
-        context 'if the app has been started' do
+        context 'if the desired app state is started' do
           let(:app_started) { true }
 
           it 'does not stop the app' do
@@ -100,7 +113,7 @@ module VCAP::CloudController
 
             it 'validates and stages the app' do
               expect(stagers).to receive(:validate_app).with(app)
-              expect(stager).to receive(:stage_app)
+              expect(stager).to receive(:stage)
               subject
             end
           end
@@ -119,7 +132,7 @@ module VCAP::CloudController
       context 'when the diego flag on the app has changed' do
         let(:previous_changes) { { diego: 'diego-change' } }
 
-        context 'if the app has not been started' do
+        context 'if the desired state of the app is stopped' do
           let(:app_started) { false }
 
           it 'stops the app' do
@@ -133,7 +146,7 @@ module VCAP::CloudController
           end
         end
 
-        context 'if the app has been started' do
+        context 'if the desired state of the app is started' do
           let(:app_started) { true }
 
           it 'does not stop the app' do
@@ -146,7 +159,7 @@ module VCAP::CloudController
 
             it 'validates and stages the app' do
               expect(stagers).to receive(:validate_app).with(app)
-              expect(stager).to receive(:stage_app)
+              expect(stager).to receive(:stage)
               subject
             end
           end
@@ -165,7 +178,7 @@ module VCAP::CloudController
       context 'when the enable_ssh flag on the app has changed' do
         let(:previous_changes) { { enable_ssh: true } }
 
-        context 'if the app has not been started' do
+        context 'if the desired state of the app is stopped' do
           let(:app_started) { false }
 
           it 'stops the app' do
@@ -179,7 +192,7 @@ module VCAP::CloudController
           end
         end
 
-        context 'if the app has been started' do
+        context 'if the desired state of the app is started' do
           let(:app_started) { true }
 
           it 'does not stop the app' do
@@ -192,7 +205,7 @@ module VCAP::CloudController
 
             it 'validates and stages the app' do
               expect(stagers).to receive(:validate_app).with(app)
-              expect(stager).to receive(:stage_app)
+              expect(stager).to receive(:stage)
               subject
             end
           end
@@ -211,21 +224,57 @@ module VCAP::CloudController
       context 'when the app instances have changed' do
         let(:previous_changes) { { instances: 'something' } }
 
-        context 'if the app has not been started' do
+        context 'if the desired state of the app is stopped' do
           let(:app_started) { false }
 
           it 'does not scale the app' do
             expect(runner).to_not receive(:scale)
             subject
           end
+
+          context 'when Docker is enabled' do
+            let(:app_active) { true }
+
+            it 'does not scale the app' do
+              expect(runner).to_not receive(:scale)
+              subject
+            end
+          end
+
+          context 'when Docker is disabled' do
+            let(:app_active) { false }
+
+            it 'does not scale the app' do
+              expect(runner).to_not receive(:scale)
+              subject
+            end
+          end
         end
 
-        context 'if the app has been started' do
+        context 'if the desired state of the app is started' do
           let(:app_started) { true }
 
           it 'scales the app' do
             expect(runner).to receive(:scale)
             subject
+          end
+
+          context 'when Docker is enabled' do
+            let(:app_active) { true }
+
+            it 'scales the app' do
+              expect(runner).to receive(:scale)
+              subject
+            end
+          end
+
+          context 'when Docker is disabled' do
+            let(:app_active) { false }
+
+            it 'does not scale the app' do
+              expect(runner).to_not receive(:scale)
+              subject
+            end
           end
         end
       end
@@ -234,12 +283,30 @@ module VCAP::CloudController
     describe '.routes_changed' do
       subject { AppObserver.routes_changed(app) }
 
-      context 'if the app has not been started' do
+      context 'when the app is not started' do
         let(:app_started) { false }
 
         it 'does not update routes' do
           expect(runner).to_not receive(:update_routes)
           subject
+        end
+
+        context 'with Docker disabled' do
+          let(:app_active) { false }
+
+          it 'does not update routes' do
+            expect(runner).to_not receive(:update_routes)
+            subject
+          end
+        end
+
+        context 'with Docker enabled' do
+          let(:app_active) { true }
+
+          it 'does not update routes' do
+            expect(runner).to_not receive(:update_routes)
+            subject
+          end
         end
       end
 
@@ -249,6 +316,24 @@ module VCAP::CloudController
         it 'updates routes' do
           expect(runner).to receive(:update_routes)
           subject
+        end
+
+        context 'with Docker disabled' do
+          let(:app_active) { false }
+
+          it 'does not update routes' do
+            expect(runner).to_not receive(:update_routes)
+            subject
+          end
+        end
+
+        context 'with Docker enabled' do
+          let(:app_active) { true }
+
+          it 'updates routes' do
+            expect(runner).to receive(:update_routes)
+            subject
+          end
         end
       end
     end

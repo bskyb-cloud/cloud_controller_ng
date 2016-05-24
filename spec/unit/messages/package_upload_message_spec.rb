@@ -8,7 +8,7 @@ module VCAP::CloudController
       it 'is not valid' do
         upload_message = PackageUploadMessage.new(opts)
         expect(upload_message).not_to be_valid
-        expect(upload_message.errors.full_messages[0]).to include('An application zip file must be uploaded')
+        expect(upload_message.errors[:bits_path]).to include('An application zip file must be uploaded')
       end
     end
 
@@ -35,7 +35,7 @@ module VCAP::CloudController
     describe '.create_from_params' do
       let(:params) { { 'bits_path' => 'foobar' } }
 
-      it 'returns the correct PackageCreateMessage' do
+      it 'returns the correct PackageUploadMessage' do
         message = PackageUploadMessage.create_from_params(params)
 
         expect(message).to be_a(PackageUploadMessage)

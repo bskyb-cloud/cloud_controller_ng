@@ -1,11 +1,11 @@
 require 'spec_helper'
-require 'digest/sha1'
+require 'vcap/digester'
 
 describe 'Stable API warning system', api_version_check: true do
-  API_FOLDER_CHECKSUM = '954382a7a1e870b16ce2f91f5ddc45fb26f7ee96'
+  API_FOLDER_CHECKSUM = '708ce00adad787784b41831c0573929c4ee894fd'
 
   it 'double-checks the version' do
-    expect(VCAP::CloudController::Constants::API_VERSION).to eq('2.27.0')
+    expect(VCAP::CloudController::Constants::API_VERSION).to eq('2.43.0')
   end
 
   it 'tells the developer if the API specs change' do
@@ -13,10 +13,10 @@ describe 'Stable API warning system', api_version_check: true do
     filenames = Dir.glob("#{api_folder}/**/*").reject { |filename| File.directory?(filename) || filename == __FILE__ || filename.include?('v3') }.sort
 
     all_file_checksum = filenames.each_with_object('') do |filename, memo|
-      memo << Digest::SHA1.file(filename).hexdigest
+      memo << Digester.new.digest_path(filename)
     end
 
-    new_checksum = Digest::SHA1.hexdigest(all_file_checksum)
+    new_checksum = Digester.new.digest(all_file_checksum)
 
     expect(new_checksum).to eql(API_FOLDER_CHECKSUM),
       <<-END

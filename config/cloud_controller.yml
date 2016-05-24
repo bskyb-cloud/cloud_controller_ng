@@ -30,8 +30,6 @@ audit_events:
 failed_jobs:
   cutoff_age_in_days: 31
 
-billing_event_writing_enabled: true
-
 default_app_memory: 1024 #mb
 default_app_disk_in_mb: 1024
 maximum_app_disk_in_mb: 2048
@@ -47,6 +45,7 @@ info:
   description: "Cloud Foundry sponsored by Pivotal"
   app_ssh_endpoint: "ssh.system.domain.example.com:2222"
   app_ssh_host_key_fingerprint: "47:0d:d1:c8:c3:3d:0a:36:d1:49:2f:f2:90:27:31:d0"
+  app_ssh_oauth_client_id: "ssh-proxy"
 
 nginx:
   use_nginx: false
@@ -58,8 +57,10 @@ logging:
 
 loggregator:
   router: "127.0.0.1:3456"
-  shared_secret: "loggregatorsecret"
   url: "ws://loggregator.vcap.me:80"
+
+doppler:
+  enabled: false
 
 db:
   max_connections: 32
@@ -72,6 +73,11 @@ uaa:
 
 hm9000:
   url: "http://localhost:5155"
+
+routing_api:
+  url: "http://localhost:3000"
+  routing_client_name: 'routing-client'
+  routing_client_secret: 'routing-secret'
 
 cc_partition: ng
 
@@ -152,11 +158,10 @@ cloud_controller_username_lookup_client_name: 'username_lookup_client_name'
 cloud_controller_username_lookup_client_secret: 'username_lookup_secret'
 
 users_can_select_backend: true
-diego_docker: false
 allow_app_ssh_access: true
-diego_nsync_url: http://nsync.service.consul:8787
-diego_stager_url: http://stager.service.consul:8888
-diego_tps_url: http://tps.service.consul:1518
+diego_nsync_url: http://nsync.service.cf.internal:8787
+diego_stager_url: http://stager.service.cf.internal:8888
+diego_tps_url: http://tps.service.cf.internal:1518
 
 renderer:
   max_results_per_page: 100
@@ -181,3 +186,9 @@ default_staging_security_groups:
 - dummy3
 default_running_security_groups:
 - dummy4
+
+allowed_cors_domains:
+- http://*.appspot.com
+- http://*.inblue.net
+- http://talkoncorners.com
+- http://borrowedheaven.org

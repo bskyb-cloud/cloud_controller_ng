@@ -1,22 +1,38 @@
 require 'messages/base_message'
+require 'messages/package_create/bits_data_validator'
+require 'messages/package_create/docker_data_validator'
 
 module VCAP::CloudController
   class PackageCreateMessage < BaseMessage
-    attr_accessor :app_guid, :type, :url
+    ALLOWED_KEYS = [:app_guid, :type, :data]
 
-    def allowed_keys
-      [:type, :app_guid, :url]
-    end
+    attr_accessor(*ALLOWED_KEYS)
 
-    validates_with NoAdditionalKeysValidator
+    validates_with NoAdditionalKeysValidator, DockerDataValidator, BitsDataValidator
 
     validates :type, inclusion: { in: %w(bits docker), message: 'must be one of \'bits, docker\'' }
     validates :app_guid, guid: true
-    validates :url, absence: { absence: true, message: 'must be blank when type is bits' }, if: "type == 'bits'"
-    validates :url, presence: { presence: true, message: "can't be blank type is docker" }, if: "type == 'docker'"
 
     def self.create_from_http_request(app_guid, body)
-      PackageCreateMessage.new(body.symbolize_keys.merge({ app_guid: app_guid }))
+      PackageCreateMessage.new(body.deep_symbolize_keys.merge({ app_guid: app_guid }))
+    end
+
+    def bits_type?
+      type == 'bits'
+    end
+
+    def docker_type?
+      type == 'docker'
+    end
+
+    def docker_data
+      OpenStruct.new(data) if docker_type?
+    end
+
+    private
+
+    def allowed_keys
+      ALLOWED_KEYS
     end
   end
 end

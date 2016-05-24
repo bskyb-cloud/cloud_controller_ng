@@ -23,7 +23,8 @@ module VCAP::CloudController
           support_address: String,
           description: String,
           optional(:app_ssh_endpoint) => String,
-          optional(:app_ssh_host_key_fingerprint) => String
+          optional(:app_ssh_host_key_fingerprint) => String,
+          optional(:app_ssh_oauth_client) => String,
         },
 
         :system_domain => String,
@@ -41,7 +42,6 @@ module VCAP::CloudController
         :failed_jobs => {
           cutoff_age_in_days: Fixnum
         },
-        optional(:billing_event_writing_enabled) => bool,
         :default_app_memory => Fixnum,
         :default_app_disk_in_mb => Fixnum,
         optional(:maximum_app_disk_in_mb) => Fixnum,
@@ -82,6 +82,7 @@ module VCAP::CloudController
 
         optional(:stacks_file) => String,
         optional(:newrelic_enabled) => bool,
+        optional(:hostname) => String,
 
         optional(:db) => {
           optional(:database)         => String,     # db connection string for sequel
@@ -166,12 +167,14 @@ module VCAP::CloudController
 
         :packages => {
           optional(:max_package_size) => Integer,
+          optional(:max_valid_packages_stored) => Integer,
           :app_package_directory_key => String,
           :fog_connection => Hash
         },
 
         :droplets => {
           droplet_directory_key: String,
+          optional(:max_staged_droplets_stored) => Integer,
           fog_connection: Hash
         },
 
@@ -200,7 +203,11 @@ module VCAP::CloudController
 
         optional(:loggregator) => {
           optional(:router) => String,
-          optional(:shared_secret) => String,
+        },
+
+        optional(:doppler) => {
+          enabled: bool,
+          optional(:url) => String
         },
 
         optional(:request_timeout_in_seconds) => Integer,
@@ -218,17 +225,21 @@ module VCAP::CloudController
         ],
 
         optional(:app_bits_upload_grace_period_in_seconds) => Integer,
-
         optional(:default_locale) => String,
         optional(:allowed_cors_domains) => [String],
 
         optional(:dea_advertisement_timeout_in_seconds) => Integer,
+        optional(:placement_top_stager_percentage) => Integer,
 
-        optional(:diego_docker) => bool,
         optional(:diego_stager_url) => String,
         optional(:diego_tps_url) => String,
         optional(:users_can_select_backend) => bool,
         optional(:default_to_diego_backend) => bool,
+        optional(:routing_api) => {
+          url: String,
+          routing_client_name: String,
+          routing_client_secret: String,
+        },
       }
     end
 
@@ -300,6 +311,18 @@ module VCAP::CloudController
         run_initializers_in_directory(config, '../../../config/initializers/*.rb')
         if config[:newrelic_enabled]
           require 'newrelic_rpm'
+
+          # We need to explicitly initialize NewRelic before running our initializers
+          # When Rails is present, NewRelic adds itself to the Rails initializers instead
+          # of initializing immediately.
+
+          if Rails.env.test? && !ENV['NRCONFIG']
+            opts = { env: ENV['NEW_RELIC_ENV'] || 'production', monitor_mode: false }
+          else
+            opts = { env: ENV['NEW_RELIC_ENV'] || 'production' }
+          end
+
+          NewRelic::Agent.manual_start(opts)
           run_initializers_in_directory(config, '../../../config/newrelic/initializers/*.rb')
         end
         @initialized = true
@@ -318,21 +341,22 @@ module VCAP::CloudController
         config[:maximum_app_disk_in_mb] ||= 2048
         config[:request_timeout_in_seconds] ||= 900
         config[:directories] ||= {}
-        config[:billing_event_writing_enabled] = true if config[:billing_event_writing_enabled].nil?
         config[:skip_cert_verify] = false if config[:skip_cert_verify].nil?
         config[:app_bits_upload_grace_period_in_seconds] ||= 0
         config[:db] ||= {}
         config[:db][:database] ||= ENV['DB_CONNECTION_STRING']
         config[:default_locale] ||= 'en_US'
         config[:allowed_cors_domains] ||= []
-        config[:diego_docker] ||= false
         config[:default_to_diego_backend] ||= false
         config[:dea_advertisement_timeout_in_seconds] ||= 10
+        config[:placement_top_stager_percentage] ||= 10
         config[:staging][:minimum_staging_memory_mb] ||= 1024
         config[:staging][:minimum_staging_disk_mb] ||= 4096
         config[:staging][:minimum_staging_file_descriptor_limit] ||= 16384
         config[:broker_client_timeout_seconds] ||= 60
         config[:broker_client_default_async_poll_interval_seconds] ||= 60
+        config[:packages][:max_valid_packages_stored] ||= 5
+        config[:droplets][:max_staged_droplets_stored] ||= 5
 
         unless config.key?(:users_can_select_backend)
           config[:users_can_select_backend] = true

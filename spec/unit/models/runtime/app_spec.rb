@@ -57,15 +57,51 @@ module VCAP::CloudController
       it { is_expected.to have_associated :droplets }
       it do
         is_expected.to have_associated :service_bindings, associated_instance: ->(app) {
-          service_instance = ManagedServiceInstance.make(space: app.space)
-          ServiceBinding.make(service_instance: service_instance, app: app)
-        }
+                                                                                 service_instance = ManagedServiceInstance.make(space: app.space)
+                                                                                 ServiceBinding.make(service_instance: service_instance, app: app)
+                                                                               }
       end
       it { is_expected.to have_associated :events, class: AppEvent }
       it { is_expected.to have_associated :admin_buildpack, class: Buildpack }
       it { is_expected.to have_associated :space }
       it { is_expected.to have_associated :stack }
       it { is_expected.to have_associated :routes, associated_instance: ->(app) { Route.make(space: app.space) } }
+
+      context 'with Docker app' do
+        before do
+          FeatureFlag.create(name: 'diego_docker', enabled: true)
+        end
+
+        let!(:docker_app) do
+          AppFactory.make(space: space, docker_image: 'some-image', state: 'STARTED')
+        end
+
+        context 'and Docker disabled' do
+          before do
+            FeatureFlag.find(name: 'diego_docker').update(enabled: false)
+          end
+
+          it 'should associate an app with a route' do
+            expect { docker_app.add_route(route) }.not_to raise_error
+          end
+        end
+      end
+
+      context 'with non-docker app' do
+        let(:non_docker_app) do
+          AppFactory.make(space: space)
+        end
+
+        context 'and Docker disabled' do
+          before do
+            FeatureFlag.create(name: 'diego_docker', enabled: false)
+          end
+
+          it 'should associate an app with a route' do
+            expect { non_docker_app.add_route(route) }.not_to raise_error
+          end
+        end
+      end
     end
 
     describe 'Validations' do
@@ -79,7 +115,8 @@ module VCAP::CloudController
       it 'includes validator policies' do
         expect_validator(InstancesPolicy)
         expect_validator(AppEnvironmentPolicy)
-        expect_validator(DiskQuotaPolicy)
+        expect_validator(MaxDiskQuotaPolicy)
+        expect_validator(MinDiskQuotaPolicy)
         expect_validator(MetadataPolicy)
         expect_validator(MinMemoryPolicy)
         expect_validator(MaxInstanceMemoryPolicy)
@@ -105,6 +142,13 @@ module VCAP::CloudController
           max_instance_memory_policies = app.validation_policies.select { |policy| policy.instance_of? MaxInstanceMemoryPolicy }
           expect(max_instance_memory_policies.length).to eq(2)
           targets = max_instance_memory_policies.collect(&:quota_definition)
+          expect(targets).to match_array([org.quota_definition, space.space_quota_definition])
+        end
+
+        it 'validates org and space using MaxAppInstancesPolicy' do
+          max_app_instances_policy = app.validation_policies.select { |policy| policy.instance_of? MaxAppInstancesPolicy }
+          expect(max_app_instances_policy.length).to eq(2)
+          targets = max_app_instances_policy.collect(&:quota_definition)
           expect(targets).to match_array([org.quota_definition, space.space_quota_definition])
         end
       end
@@ -316,6 +360,9 @@ module VCAP::CloudController
         let(:quota) do
           QuotaDefinition.make(memory_limit: 128)
         end
+        let(:space_quota) do
+          SpaceQuotaDefinition.make(memory_limit: 128, organization: org)
+        end
 
         context 'app update' do
           def act_as_cf_admin(&block)
@@ -326,7 +373,7 @@ module VCAP::CloudController
           end
 
           let(:org) { Organization.make(quota_definition: quota) }
-          let(:space) { Space.make(organization: org) }
+          let(:space) { Space.make(organization: org, space_quota_definition: space_quota) }
           subject!(:app) { AppFactory.make(space: space, memory: 64, instances: 2, state: 'STARTED', package_hash: 'a-hash') }
 
           it 'should raise error when quota is exceeded' do
@@ -359,6 +406,26 @@ module VCAP::CloudController
 
             expect(app.reload).to be_valid
             expect(app.instances).to eq(1)
+          end
+
+          it 'should raise error when instance quota is exceeded' do
+            quota.app_instance_limit = 4
+            quota.memory_limit = 512
+            quota.save
+
+            app.instances = 5
+            expect { app.save }.to raise_error(/instance_limit_exceeded/)
+          end
+
+          it 'should raise error when space instance quota is exceeded' do
+            space_quota.app_instance_limit = 4
+            space_quota.memory_limit = 512
+            space_quota.save
+            quota.memory_limit = 512
+            quota.save
+
+            app.instances = 5
+            expect { app.save }.to raise_error(/instance_limit_exceeded/)
           end
 
           it 'raises when scaling down number of instances but remaining above quota' do
@@ -404,65 +471,108 @@ module VCAP::CloudController
           end
         end
       end
+
+      describe 'docker credentials' do
+        context 'when all credentials are present' do
+          it 'succeeds' do
+            expect {
+              AppFactory.make(docker_credentials_json: {
+                  'docker_user' => 'user',
+                  'docker_password' => 'password',
+                  'docker_email' => 'email',
+                })
+            }.to_not raise_error
+          end
+        end
+
+        context 'when some credentials are missing' do
+          it 'errors' do
+            expect {
+              AppFactory.make(docker_credentials_json: { 'docker_user' => 'user' })
+            }.to raise_error(Sequel::ValidationFailed, /docker_credentials/)
+          end
+        end
+
+        context 'when no credentials are provided' do
+          it 'succeeds' do
+            expect {
+              AppFactory.make(docker_credentials_json: {})
+            }.to_not raise_error
+          end
+        end
+
+        context 'when docker_credentials_json is nil' do
+          it 'succeeds' do
+            expect {
+              AppFactory.make
+            }.to_not raise_error
+          end
+        end
+      end
     end
 
     describe 'Serialization' do
       it {
         is_expected.to export_attributes(
-          :enable_ssh,
-          :buildpack,
-          :command,
-          :console,
-          :debug,
-          :detected_buildpack,
-          :detected_start_command,
-          :diego,
-          :disk_quota,
-          :docker_image,
-          :environment_json,
-          :health_check_timeout,
-          :health_check_type,
-          :instances,
-          :memory,
-          :name,
-          :package_state,
-          :package_updated_at,
-          :production,
-          :space_guid,
-          :stack_guid,
-          :staging_failed_reason,
-          :staging_task_id,
-          :state,
-          :version
-        )
+            :enable_ssh,
+            :buildpack,
+            :command,
+            :console,
+            :debug,
+            :detected_buildpack,
+            :detected_start_command,
+            :diego,
+            :disk_quota,
+            :docker_image,
+            :docker_credentials_json,
+            :environment_json,
+            :health_check_timeout,
+            :health_check_type,
+            :instances,
+            :memory,
+            :name,
+            :package_state,
+            :package_updated_at,
+            :production,
+            :space_guid,
+            :stack_guid,
+            :staging_failed_reason,
+            :staging_failed_description,
+            :staging_task_id,
+            :state,
+            :version,
+            :ports
+          )
       }
 
       it {
         is_expected.to import_attributes(
-          :enable_ssh,
-          :app_guid,
-          :buildpack,
-          :command,
-          :console,
-          :debug,
-          :detected_buildpack,
-          :diego,
-          :disk_quota,
-          :docker_image,
-          :environment_json,
-          :health_check_timeout,
-          :health_check_type,
-          :instances,
-          :memory,
-          :name,
-          :production,
-          :route_guids,
-          :service_binding_guids,
-          :space_guid,
-          :stack_guid,
-          :staging_task_id,
-          :state
-        )
+            :enable_ssh,
+            :app_guid,
+            :buildpack,
+            :command,
+            :console,
+            :debug,
+            :detected_buildpack,
+            :diego,
+            :disk_quota,
+            :docker_image,
+            :docker_credentials_json,
+            :environment_json,
+            :health_check_timeout,
+            :health_check_type,
+            :instances,
+            :memory,
+            :name,
+            :production,
+            :route_guids,
+            :service_binding_guids,
+            :space_guid,
+            :stack_guid,
+            :staging_task_id,
+            :state,
+            :ports
+          )
       }
     end
 
@@ -515,8 +625,8 @@ module VCAP::CloudController
       context 'when app is being created' do
         subject do
           App.new(
-              name: Sham.name,
-              space: space,
+            name: Sham.name,
+            space: space,
           )
         end
         it_always_sets_stack
@@ -533,7 +643,7 @@ module VCAP::CloudController
       it 'compose the buildpack cache key from stack name and app guid' do
         app.save
         app.refresh
-        expect(app.buildpack_cache_key).to eq("#{app.stack.name}-#{app.guid}")
+        expect(app.buildpack_cache_key).to eq("#{app.guid}/#{app.stack.name}")
       end
     end
 
@@ -552,10 +662,10 @@ module VCAP::CloudController
 
       context 'app needs staging' do
         subject { AppFactory.make(
-            package_hash: 'package-hash',
-            package_state: 'PENDING',
-            instances: 1,
-            state: 'STARTED'
+          package_hash: 'package-hash',
+          package_state: 'PENDING',
+          instances: 1,
+          state: 'STARTED'
         )
         }
 
@@ -569,11 +679,11 @@ module VCAP::CloudController
       context 'app is already staged' do
         subject do
           AppFactory.make(
-              package_hash: 'package-hash',
-              instances: 1,
-              droplet_hash: 'droplet-hash',
-              package_state: 'STAGED',
-              state: 'STARTED')
+            package_hash: 'package-hash',
+            instances: 1,
+            droplet_hash: 'droplet-hash',
+            package_state: 'STAGED',
+            state: 'STARTED')
         end
 
         it 'marks the app for re-staging' do
@@ -594,10 +704,10 @@ module VCAP::CloudController
       context 'app is already staged' do
         subject do
           AppFactory.make(
-              package_hash: 'package-hash',
-              instances: 1,
-              package_state: 'STAGED',
-              droplet_hash: 'droplet-hash')
+            package_hash: 'package-hash',
+            instances: 1,
+            package_state: 'STAGED',
+            droplet_hash: 'droplet-hash')
         end
 
         it 'knows its current droplet' do
@@ -644,10 +754,10 @@ module VCAP::CloudController
       context 'when the app has a current droplet' do
         before do
           subject.add_droplet(Droplet.new(
-            app: subject,
-            droplet_hash: 'the-droplet-hash',
-            execution_metadata: 'some-staging-metadata',
-          ))
+              app: subject,
+              droplet_hash: 'the-droplet-hash',
+              execution_metadata: 'some-staging-metadata',
+            ))
           subject.droplet_hash = 'the-droplet-hash'
         end
 
@@ -676,10 +786,10 @@ module VCAP::CloudController
       context 'when the app has a current droplet' do
         before do
           subject.add_droplet(Droplet.new(
-            app: subject,
-            droplet_hash: 'the-droplet-hash',
-            detected_start_command: 'run-my-app',
-          ))
+              app: subject,
+              droplet_hash: 'the-droplet-hash',
+              detected_start_command: 'run-my-app',
+            ))
           subject.droplet_hash = 'the-droplet-hash'
         end
 
@@ -719,19 +829,19 @@ module VCAP::CloudController
         app = AppFactory.make
 
         domain = PrivateDomain.make(
-            owning_organization: app.space.organization
+          owning_organization: app.space.organization
         )
 
         other_space = Space.make(organization: app.space.organization)
 
         route = Route.make(
-            space: other_space,
-            domain: domain,
+          space: other_space,
+          domain: domain,
         )
 
         expect {
           app.add_route(route)
-        }.to raise_error(Errors::InvalidRouteRelation, /URL was not available/)
+        }.to raise_error(Errors::InvalidRouteRelation, /The requested route relation is invalid/)
       end
 
       it 'should not associate an app with a route created on another space with a shared domain' do
@@ -740,9 +850,9 @@ module VCAP::CloudController
 
         other_space = Space.make(organization: app.space.organization)
         route = Route.make(
-            host: Sham.host,
-            space: other_space,
-            domain: shared_domain
+          host: Sham.host,
+          space: other_space,
+          domain: shared_domain
         )
 
         expect {
@@ -758,20 +868,21 @@ module VCAP::CloudController
           process = AppFactory.make(memory: 259, disk_quota: 799, file_descriptors: 1234, name: 'process-name')
           app_model.add_process(process)
           expected_hash = {
-              limits: {
-                  mem: 259,
-                  disk: 799,
-                  fds: 1234,
-              },
-              application_version: process.version,
-              application_name: app_model.name,
-              application_uris: process.uris,
-              version: process.version,
-              name: process.name,
-              space_name: process.space.name,
-              space_id: process.space.guid,
-              uris: process.uris,
-              users: nil
+            limits: {
+              mem: 259,
+              disk: 799,
+              fds: 1234,
+            },
+            application_id: process.guid,
+            application_version: process.version,
+            application_name: app_model.name,
+            application_uris: process.uris,
+            version: process.version,
+            name: process.name,
+            space_name: process.space.name,
+            space_id: process.space.guid,
+            uris: process.uris,
+            users: nil
           }
 
           expect(process.vcap_application).to eq(expected_hash)
@@ -782,20 +893,21 @@ module VCAP::CloudController
         it 'has the expected values' do
           app = AppFactory.make(memory: 259, disk_quota: 799, file_descriptors: 1234, name: 'app-name')
           expected_hash = {
-              limits: {
-                  mem: 259,
-                  disk: 799,
-                  fds: 1234,
-              },
-              application_version: app.version,
-              application_name: 'app-name',
-              application_uris: app.uris,
-              version: app.version,
-              name: 'app-name',
-              space_name: app.space.name,
-              space_id: app.space.guid,
-              uris: app.uris,
-              users: nil
+            limits: {
+              mem: 259,
+              disk: 799,
+              fds: 1234,
+            },
+            application_id: app.guid,
+            application_version: app.version,
+            application_name: 'app-name',
+            application_uris: app.uris,
+            version: app.version,
+            name: 'app-name',
+            space_name: app.space.name,
+            space_id: app.space.guid,
+            uris: app.uris,
+            users: nil
           }
 
           expect(app.vcap_application).to eq(expected_hash)
@@ -812,9 +924,9 @@ module VCAP::CloudController
       def self.it_does_not_mark_for_re_staging
         it 'does not mark an app for restage' do
           app = AppFactory.make(
-              package_hash: 'deadbeef',
-              package_state: 'STAGED',
-              environment_json: old_env_json,
+            package_hash: 'deadbeef',
+            package_state: 'STAGED',
+            environment_json: old_env_json,
           )
 
           expect {
@@ -873,6 +985,100 @@ module VCAP::CloudController
           app = AppFactory.make(environment_json: long_env)
           app.reload
           expect(app.environment_json).to eq(long_env)
+        end
+      end
+    end
+
+    describe 'docker credentials' do
+      let(:login_server) { 'https://index.docker.io/v1' }
+      let(:user) { 'user' }
+      let(:password) { 'password' }
+      let(:email) { 'email@example.com' }
+      let(:docker_credentials) do
+        {
+          docker_login_server: login_server,
+          docker_user: user,
+          docker_password: password,
+          docker_email: email
+        }
+      end
+      let(:expected_docker_credentials) do
+        {
+          'docker_login_server' => login_server,
+          'docker_user' => user,
+          'docker_password' => password,
+          'docker_email' => email
+        }
+      end
+
+      describe 'serialization' do
+        let(:app) do
+          AppFactory.make(docker_credentials_json: docker_credentials)
+        end
+
+        it 'deserializes the serialized value' do
+          expect(app.docker_credentials_json).to eq(expected_docker_credentials)
+        end
+      end
+
+      describe 'restage' do
+        context 'if credentials change' do
+          let(:new_credentials) do
+            {
+              docker_login_server: login_server,
+              docker_user: user,
+              docker_password: password,
+              docker_email: email
+            }
+          end
+          let(:app) do
+            AppFactory.make(
+              package_hash: 'deadbeef',
+              package_state: 'STAGED',
+              docker_credentials_json: docker_credentials,
+            )
+          end
+
+          it 'does not mark an app for restage' do
+            expect {
+              app.docker_credentials_json = new_credentials
+              app.save
+            }.not_to change { app.needs_staging? }
+          end
+        end
+      end
+
+      describe 'encryption' do
+        let!(:app) do
+          AppFactory.make(docker_credentials_json: docker_credentials)
+        end
+        let(:last_row) { VCAP::CloudController::App.dataset.naked.order_by(:id).last }
+
+        it 'is encrypted' do
+          expect(last_row[:encrypted_docker_credentials_json]).not_to eq docker_credentials
+        end
+
+        it 'is decrypted' do
+          app.reload
+          expect(app.docker_credentials_json).to eq expected_docker_credentials
+        end
+
+        it 'does not store unecrypted credentials' do
+          expect(last_row[:docker_credentials_json]).to be_nil
+        end
+
+        it 'docker_salt is unique for each app' do
+          app_2 = AppFactory.make(docker_credentials_json: docker_credentials)
+          expect(app.docker_salt).not_to eq app_2.docker_salt
+        end
+
+        it 'must have a docker_salt of length 8' do
+          expect(app.docker_salt.length).to eq 8
+        end
+
+        it 'must deal with null credentials to remain null after encryption' do
+          null_credentials_app = AppFactory.make
+          expect(null_credentials_app.docker_credentials_json).to be_nil
         end
       end
     end
@@ -980,7 +1186,7 @@ module VCAP::CloudController
     describe 'metadata' do
       it 'deserializes the serialized value' do
         app = AppFactory.make(
-            metadata: { 'jesse' => 'super awesome' },
+          metadata: { 'jesse' => 'super awesome' },
         )
         expect(app.metadata).to eq('jesse' => 'super awesome')
       end
@@ -1527,6 +1733,28 @@ module VCAP::CloudController
         }.to change { app.package_pending_since }.from(kind_of(Time)).to(nil)
       end
 
+      describe 'setting staging_failed_description' do
+        it 'sets the staging_failed_description to the v2.yml description of the error type' do
+          expect {
+            app.mark_as_failed_to_stage('NoAppDetectedError')
+          }.to change { app.staging_failed_description }.to('An app was not successfully detected by any available buildpack')
+        end
+
+        it 'provides a string for interpolation on errors that require it' do
+          expect {
+            app.mark_as_failed_to_stage('StagingError')
+          }.to change { app.staging_failed_description }.to('Staging error: staging failed')
+        end
+
+        App::STAGING_FAILED_REASONS.each do |reason|
+          it "successfully sets staging_failed_description for reason: #{reason}" do
+            expect {
+              app.mark_as_failed_to_stage(reason)
+            }.to_not raise_error
+          end
+        end
+      end
+
       context 'when a valid reason is specified' do
         App::STAGING_FAILED_REASONS.each do |reason|
           it 'sets the requested staging failed reason' do
@@ -1538,10 +1766,10 @@ module VCAP::CloudController
       end
 
       context 'when an unexpected reason is specifed' do
-        it 'should fail validation' do
+        it 'should use the default, generic reason' do
           expect {
-            app.mark_as_failed_to_stage('MyReason')
-          }.to raise_error(Sequel::ValidationFailed)
+            app.mark_as_failed_to_stage
+          }.to change { app.staging_failed_reason }.to 'StagingError'
         end
       end
 
@@ -1580,6 +1808,7 @@ module VCAP::CloudController
       before do
         app.package_state = 'FAILED'
         app.staging_failed_reason = 'StagingError'
+        app.staging_failed_description = 'Failed to stage because of something very tragic'
       end
 
       it 'should set the package state pending' do
@@ -1592,6 +1821,12 @@ module VCAP::CloudController
         expect {
           app.mark_for_restaging
         }.to change { app.staging_failed_reason }.to nil
+      end
+
+      it 'should clear the staging failed description' do
+        expect {
+          app.mark_for_restaging
+        }.to change { app.staging_failed_description }.to nil
       end
 
       it 'updates the package_pending_since date to current' do
@@ -1657,23 +1892,85 @@ module VCAP::CloudController
       end
     end
 
-    describe 'adding routes to unsaved apps' do
-      it 'should set a route by guid on a new but unsaved app' do
-        app = App.new(name: Sham.name,
-                      space: space,
-                      stack: Stack.make)
-        app.add_route_by_guid(route.guid)
-        app.save
-        expect(app.routes).to eq([route])
+    describe 'routing_info' do
+      let(:domain) { PrivateDomain.make(name: 'mydomain.com', owning_organization: org) }
+      let(:app) { AppFactory.make(space: space, diego: true) }
+      let(:route_without_service) { Route.make(host: 'host2', domain: domain, space: space, path: '/my%20path') }
+      let(:route_with_service) do
+        route = Route.make(host: 'myhost', domain: domain, space: space, path: '/my%20path')
+        service_instance = ManagedServiceInstance.make(:routing, space: space)
+        RouteBinding.make(route: route, service_instance: service_instance)
+        route
       end
 
-      it 'should not allow a route on a domain from another org' do
-        app = App.new(name: Sham.name,
-                      space: space,
-                      stack: Stack.make)
-        app.add_route_by_guid(Route.make.guid)
-        expect { app.save }.to raise_error(Errors::InvalidRouteRelation)
-        expect(app.routes).to be_empty
+      it 'returns the mapped http routes associated with the app' do
+        app.add_route(route_with_service)
+        app.add_route(route_without_service)
+
+        expected_hash = {
+          'http_routes' => [
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url },
+            { 'hostname' => route_without_service.uri }
+          ]
+        }
+
+        expect(app.routing_info).to match expected_hash
+      end
+    end
+
+    describe '#validate_route' do
+      context 'adding routes to unsaved apps' do
+        it 'should set a route by guid on a new but unsaved app' do
+          app = App.new(name: Sham.name,
+                        space: space,
+                        stack: Stack.make)
+          app.add_route_by_guid(route.guid)
+          app.save
+          expect(app.routes).to eq([route])
+        end
+
+        it 'should not allow a route on a domain from another org' do
+          app = App.new(name: Sham.name,
+                        space: space,
+                        stack: Stack.make)
+          app.add_route_by_guid(Route.make.guid)
+          expect { app.save }.to raise_error(Errors::InvalidRouteRelation)
+          expect(app.routes).to be_empty
+        end
+      end
+      # context 'when the route is nil'
+      # context 'when the space is nil'
+      # context 'when the route is not in the same space as the app'
+      context 'when the route is bound to a routing service' do
+        let(:domain) { PrivateDomain.make(name: 'mydomain.com', owning_organization: org) }
+        let(:app) { AppFactory.make(space: space, diego: diego?) }
+        let(:route_with_service) do
+          route = Route.make(host: 'myhost', domain: domain, space: space, path: '/my%20path')
+          service_instance = ManagedServiceInstance.make(:routing, space: space)
+          RouteBinding.make(route: route, service_instance: service_instance)
+          route
+        end
+
+        context 'and the app uses diego' do
+          let(:diego?) { true }
+          it 'does not raise an error' do
+            expect {
+              app.add_route_by_guid(route_with_service.guid)
+              app.save
+            }.not_to raise_error
+          end
+        end
+
+        context 'and the app does not use diego' do
+          let(:diego?) { false }
+          it 'to raise error' do
+            expect {
+              app.add_route_by_guid(route_with_service.guid)
+              app.save
+            }.to raise_error(Errors::InvalidRouteRelation).
+            with_message("The requested route relation is invalid: #{route_with_service.guid} - Route services are only supported for apps on Diego")
+          end
+        end
       end
     end
 
@@ -1817,7 +2114,7 @@ module VCAP::CloudController
         it 'does not call UndoAppChanges when its not an ApiError', isolation: :truncation do
           expect(AppObserver).to receive(:updated).once.with(app).and_raise('boom')
           expect(UndoAppChanges).not_to receive(:new)
-          expect { app.update(state: 'STARTED') }.to raise_error
+          expect { app.update(state: 'STARTED') }.to raise_error('boom')
         end
       end
 
@@ -1958,8 +2255,8 @@ module VCAP::CloudController
         expect {
           app.destroy
         }.to change {
-          AppEvent.where(id: app_event.id).count
-        }.from(1).to(0)
+               AppEvent.where(id: app_event.id).count
+             }.from(1).to(0)
       end
 
       it 'creates an AppUsageEvent when the app state is STARTED' do
@@ -1980,176 +2277,6 @@ module VCAP::CloudController
       it 'locks the record when destroying' do
         expect(app).to receive(:lock!)
         app.destroy
-      end
-    end
-
-    describe 'billing', deprecated_billing: true do
-      before do
-        TestConfig.override({ billing_event_writing_enabled: true })
-      end
-
-      context 'app state changes' do
-        context 'creating a stopped app' do
-          it 'does not generate a start event or stop event' do
-            expect(AppStartEvent).not_to receive(:create_from_app)
-            expect(AppStopEvent).not_to receive(:create_from_app)
-            AppFactory.make(state: 'STOPPED')
-          end
-        end
-
-        context 'starting a stopped app' do
-          it 'generates a start event' do
-            app = AppFactory.make(state: 'STOPPED')
-            expect(AppStartEvent).to receive(:create_from_app).with(app)
-            expect(AppStopEvent).not_to receive(:create_from_app)
-            app.update(state: 'STARTED', package_hash: 'abc', package_state: 'STAGED')
-          end
-        end
-
-        context 'updating a stopped app' do
-          it 'does not generate a start event or stop event' do
-            app = AppFactory.make(state: 'STOPPED')
-            expect(AppStartEvent).not_to receive(:create_from_app)
-            expect(AppStopEvent).not_to receive(:create_from_app)
-            app.update(state: 'STOPPED')
-          end
-        end
-
-        context 'stopping a started app' do
-          it 'does not generate a start event, but generates a stop event' do
-            app = AppFactory.make(state: 'STARTED', package_hash: 'abc', package_state: 'STAGED')
-            expect(AppStartEvent).not_to receive(:create_from_app)
-            expect(AppStopEvent).to receive(:create_from_app).with(app)
-            app.update(state: 'STOPPED')
-          end
-        end
-
-        context 'updating a started app' do
-          it 'does not generate a start or stop event' do
-            app = AppFactory.make(state: 'STARTED', package_hash: 'abc', package_state: 'STAGED')
-            expect(AppStartEvent).not_to receive(:create_from_app)
-            expect(AppStopEvent).not_to receive(:create_from_app)
-            app.update(state: 'STARTED')
-          end
-        end
-
-        context 'deleting a started app' do
-          let(:app) do
-            app = AppFactory.make(state: 'STARTED', package_hash: 'abc', package_state: 'STAGED')
-            app_org = app.space.organization
-            app_org.billing_enabled = true
-            app_org.save(validate: false) # because we need to force enable billing
-            app
-          end
-
-          before do
-            AppStartEvent.create_from_app(app)
-            allow(VCAP::CloudController::Dea::Client).to receive(:stop)
-          end
-
-          it 'generates a stop event' do
-            expect(AppStopEvent).to receive(:create_from_app).with(app)
-            app.destroy
-          end
-
-          context 'when the stop event creation fails' do
-            before do
-              allow(AppStopEvent).to receive(:create_from_app).with(app).and_raise('boom')
-            end
-
-            it 'rolls back the deletion' do
-              expect { app.destroy rescue nil }.not_to change(app, :exists?).from(true)
-            end
-          end
-
-          context 'when somehow there is already a stop event for the most recent start event' do
-            it 'succeeds and does not generate a duplicate stop event' do
-              AppStopEvent.create_from_app(app)
-              expect(AppStopEvent).not_to receive(:create_from_app).with(app)
-              app.destroy
-            end
-          end
-        end
-
-        context 'deleting a stopped app' do
-          it 'does not generate a stop event' do
-            app = AppFactory.make(state: 'STOPPED')
-            expect(AppStopEvent).not_to receive(:create_from_app)
-            app.destroy
-          end
-        end
-      end
-
-      context 'footprint changes' do
-        let(:app) do
-          app = AppFactory.make
-          app_org = app.space.organization
-          app_org.billing_enabled = true
-          app_org.save(validate: false) # because we need to force enable billing
-          app
-        end
-
-        context 'new app' do
-          it 'does not generate a start event or stop event' do
-            expect(AppStartEvent).not_to receive(:create_from_app)
-            expect(AppStopEvent).not_to receive(:create_from_app)
-            app
-          end
-        end
-
-        context 'no change in footprint' do
-          it 'does not generate a start event or stop event' do
-            expect(AppStartEvent).not_to receive(:create_from_app)
-            expect(AppStopEvent).not_to receive(:create_from_app)
-            app.save
-          end
-        end
-
-        context 'started app' do
-          before do
-            app.state = 'STARTED'
-            app.package_hash = 'abc'
-            app.package_state = 'STAGED'
-            app.save
-          end
-
-          def self.it_emits_app_start_and_stop_events(&block)
-            it 'generates a stop event for the old run_id, and start events for the new run_id' do
-              original_start_event = AppStartEvent.filter(app_guid: app.guid).all[0]
-
-              yield(app)
-
-              app.save
-
-              expect(AppStopEvent.filter(
-                  app_guid: app.guid,
-                  app_run_id: original_start_event.app_run_id
-              ).count).to eq(1)
-
-              expect(AppStartEvent.filter(
-                  app_guid: app.guid
-              ).last.app_run_id).not_to eq(original_start_event.app_run_id)
-            end
-          end
-
-          context 'change in memory' do
-            it_emits_app_start_and_stop_events do |app|
-              app.memory = 512
-            end
-          end
-
-          context 'change in production flag' do
-            it_emits_app_start_and_stop_events do |app|
-              app.production = true
-            end
-          end
-
-          context 'change in instances' do
-            it_emits_app_start_and_stop_events do |app|
-              app.instances = 5
-            end
-          end
-        end
       end
     end
 
@@ -2262,11 +2389,18 @@ module VCAP::CloudController
         before do
           subject.diego = true
           allow(AppObserver).to receive(:routes_changed).with(subject)
+          process_guid = Diego::ProcessGuid.from_app(subject)
+          stub_request(:delete, "#{TestConfig.config[:diego_nsync_url]}/v1/apps/#{process_guid}").to_return(status: 202)
         end
 
         it 'does not update the app version' do
           expect { subject.add_route(route) }.to_not change(subject, :version)
           expect { subject.remove_route(route) }.to_not change(subject, :version)
+        end
+
+        it 'updates the app updated_at' do
+          expect { subject.add_route(route) }.to change(subject, :updated_at)
+          expect { subject.remove_route(route) }.to change(subject, :updated_at)
         end
 
         it 'calls the app observer with the app' do
@@ -2300,6 +2434,30 @@ module VCAP::CloudController
             end
           end
         end
+      end
+    end
+
+    describe '#needs_package_in_current_state?' do
+      it 'returns true if started' do
+        app = App.new(state: 'STARTED', package_hash: nil)
+        expect(app.needs_package_in_current_state?).to eq(true)
+      end
+
+      it 'returns false if not started' do
+        expect(App.new(state: 'STOPPED', package_hash: nil).needs_package_in_current_state?).to eq(false)
+      end
+    end
+
+    describe 'ports' do
+      it 'serializes and deserializes arrays of integers' do
+        app = App.make(ports: [1, 2, 3, 4])
+        expect(app.ports).to eq([1, 2, 3, 4])
+
+        app = App.make(ports: [])
+        expect(app.ports).to eq(nil)
+
+        app = App.make(ports: [1])
+        expect(app.ports).to eq([1])
       end
     end
   end

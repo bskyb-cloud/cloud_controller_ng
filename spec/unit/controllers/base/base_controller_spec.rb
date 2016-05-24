@@ -74,6 +74,10 @@ module VCAP::CloudController
       allow_any_instance_of(TestController).to receive(:logger).and_return(logger)
     end
 
+    after(:all) do
+      I18n.locale = nil # reset locale after running tests that change it
+    end
+
     describe '#dispatch' do
       context 'when the dispatch is successful' do
         let(:token_decoder) { double(:decoder) }
@@ -105,7 +109,7 @@ module VCAP::CloudController
         it 'logs the error when a Sequel Database Error occurs' do
           expect(logger).to receive(:warn).with(/exception not translated/)
           get '/test_database_error', '', headers_for(user)
-          expect(decoded_response['code']).to eq 10004
+          expect(decoded_response['code']).to eq 10011
         end
 
         it 'logs an error when a JSON error occurs' do
@@ -123,13 +127,18 @@ module VCAP::CloudController
       describe '#redirect' do
         let(:request) { double('request', query_string: '') }
         let(:sinatra) { double('sinatra', request: request) }
+        let(:env) { double(:env) }
         let(:app) do
           described_class.new(
             double(:config),
-            logger, double(:env), double(:params, :[] => nil),
+            logger, env, double(:params, :[] => nil),
             double(:body),
             sinatra,
           )
+        end
+
+        before do
+          allow(env).to receive(:[])
         end
 
         it 'delegates #redirect to the injected sinatra' do
@@ -250,6 +259,21 @@ module VCAP::CloudController
           let(:env) { { 'PATH_INFO' => '/v1/apps/v2' } }
           it { is_expected.not_to be_v2_api }
         end
+      end
+    end
+
+    describe '#unversioned_api?' do
+      subject(:base_controller) do
+        VCAP::CloudController::RestController::BaseController.new(double(:config), logger, env, params, double(:body), nil)
+      end
+      context 'when the endpoint is unversioned' do
+        let(:env) { { 'PATH_INFO' => '/foobar' } }
+        it { is_expected.to be_unversioned_api }
+      end
+
+      context 'when the endpoint is not unversioned' do
+        let(:env) { { 'PATH_INFO' => '/v1/foobar' } }
+        it { is_expected.not_to be_unversioned_api }
       end
     end
 

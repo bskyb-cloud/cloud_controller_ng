@@ -2,7 +2,7 @@
 source 'http://rubygems.org'
 
 gem 'addressable'
-gem 'activesupport'
+gem 'railties'
 gem 'rake'
 gem 'eventmachine', '~> 1.0.0'
 gem 'fog'
@@ -22,22 +22,22 @@ gem 'steno'
 gem 'cloudfront-signer'
 gem 'vcap_common', '~> 4.0'
 gem 'allowy'
-gem 'loggregator_emitter', '~> 4.0'
+gem 'loggregator_emitter', '~> 5.0'
 gem 'delayed_job_sequel', git: 'https://github.com/cloudfoundry/delayed_job_sequel.git'
 gem 'thin', '~> 1.6.0'
-gem 'newrelic_rpm', '3.7.3.204'
+gem 'newrelic_rpm', '3.12.0.288'
 gem 'clockwork', require: false
 gem 'activemodel'
+gem 'statsd-ruby'
 
 # We need to use https for git urls as the git protocol is blocked by various
 # firewalls
 gem 'vcap-concurrency', git: 'https://github.com/cloudfoundry/vcap-concurrency.git', ref: '2a5b0179'
 gem 'cf-uaa-lib', '~> 3.1.0', git: 'https://github.com/cloudfoundry/cf-uaa-lib.git', ref: 'b1e11235dc6cd7d8d4680e005526de37201305ea'
 gem 'cf-message-bus', '~> 0.3.0'
-gem 'cf-registrar', '~> 1.0.2', git: 'https://github.com/cloudfoundry/cf-registrar.git'
 
 group :db do
-  gem 'mysql2', '0.3.13'
+  gem 'mysql2', '0.3.20'
   gem 'pg', '0.16.0'
 end
 
@@ -57,6 +57,7 @@ group :test do
   gem 'rspec_api_documentation', git: 'https://github.com/zipmark/rspec_api_documentation.git'
   gem 'rspec-collection_matchers'
   gem 'rspec-its'
+  gem 'rspec-rails'
   gem 'rubocop'
   gem 'astrolabe'
   gem 'timecop'
@@ -65,5 +66,6 @@ end
 
 group :development do
   gem 'roodi'
+  gem 'ruby-debug-ide'
   gem 'byebug'
 end

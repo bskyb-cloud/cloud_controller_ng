@@ -38,6 +38,27 @@ module VCAP::CloudController
         end
       end
 
+      context 'placement percentage' do
+        let(:placement_percentage) { 15 }
+        before { TestConfig.override({ placement_top_stager_percentage: placement_percentage }) }
+
+        it 'samples out of the top 15% stagers' do
+          (0..99).to_a.shuffle.each do |i|
+            subject.process_advertise_message(
+              'id' => "staging-id-#{i}",
+              'stacks' => ['stack-name'],
+              'available_memory' => 1024 * i,
+            )
+          end
+
+          samples = []
+          1000.times do
+            samples.push(subject.find_stager('stack-name', 1024, 0))
+          end
+          expect(samples.uniq.size).to be_within(1).of(placement_percentage)
+        end
+      end
+
       describe 'staging advertisement expiration' do
         it 'purges expired DEAs' do
           Timecop.freeze do
@@ -145,40 +166,6 @@ module VCAP::CloudController
         }.to change {
           subject.find_stager('stack-name', 1024, 512)
         }.from(nil).to('staging-id')
-      end
-    end
-
-    describe 'pre-warming buildpack caches' do
-      let(:stager_advertise_msg) do
-        {
-          'id' => 'staging-id',
-          'stacks' => ['stack-name'],
-          'available_memory' => 1024,
-          'available_disk' => 512
-        }
-      end
-
-      let(:buildpack_array) { double(:generated_buildpack_arrray) }
-      let(:buildpacks_presenter) { double(:buildpacks_presenter, to_staging_message_array: buildpack_array) }
-
-      before do
-        subject.process_advertise_message(stager_advertise_msg)
-      end
-
-      context 'when the stager is already in the pool' do
-        it 'does not send an buildpack advertisement' do
-          expect(message_bus).not_to receive(:publish)
-          subject.process_advertise_message(stager_advertise_msg)
-        end
-      end
-
-      context 'when the stager is seen for the first time' do
-        it 'publishes a buildpack advertisement' do
-          expect(AdminBuildpacksPresenter).to receive(:new).with(url_generator).and_return buildpacks_presenter
-          expect(message_bus).to receive(:publish).with('buildpacks', buildpack_array)
-
-          subject.process_advertise_message(stager_advertise_msg.merge('id' => '123'))
-        end
       end
     end
   end

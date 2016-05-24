@@ -1,9 +1,4 @@
-$LOAD_PATH.unshift(File.expand_path('../../lib', __FILE__))
-$LOAD_PATH.unshift(File.expand_path('../../app', __FILE__))
-
-require 'rubygems'
-require 'bundler'
-require 'bundler/setup'
+require File.expand_path('../../config/boot', __FILE__)
 
 if ENV['CODECLIMATE_REPO_TOKEN'] && ENV['COVERAGE']
   require 'codeclimate-test-reporter'
@@ -23,11 +18,11 @@ require 'cf_message_bus/mock_message_bus'
 require 'cloud_controller'
 require 'allowy/rspec'
 
-require 'pry'
 require 'posix/spawn'
 
 require 'rspec_api_documentation'
 require 'services'
+require 'documentation_helper'
 
 require 'support/bootstrap/spec_bootstrap'
 require 'rspec/collection_matchers'
@@ -43,21 +38,29 @@ RSpec.configure do |rspec_config|
   rspec_config.include ModelCreation
 
   rspec_config.include ServiceBrokerHelpers
-  rspec_config.include ControllerHelpers, type: :controller, file_path: EscapedPath.join(%w(spec unit controllers))
+  rspec_config.include ControllerHelpers, type: :v2_controller, file_path: EscapedPath.join(%w(spec unit controllers))
   rspec_config.include ControllerHelpers, type: :api
   rspec_config.include ControllerHelpers, file_path: EscapedPath.join(%w(spec acceptance))
-  rspec_config.include ApiDsl, type: :legacy_api
+  rspec_config.include ApiDsl, type: :api
+  rspec_config.include LegacyApiDsl, type: :legacy_api
 
   rspec_config.include IntegrationHelpers, type: :integration
   rspec_config.include IntegrationHttp, type: :integration
   rspec_config.include IntegrationSetupHelpers, type: :integration
   rspec_config.include IntegrationSetup, type: :integration
 
+  rspec_config.before(:each, type: :api) do
+    VCAP::CloudController::DocumentationConfigure.configure!(self)
+  end
+
   rspec_config.before(:all) { WebMock.disable_net_connect!(allow: 'codeclimate.com') }
   rspec_config.before(:all, type: :integration) { WebMock.allow_net_connect! }
   rspec_config.after(:all, type: :integration) { WebMock.disable_net_connect!(allow: 'codeclimate.com') }
 
+  rspec_config.example_status_persistence_file_path = 'spec/examples.txt'
   rspec_config.expose_current_running_example_as :example # Can be removed when we upgrade to rspec 3
+
+  Delayed::Worker.plugins << DeserializationRetry
 
   rspec_config.before :each do
     Fog::Mock.reset
@@ -72,7 +75,7 @@ RSpec.configure do |rspec_config|
   end
 
   rspec_config.around :each do |example|
-    isolation = DatabaseIsolation.choose(example.metadata[:isolation], TestConfig.config, DbConfig.connection)
+    isolation = DatabaseIsolation.choose(example.metadata[:isolation], TestConfig.config, DbConfig.new.connection)
     isolation.cleanly { example.run }
   end
 
@@ -98,6 +101,5 @@ RSpec.configure do |rspec_config|
     c.api_name = 'Cloud Foundry API'
     c.template_path = 'spec/api/documentation/templates'
     c.curl_host = 'https://api.[your-domain.com]'
-    c.app = FakeFrontController.new(TestConfig.config)
   end
 end

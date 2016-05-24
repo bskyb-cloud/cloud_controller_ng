@@ -27,10 +27,6 @@ module VCAP::CloudController
           expect(config[:directories]).to eq({})
         end
 
-        it 'enables writing billing events' do
-          expect(config[:billing_event_writing_enabled]).to be true
-        end
-
         it 'sets a default request_timeout_in_seconds value' do
           expect(config[:request_timeout_in_seconds]).to eq(900)
         end
@@ -49,10 +45,6 @@ module VCAP::CloudController
 
         it 'sets a default value for allowed_cors_domains' do
           expect(config[:allowed_cors_domains]).to eq([])
-        end
-
-        it 'disables docker images on diego' do
-          expect(config[:diego_docker]).to eq(false)
         end
 
         it 'allows users to select the backend for their apps' do
@@ -79,6 +71,10 @@ module VCAP::CloudController
           expect(config[:dea_advertisement_timeout_in_seconds]).to eq(10)
         end
 
+        it 'sets a default value for placement_top_stager_percentage' do
+          expect(config[:placement_top_stager_percentage]).to eq(10)
+        end
+
         it 'sets a default value for broker_timeout_seconds' do
           expect(config[:broker_client_timeout_seconds]).to eq(60)
         end
@@ -89,6 +85,14 @@ module VCAP::CloudController
 
         it 'does not set a default value for internal_service_hostname' do
           expect(config[:internal_service_hostname]).to be_nil
+        end
+
+        it ' sets a default value for num_of_valid_packages_per_app_to_store' do
+          expect(config[:packages][:max_valid_packages_stored]).to eq(5)
+        end
+
+        it ' sets a default value for num_of_staged_droplets_per_app_to_store' do
+          expect(config[:droplets][:max_staged_droplets_stored]).to eq(5)
         end
       end
 
@@ -119,10 +123,6 @@ module VCAP::CloudController
 
           it 'preserves the external_protocol value from the file' do
             expect(config[:external_protocol]).to eq('http')
-          end
-
-          it 'preserves the billing_event_writing_enabled value from the file' do
-            expect(config[:billing_event_writing_enabled]).to be false
           end
 
           it 'preserves the request_timeout_in_seconds value from the file' do
@@ -156,10 +156,6 @@ module VCAP::CloudController
             expect(config[:users_can_select_backend]).to eq(false)
           end
 
-          it 'preserves the diego configuration from the file' do
-            expect(config[:diego_docker]).to eq(true)
-          end
-
           it 'runs apps on diego' do
             expect(config[:default_to_diego_backend]).to eq(true)
           end
@@ -185,7 +181,12 @@ module VCAP::CloudController
           end
 
           it 'preserves the internal_service_hostname value from the file' do
-            expect(config[:internal_service_hostname]).to eq('cloud_controller_ng.service.consul')
+            expect(config[:internal_service_hostname]).to eq('cloud_controller_ng.service.cf.internal')
+          end
+
+          it 'preserves the expiration values from the file' do
+            expect(config[:packages][:max_valid_packages_stored]).to eq(10)
+            expect(config[:droplets][:max_staged_droplets_stored]).to eq(10)
           end
 
           context 'when the staging auth is already url encoded' do

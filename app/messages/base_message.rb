@@ -1,31 +1,48 @@
 require 'active_model'
+require 'messages/validators'
 
 module VCAP::CloudController
   class BaseMessage
     include ActiveModel::Model
+    include Validators
 
-    class StringValidator < ActiveModel::EachValidator
-      def validate_each(record, attribute, value)
-        record.errors.add attribute, 'must be a string' unless value.is_a?(String)
-      end
+    attr_accessor :requested_keys, :extra_keys
+
+    def initialize(params={})
+      @requested_keys   = params.keys
+      disallowed_params = params.slice!(*allowed_keys)
+      @extra_keys       = disallowed_params.keys
+      super(params)
     end
 
-    class HashValidator < ActiveModel::EachValidator
-      def validate_each(record, attribute, value)
-        record.errors.add attribute, 'must be a hash' unless value.is_a?(Hash)
-      end
+    def requested?(key)
+      requested_keys.include?(key)
     end
 
-    class GuidValidator < ActiveModel::EachValidator
-      def validate_each(record, attribute, value)
-        record.errors.add attribute, 'must be a string' unless value.is_a?(String)
-        record.errors.add attribute, 'must be between 1 and 200 characters' unless value.is_a?(String) && (1..200).include?(value.size)
+    def audit_hash
+      request = {}
+      requested_keys.each do |key|
+        request[key.to_s] = self.try(key)
       end
+      request
     end
 
-    class UriValidator < ActiveModel::EachValidator
-      def validate_each(record, attribute, value)
-        record.errors.add attribute, 'must be a valid URI' unless value =~ /\A#{URI.regexp}\Z/
+    def to_param_hash(opts={ exclude: [] })
+      params = {}
+      (requested_keys - opts[:exclude]).each do |key|
+        val = self.try(key)
+        if val.is_a?(Array)
+          params[key] = val.map { |v| CGI.escape(v) }.join(',')
+        else
+          params[key] = val
+        end
+      end
+      params
+    end
+
+    def self.to_array!(params, key)
+      if params[key]
+        params[key] = params[key].to_s.split(',').map { |val| CGI.unescape(val) unless val.nil? }
       end
     end
 
@@ -37,20 +54,18 @@ module VCAP::CloudController
       end
     end
 
-    attr_accessor :requested_keys, :extra_keys
-
-    def initialize(params)
-      @requested_keys   = params.keys
-      disallowed_params = params.slice!(*allowed_keys)
-      @extra_keys       = disallowed_params.keys
-      super(params)
+    class NoAdditionalParamsValidator < ActiveModel::Validator
+      def validate(record)
+        if record.extra_keys.any?
+          record.errors[:base] << "Unknown query parameter(s): '#{record.extra_keys.join("', '")}'"
+        end
+      end
     end
 
-    def requested?(key)
-      requested_keys.include?(key)
-    end
+    private
 
     def allowed_keys
+      raise NotImplementedError
     end
   end
 end

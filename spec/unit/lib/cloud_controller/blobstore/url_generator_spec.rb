@@ -116,7 +116,7 @@ module CloudController
             it 'gives out signed url to remote blobstore for appbits' do
               remote_uri = 'http://s3.example.com/signed'
 
-              expect(buildpack_cache_blobstore).to receive(:download_uri).with("#{app.stack.name}-#{app.guid}").and_return(remote_uri)
+              expect(buildpack_cache_blobstore).to receive(:download_uri).with("#{app.guid}/#{app.stack.name}").and_return(remote_uri)
 
               expect(url_generator.buildpack_cache_download_url(app)).to eql(remote_uri)
             end
@@ -241,6 +241,23 @@ module CloudController
           end
         end
 
+        context 'download unauthorized droplets permalink' do
+          it 'gives out a url to the cloud controller' do
+            expect(url_generator.unauthorized_perma_droplet_download_url(app)).to eql("http://api.example.com:9292/internal/v2/droplets/#{app.guid}/#{app.droplet_hash}/download")
+          end
+
+          context 'when no droplet_hash' do
+            before do
+              app.droplet_hash = nil
+              app.save
+            end
+
+            it 'returns nil if no droplet_hash' do
+              expect(url_generator.unauthorized_perma_droplet_download_url(app)).to be_nil
+            end
+          end
+        end
+
         context 'download app buildpack cache' do
           let(:app_model) { double(:app_model, guid: Sham.guid) }
           let(:stack) { Sham.name }
@@ -274,7 +291,7 @@ module CloudController
             it 'gives out signed url to remote blobstore for appbits' do
               remote_uri = 'http://s3.example.com/signed'
 
-              expect(buildpack_cache_blobstore).to receive(:download_uri).with("#{stack}-#{app_model.guid}").and_return(remote_uri)
+              expect(buildpack_cache_blobstore).to receive(:download_uri).with("#{app_model.guid}/#{stack}").and_return(remote_uri)
 
               expect(url_generator.v3_app_buildpack_cache_download_url(app_model.guid, stack)).to eql(remote_uri)
             end

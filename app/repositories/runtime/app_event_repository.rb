@@ -2,7 +2,12 @@ module VCAP::CloudController
   module Repositories
     module Runtime
       class AppEventRepository
-        CENSORED_FIELDS = [:encrypted_environment_json, :command, :environment_json, :environment_variables]
+        CENSORED_FIELDS = [:encrypted_environment_json,
+                           :command,
+                           :environment_json,
+                           :environment_variables,
+                           :docker_credentials_json,
+                           :encrypted_docker_credentials_json]
         CENSORED_MESSAGE = 'PRIVATE DATA HIDDEN'.freeze
         SYSTEM_ACTOR_HASH = { guid: 'system', type: 'system', name: 'system' }
 
@@ -22,12 +27,12 @@ module VCAP::CloudController
           create_app_audit_event('audit.app.update', app, space, actor, metadata)
         end
 
-        def record_app_set_current_droplet(app, space, actor_guid, actor_name, request_attrs)
+        def record_app_map_droplet(app, space, actor_guid, actor_name, request_attrs)
           Loggregator.emit(app.guid, "Updated app with guid #{app.guid} (#{app_audit_hash(request_attrs)})")
 
           actor = { name: actor_name, guid: actor_guid, type: 'user' }
           metadata = { request: app_audit_hash(request_attrs) }
-          create_app_audit_event('audit.app.update', app, space, actor, metadata)
+          create_app_audit_event('audit.app.droplet_mapped', app, space, actor, metadata)
         end
 
         def record_app_create(app, space, actor_guid, actor_name, request_attrs)
@@ -92,14 +97,14 @@ module VCAP::CloudController
           create_app_audit_event('audit.app.copy-bits', dest_app, dest_app.space, actor_hash, metadata)
         end
 
-        def record_app_ssh_unauthorized(app, actor_guid, actor_name)
+        def record_app_ssh_unauthorized(app, actor_guid, actor_name, index)
           actor_hash = { name: actor_name, guid: actor_guid, type: 'user' }
-          create_app_audit_event('audit.app.ssh-unauthorized', app, app.space, actor_hash, {})
+          create_app_audit_event('audit.app.ssh-unauthorized', app, app.space, actor_hash, { index: index })
         end
 
-        def record_app_ssh_authorized(app, actor_guid, actor_name)
+        def record_app_ssh_authorized(app, actor_guid, actor_name, index)
           actor_hash = { name: actor_name, guid: actor_guid, type: 'user' }
-          create_app_audit_event('audit.app.ssh-authorized', app, app.space, actor_hash, {})
+          create_app_audit_event('audit.app.ssh-authorized', app, app.space, actor_hash, { index: index })
         end
 
         private

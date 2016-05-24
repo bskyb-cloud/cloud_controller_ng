@@ -12,31 +12,21 @@ module VCAP::CloudController
       arbitrary_params = request_attrs['parameters']
 
       service_instance = ManagedServiceInstance.new(request_params)
-      attributes_to_update = service_instance.client.provision(
+
+      broker_response = service_instance.client.provision(
         service_instance,
         accepts_incomplete: accepts_incomplete,
-        arbitrary_parameters: arbitrary_params,
+        arbitrary_parameters: arbitrary_params
       )
 
       begin
-        service_instance.save_with_new_operation(attributes_to_update)
+        service_instance.save_with_new_operation(broker_response[:instance], broker_response[:last_operation])
       rescue => e
-        @logger.error "Failed to save while creating service instance #{service_instance.guid} with exception: #{e}."
-        orphan_mitigator = SynchronousOrphanMitigate.new(@logger)
-        orphan_mitigator.attempt_deprovision_instance(service_instance)
-        raise e
+        mitigate_orphan(e, service_instance)
       end
 
       if service_instance.operation_in_progress?
-        job = VCAP::CloudController::Jobs::Services::ServiceInstanceStateFetch.new(
-          'service-instance-state-fetch',
-          service_instance.client.attrs,
-          service_instance.guid,
-          @services_event_repository,
-          request_attrs,
-        )
-        enqueuer = Jobs::Enqueuer.new(job, queue: 'cc-generic')
-        enqueuer.enqueue
+        setup_async_job(request_attrs, service_instance)
       end
 
       if !accepts_incomplete || service_instance.last_operation.state != 'in progress'
@@ -44,6 +34,25 @@ module VCAP::CloudController
       end
 
       service_instance
+    end
+
+    def setup_async_job(request_attrs, service_instance)
+      job = VCAP::CloudController::Jobs::Services::ServiceInstanceStateFetch.new(
+        'service-instance-state-fetch',
+        service_instance.client.attrs,
+        service_instance.guid,
+        @services_event_repository,
+        request_attrs,
+      )
+      enqueuer = Jobs::Enqueuer.new(job, queue: 'cc-generic')
+      enqueuer.enqueue
+    end
+
+    def mitigate_orphan(e, service_instance, message: 'Failed to save while creating service instance')
+      @logger.error "#{message} #{service_instance.guid} with exception: #{e}."
+      orphan_mitigator = SynchronousOrphanMitigate.new(@logger)
+      orphan_mitigator.attempt_deprovision_instance(service_instance)
+      raise e
     end
   end
 end

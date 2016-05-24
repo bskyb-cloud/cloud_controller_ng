@@ -1,4 +1,4 @@
-require 'spec_helper'
+require 'rails_helper'
 require 'awesome_print'
 require 'rspec_api_documentation/dsl'
 
@@ -45,15 +45,19 @@ resource 'Apps (Experimental)', type: :api do
           {
             'guid'       => package.guid,
             'type'       => 'bits',
-            'hash'       => nil,
+            'data'       => {
+              'hash'       => { 'type' => 'sha1', 'value' => nil },
+              'error'      => nil
+            },
             'url'        => nil,
             'state'      => VCAP::CloudController::PackageModel::CREATED_STATE,
-            'error'      => nil,
             'created_at' => iso8601,
             'updated_at' => nil,
-            '_links'     => {
+            'links'     => {
               'self'   => { 'href' => "/v3/packages/#{package.guid}" },
               'upload' => { 'href' => "/v3/packages/#{package.guid}/upload", 'method' => 'POST' },
+              'download' => { 'href' => "/v3/packages/#{package.guid}/download", 'method' => 'GET' },
+              'stage' => { 'href' => "/v3/packages/#{package.guid}/droplets", 'method' => 'POST' },
               'app'    => { 'href' => "/v3/apps/#{guid}" },
             }
           }
