@@ -73,14 +73,19 @@ module VCAP::CloudController
 
           # use left_outer_joins for service_plans and services because user provided services do not have those relations, this allows them to be null
           usage_query = ServiceInstance.
-            join(:spaces, id: :service_instances__space_id).
-            join(:organizations, id: :spaces__organization_id).
-            left_outer_join(:service_plans, id: :service_instances__service_plan_id).
-            left_outer_join(:services, id: :service_plans__service_id).
-            select(*column_map.values).
-            order(:service_instances__id)
+                        join(:spaces, id: :service_instances__space_id).
+                        join(:organizations, id: :spaces__organization_id).
+                        left_outer_join(:service_plans, id: :service_instances__service_plan_id).
+                        left_outer_join(:services, id: :service_plans__service_id).
+                        select(*column_map.values).
+                        order(:service_instances__id)
 
           ServiceUsageEvent.insert(column_map.keys, usage_query)
+        end
+
+        def delete_events_older_than(cutoff_age_in_days)
+          old_service_usage_events = ServiceUsageEvent.dataset.where("created_at < CURRENT_TIMESTAMP - INTERVAL '?' DAY", cutoff_age_in_days.to_i)
+          old_service_usage_events.delete
         end
       end
     end

@@ -1,8 +1,9 @@
 module VCAP::CloudController::RoutingApi
+  class RoutingApiUnavailable < StandardError; end
+  class UaaUnavailable < StandardError; end
+
   class Client
     attr_reader :skip_cert_verify, :routing_api_uri, :token_issuer
-    class RoutingApiUnavailable < StandardError; end
-    class UaaUnavailable < StandardError; end
 
     def initialize(routing_api_uri, token_issuer, skip_cert_verify)
       @routing_api_uri = URI(routing_api_uri) if routing_api_uri
@@ -10,9 +11,14 @@ module VCAP::CloudController::RoutingApi
       @skip_cert_verify = skip_cert_verify
     end
 
+    def enabled?
+      true
+    end
+
     def router_groups
       raise RoutingApiUnavailable if @routing_api_uri.nil?
       client = HTTPClient.new
+      client.ssl_config.set_default_paths
       use_ssl = routing_api_uri.scheme.to_s.downcase == 'https'
       routing_api_uri.path = '/routing/v1/router_groups'
 

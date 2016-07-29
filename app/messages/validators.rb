@@ -22,7 +22,7 @@ module VCAP::CloudController::Validators
   class GuidValidator < ActiveModel::EachValidator
     def validate_each(record, attribute, value)
       record.errors.add attribute, 'must be a string' unless value.is_a?(String)
-      record.errors.add attribute, 'must be between 1 and 200 characters' unless value.is_a?(String) && (1..200).include?(value.size)
+      record.errors.add attribute, 'must be between 1 and 200 characters' unless value.is_a?(String) && (1..200).cover?(value.size)
     end
   end
 
@@ -50,22 +50,24 @@ module VCAP::CloudController::Validators
     end
   end
 
-  class LifecycleDataValidator < ActiveModel::Validator
+  class LifecycleValidator < ActiveModel::Validator
     def validate(record)
-      config = record.data_validation_config
-      return if config.skip_validation
+      data_message = {
+        VCAP::CloudController::Lifecycles::BUILDPACK => VCAP::CloudController::BuildpackLifecycleDataMessage,
+        VCAP::CloudController::Lifecycles::DOCKER    => VCAP::CloudController::DockerLifecycleDataMessage,
+      }
 
-      if config.data.nil? && !config.allow_nil
-        record.errors[:lifecycle].concat ['data must be present']
-      elsif config.data.is_a?(Hash)
-        validate_data_model(config, record)
+      lifecycle_data_message_class = data_message[record.lifecycle_type]
+      if lifecycle_data_message_class.nil?
+        record.errors[:lifecycle_type].concat ["is not included in the list: #{data_message.keys.join(', ')}"]
+        return
       end
-    end
 
-    def validate_data_model(config, record)
-      data_model = "VCAP::CloudController::#{config.data_class}".constantize.new(config.data.symbolize_keys)
-      if !data_model.valid?
-        record.errors[:lifecycle].concat data_model.errors.full_messages
+      return unless record.lifecycle_data.is_a?(Hash)
+
+      lifecycle_data_message = lifecycle_data_message_class.create_from_http_request(record.lifecycle_data)
+      unless lifecycle_data_message.valid?
+        record.errors[:lifecycle].concat lifecycle_data_message.errors.full_messages
       end
     end
   end
@@ -78,6 +80,18 @@ module VCAP::CloudController::Validators
 
       if !rel.valid?
         record.errors[:relationships].concat rel.errors.full_messages
+      end
+    end
+  end
+
+  class DataValidator < ActiveModel::Validator
+    def validate(record)
+      return if !record.data.is_a?(Hash)
+
+      data = record.class::Data.new(record.data.symbolize_keys)
+
+      if !data.valid?
+        record.errors[:data].concat data.errors.full_messages
       end
     end
   end

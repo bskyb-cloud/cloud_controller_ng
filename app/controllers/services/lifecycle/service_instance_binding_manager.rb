@@ -8,7 +8,9 @@ module VCAP::CloudController
     class ServiceInstanceNotBindable < StandardError; end
     class RouteServiceRequiresDiego < StandardError; end
     class RouteAlreadyBoundToServiceInstance < StandardError; end
+    class ServiceInstanceAlreadyBoundToSameRoute < StandardError; end
     class AppNotFound < StandardError; end
+    class RouteServiceDisabled < StandardError; end
 
     include VCAP::CloudController::LockCheck
 
@@ -18,7 +20,7 @@ module VCAP::CloudController
       @logger = logger
     end
 
-    def create_route_service_instance_binding(route_guid, instance_guid)
+    def create_route_service_instance_binding(route_guid, instance_guid, arbitrary_parameters, route_services_enabled)
       route = Route.find(guid: route_guid)
       raise RouteNotFound unless route
 
@@ -26,8 +28,10 @@ module VCAP::CloudController
 
       raise ServiceInstanceNotFound unless instance
       raise ServiceInstanceNotBindable unless instance.bindable?
+      raise ServiceInstanceAlreadyBoundToSameRoute if route.service_instance == instance
       raise RouteAlreadyBoundToServiceInstance if route.service_instance
       raise RouteServiceRequiresDiego if !route.all_apps_diego?
+      raise RouteServiceDisabled if instance.route_service? && !route_services_enabled
 
       route_binding = RouteBinding.new
       route_binding.route = route
@@ -37,7 +41,7 @@ module VCAP::CloudController
 
       raise Sequel::ValidationFailed.new(route_binding) unless route_binding.valid?
 
-      raw_attributes = bind(route_binding, {})
+      raw_attributes = bind(route_binding, arbitrary_parameters)
       attributes_to_update = {
         route_service_url: raw_attributes[:route_service_url]
       }
@@ -73,9 +77,10 @@ module VCAP::CloudController
       raise ServiceInstanceNotBindable unless service_instance.bindable?
       raise AppNotFound unless App.first(guid: app_guid)
 
-      validate_app_create_action(binding_attrs)
-
       service_binding = ServiceBinding.new(binding_attrs)
+      @access_validator.validate_access(:create, service_binding)
+      raise Sequel::ValidationFailed.new(service_binding) unless service_binding.valid?
+
       raw_attributes = bind(service_binding, arbitrary_parameters)
 
       attributes_to_update = raw_attributes.tap { |r| r.delete(:route_service_url) }
@@ -112,12 +117,12 @@ module VCAP::CloudController
 
     def bind(binding_obj, arbitrary_parameters)
       raise_if_locked(binding_obj.service_instance)
-      binding_obj.client.bind(binding_obj, arbitrary_parameters: arbitrary_parameters) # binding.bind(arbitrary_parameters)
+      binding_obj.client.bind(binding_obj, arbitrary_parameters)
     end
 
     def unbind(binding_obj)
       raise_if_locked(binding_obj.service_instance)
-      binding_obj.client.unbind(binding_obj) # binding.unbind
+      binding_obj.client.unbind(binding_obj)
     end
 
     def async?(params)
@@ -131,12 +136,6 @@ module VCAP::CloudController
         deletion_job.perform
         nil
       end
-    end
-
-    def validate_app_create_action(binding_attrs)
-      service_binding = ServiceBinding.new(binding_attrs)
-      @access_validator.validate_access(:create, service_binding)
-      raise Sequel::ValidationFailed.new(service_binding) unless service_binding.valid?
     end
 
     def mitigate_orphan(binding)

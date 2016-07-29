@@ -2,6 +2,8 @@ module VCAP::CloudController
   module Repositories
     module Services
       class EventRepository
+        attr_reader :user, :current_user_email
+
         def initialize(user:, user_email:)
           @user = user
           @current_user_email = user_email
@@ -203,10 +205,10 @@ module VCAP::CloudController
           changes
         end
 
-        def with_audit_event(object, actor, actee, &saveBlock)
+        def with_audit_event(object, actor, actee)
           type = event_type(object, actee[:actee_type])
           metadata = changes_for_modified_model(object)
-          result = saveBlock.call
+          result = yield
 
           actee[:actee] = object.guid
           create_event(type, actor, actee, metadata)
@@ -224,8 +226,8 @@ module VCAP::CloudController
         def user_actor
           {
             actor_type: 'user',
-            actor: @user.guid,
-            actor_name: @current_user_email
+            actor: user.guid,
+            actor_name: current_user_email
           }
         end
 

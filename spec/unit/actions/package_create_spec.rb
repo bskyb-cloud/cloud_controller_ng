@@ -24,14 +24,14 @@ module VCAP::CloudController
 
       it 'creates an audit event' do
         expect(Repositories::Runtime::PackageEventRepository).to receive(:record_app_add_package).with(
-            instance_of(PackageModel),
-            user,
-            user_email,
-            {
-              'app_guid' => app_guid,
-              'type' => type,
-            }
-          )
+          instance_of(PackageModel),
+          user,
+          user_email,
+          {
+            'app_guid' => app_guid,
+            'type' => type,
+          }
+        )
 
         package_create.create(message)
       end
@@ -42,14 +42,7 @@ module VCAP::CloudController
             type: 'docker',
             app_guid: app_guid,
             data: {
-              image: 'registry/image:latest',
-              credentials: {
-                user: 'user name',
-                password: 'pw',
-                email: 'email',
-                login_server: 'login server'
-              },
-              store_image: true
+              image: 'registry/image:latest'
             }
           }
           PackageCreateMessage.new(data)
@@ -63,10 +56,6 @@ module VCAP::CloudController
 
           expect(created_package).to eq(result)
           expect(created_package.docker_data.image).to eq('registry/image:latest')
-          expect(created_package.docker_data.store_image).to eq(true)
-          expect(created_package.docker_data.user).to eq('user name')
-          expect(created_package.docker_data.password).to eq('pw')
-          expect(created_package.docker_data.login_server).to eq('login server')
         end
       end
 

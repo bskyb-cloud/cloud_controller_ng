@@ -82,6 +82,8 @@ module VCAP::CloudController
     end
 
     def run!
+      create_pidfile
+
       EM.run do
         begin
           message_bus = MessageBus::Configurer.new(servers: @config[:message_bus_servers], logger: logger).go
@@ -145,8 +147,6 @@ module VCAP::CloudController
     private
 
     def start_cloud_controller(message_bus)
-      create_pidfile
-
       setup_logging
       setup_db
       Config.configure_components(@config)
@@ -187,11 +187,11 @@ module VCAP::CloudController
     end
 
     def start_thin_server(app)
-      if @config[:nginx][:use_nginx]
-        @thin_server = Thin::Server.new(@config[:nginx][:instance_socket], signals: false)
-      else
-        @thin_server = Thin::Server.new(@config[:external_host], @config[:external_port], signals: false)
-      end
+      @thin_server = if @config[:nginx][:use_nginx]
+                       Thin::Server.new(@config[:nginx][:instance_socket], signals: false)
+                     else
+                       Thin::Server.new(@config[:external_host], @config[:external_port], signals: false)
+                     end
 
       @thin_server.app = app
       trap_signals
@@ -210,15 +210,15 @@ module VCAP::CloudController
 
     def register_with_collector(message_bus)
       VCAP::Component.register(
-          type: 'CloudController',
-          host: @config[:external_host],
-          port: @config[:varz_port],
-          user: @config[:varz_user],
-          password: @config[:varz_password],
-          index: @config[:index],
-          nats: message_bus,
-          logger: logger,
-          log_counter: @log_counter
+        type: 'CloudController',
+        host: @config[:external_host],
+        port: @config[:varz_port],
+        user: @config[:varz_user],
+        password: @config[:varz_password],
+        index: @config[:index],
+        nats: message_bus,
+        logger: logger,
+        log_counter: @log_counter
       )
     end
 
@@ -233,11 +233,11 @@ module VCAP::CloudController
     end
 
     def statsd_client
-      @statsd_client ||= (
-        logger.info("configuring statsd server at #{@config[:statsd_host]}:#{@config[:statsd_port]}")
-        Statsd.logger = Steno.logger('statsd.client')
-        Statsd.new(@config[:statsd_host], @config[:statsd_port].to_i)
-      )
+      return @statsd_client if @statsd_client
+
+      logger.info("configuring statsd server at #{@config[:statsd_host]}:#{@config[:statsd_port]}")
+      Statsd.logger = Steno.logger('statsd.client')
+      @statsd_client = Statsd.new(@config[:statsd_host], @config[:statsd_port].to_i)
     end
 
     def collect_diagnostics

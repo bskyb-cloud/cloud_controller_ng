@@ -266,8 +266,8 @@ module VCAP::CloudController
 
       describe 'get /v2/organizations/:guid/services?q=active:<t|f>' do
         before(:each) do
-          @active = 3.times.map { Service.make(active: true).tap { |svc| ServicePlan.make(service: svc) } }
-          @inactive = 2.times.map { Service.make(active: false).tap { |svc| ServicePlan.make(service: svc) } }
+          @active = Array.new(3) { Service.make(active: true).tap { |svc| ServicePlan.make(service: svc) } }
+          @inactive = Array.new(2) { Service.make(active: false).tap { |svc| ServicePlan.make(service: svc) } }
         end
 
         it 'can remove inactive services' do
@@ -714,7 +714,7 @@ module VCAP::CloudController
               expect(last_response).to have_status_code(202)
               job_guid = decoded_response['metadata']['guid']
 
-              expect(Delayed::Worker.new.work_off).to eq([0, 1])
+              execute_all_jobs(expected_successes: 0, expected_failures: 1)
 
               get "/v2/jobs/#{job_guid}", {}, json_headers(admin_headers)
               expect(decoded_response['entity']['status']).to eq 'failed'
@@ -737,7 +737,7 @@ module VCAP::CloudController
               expect(last_response).to have_status_code(202)
               job_guid = decoded_response['metadata']['guid']
 
-              expect(Delayed::Worker.new.work_off).to eq([0, 1])
+              execute_all_jobs(expected_successes: 0, expected_failures: 1)
 
               get "/v2/jobs/#{job_guid}", {}, json_headers(admin_headers)
               expect(decoded_response['entity']['status']).to eq 'failed'
@@ -912,9 +912,9 @@ module VCAP::CloudController
 
             delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
 
-            expect(last_response.status).to eq(200)
+            expect(last_response.status).to eq(204)
             expect(org.reload.send(plural_role)).to_not include(user)
-            expect(decoded_response['metadata']['guid']).to eq(org.guid)
+            expect(last_response.body).to be_empty
           end
 
           it 'verifies the user has update access to the org' do
@@ -965,9 +965,9 @@ module VCAP::CloudController
               expect(org.send(plural_role)).to include(user)
               delete "/v2/organizations/#{org.guid}/#{plural_role}", MultiJson.dump({ username: user.username }), admin_headers
 
-              expect(last_response.status).to eq(200)
+              expect(last_response.status).to eq(204)
               expect(org.reload.send(plural_role)).to_not include(user)
-              expect(decoded_response['metadata']['guid']).to eq(org.guid)
+              expect(last_response.body).to be_empty
             end
           end
         end

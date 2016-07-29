@@ -44,7 +44,6 @@ module VCAP::CloudController::RestController
     #
     # @param [String] guid The GUID of the object to read.
     def read(guid)
-      logger.debug 'cc.read', model: self.class.model_class_name, guid: guid
       obj = find_guid(guid)
       validate_access(:read, obj)
       object_renderer.render_json(self.class, obj, @opts)
@@ -76,7 +75,7 @@ module VCAP::CloudController::RestController
     end
 
     def do_delete(obj)
-      raise_if_has_associations!(obj) if v2_api? && !recursive?
+      raise_if_has_dependent_associations!(obj) if v2_api? && !recursive_delete?
       model_deletion_job = Jobs::Runtime::ModelDeletion.new(obj.class, obj.guid)
       enqueue_deletion_job(model_deletion_job)
     end
@@ -115,8 +114,6 @@ module VCAP::CloudController::RestController
     #
     # @param [Symbol] name The name of the relation to enumerate.
     def enumerate_related(guid, name)
-      logger.debug 'cc.enumerate.related', guid: guid, association: name
-
       obj = find_guid(guid)
       validate_access(:read, obj)
 
@@ -129,14 +126,14 @@ module VCAP::CloudController::RestController
       validate_access(:index, associated_model, { related_obj: obj, related_model: model })
 
       filtered_dataset =
-      Query.filtered_dataset_from_query_params(
-        associated_model,
-        obj.user_visible_relationship_dataset(name,
-                                              VCAP::CloudController::SecurityContext.current_user,
-                                              SecurityContext.admin?),
-        associated_controller.query_parameters,
-        @opts
-      )
+        Query.filtered_dataset_from_query_params(
+          associated_model,
+          obj.user_visible_relationship_dataset(name,
+                                                VCAP::CloudController::SecurityContext.current_user,
+                                                SecurityContext.admin?),
+          associated_controller.query_parameters,
+          @opts
+        )
 
       associated_controller_instance = CloudController::ControllerFactory.new(@config, @logger, @env, @params, @body, @sinatra).create_controller(associated_controller)
 
@@ -188,7 +185,7 @@ module VCAP::CloudController::RestController
     def do_related(verb, guid, name, other_guid)
       logger.debug "cc.association.#{verb}", guid: guid, assocation: name, other_guid: other_guid
 
-      singular_name = "#{name.to_s.singularize}"
+      singular_name = name.to_s.singularize
 
       @request_attrs = { singular_name => other_guid }
 
@@ -267,7 +264,7 @@ module VCAP::CloudController::RestController
       dataset
     end
 
-    def raise_if_has_associations!(obj)
+    def raise_if_has_dependent_associations!(obj)
       associations = obj.class.associations.select do |association|
         if obj.class.association_dependencies_hash[association]
           if obj.class.association_dependencies_hash[association] == :destroy

@@ -42,7 +42,7 @@ module VCAP::Services::ServiceBrokers::V2
         make_request
         expect(a_request(http_method, full_url).
           with(query: hash_including({})).
-          with(headers: { 'X-Broker-Api-Version' => '2.7' })).
+          with(headers: { 'X-Broker-Api-Version' => '2.8' })).
           to have_been_made
       end
 
@@ -72,9 +72,9 @@ module VCAP::Services::ServiceBrokers::V2
 
       it 'logs the default headers' do
         make_request
-        expect(fake_logger).to have_received(:debug).with(match(/Accept"=>"application\/json/))
+        expect(fake_logger).to have_received(:debug).with(match(%r{Accept"=>"application/json}))
         expect(fake_logger).to have_received(:debug).with(match(/X-VCAP-Request-ID"=>"[[:alnum:]-]+/))
-        expect(fake_logger).to have_received(:debug).with(match(/X-Broker-Api-Version"=>"2\.7/))
+        expect(fake_logger).to have_received(:debug).with(match(/X-Broker-Api-Version"=>"2\.8/))
         expect(fake_logger).to have_received(:debug).with(match(%r{X-Api-Info-Location"=>"api2\.vcap\.me/v2/info}))
       end
 
@@ -109,6 +109,7 @@ module VCAP::Services::ServiceBrokers::V2
             allow(VCAP::CloudController::Config).to receive(:config).and_return(config)
             allow(HTTPClient).to receive(:new).and_return(http_client)
             allow(http_client).to receive(http_method)
+            allow(ssl_config).to receive(:set_default_paths)
           end
 
           context 'and the skip_cert_verify is set to true' do
@@ -117,7 +118,7 @@ module VCAP::Services::ServiceBrokers::V2
             it 'accepts self-signed cert from the broker' do
               make_request
 
-              expect(http_client).to have_received(:ssl_config)
+              expect(http_client).to have_received(:ssl_config).exactly(2).times
               expect(ssl_config).to have_received(:verify_mode=).with(OpenSSL::SSL::VERIFY_NONE)
             end
           end
@@ -128,7 +129,7 @@ module VCAP::Services::ServiceBrokers::V2
             it 'does not accept self-signed cert from the broker' do
               make_request
 
-              expect(http_client).to have_received(:ssl_config)
+              expect(http_client).to have_received(:ssl_config).exactly(2).times
               expect(ssl_config).to have_received(:verify_mode=).with(OpenSSL::SSL::VERIFY_PEER)
             end
           end
@@ -205,6 +206,11 @@ module VCAP::Services::ServiceBrokers::V2
 
       context 'when the broker client timeout is set' do
         let(:config) { { broker_client_timeout_seconds: 100 } }
+
+        before do
+          allow(http_client).to receive(http_method)
+          allow(ssl_config).to receive(:set_default_paths)
+        end
 
         it 'sets HTTP timeouts on request' do
           request
@@ -377,7 +383,7 @@ module VCAP::Services::ServiceBrokers::V2
 
         it 'logs the Content-Type Header' do
           make_request
-          expect(fake_logger).to have_received(:debug).with(match(/"Content-Type"=>"application\/json"/))
+          expect(fake_logger).to have_received(:debug).with(match(%r{"Content-Type"=>"application/json"}))
         end
 
         it 'has a content body' do
@@ -401,6 +407,13 @@ module VCAP::Services::ServiceBrokers::V2
 
       it_behaves_like 'timeout behavior' do
         let(:request) { client.put(path, message) }
+        let(:ssl_config) { double(:ssl_config, :verify_mode= => nil) }
+
+        before do
+          allow(HTTPClient).to receive(:new).and_return(http_client)
+          allow(http_client).to receive(http_method)
+          allow(ssl_config).to receive(:set_default_paths)
+        end
       end
 
       it_behaves_like 'client that maps status codes to status code messages' do
@@ -439,7 +452,7 @@ module VCAP::Services::ServiceBrokers::V2
 
         it 'logs the Content-Type Header' do
           make_request
-          expect(fake_logger).to have_received(:debug).with(match(/"Content-Type"=>"application\/json"/))
+          expect(fake_logger).to have_received(:debug).with(match(%r{"Content-Type"=>"application/json"}))
         end
 
         it 'has a content body' do

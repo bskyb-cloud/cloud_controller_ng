@@ -2,21 +2,22 @@ require 'spec_helper'
 
 module VCAP::CloudController
   describe SharedDomain, type: :model do
-    subject { described_class.make name: 'test.example.com', router_group_guid: 'my-router-group-guid' }
+    subject { described_class.make name: 'test.example.com', router_group_guid: 'my-router-group-guid', router_group_type: 'tcp' }
 
     it { is_expected.to have_timestamp_columns }
 
     describe 'Serialization' do
-      it { is_expected.to export_attributes :name, :router_group_guid }
+      it { is_expected.to export_attributes :name, :router_group_guid, :router_group_type }
       it { is_expected.to import_attributes :name, :router_group_guid }
     end
 
     describe '#as_summary_json' do
       it 'returns a hash containing the guid and name' do
         expect(subject.as_summary_json).to eq(
-                                             guid: subject.guid,
-                                             name: 'test.example.com',
-                                             router_group_guid: 'my-router-group-guid')
+          guid: subject.guid,
+          name: 'test.example.com',
+          router_group_guid: 'my-router-group-guid',
+          router_group_type: 'tcp')
       end
     end
 
@@ -72,6 +73,24 @@ module VCAP::CloudController
         expect do
           subject.destroy
         end.to change { Route.where(id: route.id).count }.by(-1)
+      end
+    end
+
+    describe '#tcp?' do
+      context 'when shared domain is a tcp domain' do
+        let(:shared_domain) { SharedDomain.make(name: 'tcp.com', router_group_guid: '123') }
+
+        it 'returns true' do
+          expect(shared_domain.tcp?).to be_truthy
+        end
+      end
+
+      context 'when shared domain is not a tcp domain' do
+        let(:shared_domain) { SharedDomain.make(name: 'tcp.com') }
+
+        it 'returns false' do
+          expect(shared_domain.tcp?).to eq(false)
+        end
       end
     end
 

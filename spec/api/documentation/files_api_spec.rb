@@ -12,6 +12,11 @@ resource 'Files', type: [:api, :legacy_api] do
 
   get '/v2/apps/:app_guid/instances/:instance_index/files/:file_path' do
     example 'Retrieve File' do
+      explanation <<-EOD
+        The endpoint does not function with Deigo apps.
+        Please use CF CLI command `cf ssh` for Diego apps.
+      EOD
+
       deal_file_result = VCAP::CloudController::Dea::FileUriResult.new(
         credentials: [],
         file_uri_v2: 'dea.example.com/encoded_path_to_file',

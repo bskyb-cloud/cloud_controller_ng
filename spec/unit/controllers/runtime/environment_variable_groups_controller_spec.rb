@@ -14,10 +14,12 @@ module VCAP::CloudController
       context 'and the name is running' do
         context 'whether or not the user is an admin' do
           it 'returns the json as a hash' do
-            EnvironmentVariableGroup.make(name: 'running', environment_json: {
+            group = EnvironmentVariableGroup.running
+            group.environment_json = {
               'foo' => 'bar',
               'to all' => 'a good morrow'
-            })
+            }
+            group.save
 
             get '/v2/config/environment_variable_groups/running', '{}', headers_for(User.make)
             expect(last_response.status).to eq(200)
@@ -32,10 +34,12 @@ module VCAP::CloudController
       context 'and the name is staging' do
         context 'whether or not the user is an admin' do
           it 'returns the json as a hash' do
-            EnvironmentVariableGroup.make(name: 'staging', environment_json: {
+            group = EnvironmentVariableGroup.staging
+            group.environment_json = {
               'foo' => 'bar',
               'to all' => 'a good morrow'
-            })
+            }
+            group.save
 
             get '/v2/config/environment_variable_groups/staging', '{}', headers_for(User.make)
             expect(last_response.status).to eq(200)
@@ -86,8 +90,12 @@ module VCAP::CloudController
               end
 
               it 'does not update the group' do
-                EnvironmentVariableGroup.make(name: 'staging', environment_json: { 'foo' => 'bar' })
+                group = EnvironmentVariableGroup.staging
+                group.environment_json = { 'foo' => 'bar' }
+                group.save
+
                 put '/v2/config/environment_variable_groups/staging', 'jam sandwich', admin_headers
+
                 expect(EnvironmentVariableGroup.staging.environment_json).to eq({ 'foo' => 'bar' })
               end
             end
@@ -116,16 +124,41 @@ module VCAP::CloudController
 
           describe 'Validations' do
             context 'when the json is not valid' do
+              let(:req_body) { 'jam sandwich' }
+
               it 'returns a 400' do
-                put '/v2/config/environment_variable_groups/running', 'jam sandwich', admin_headers
+                put '/v2/config/environment_variable_groups/running', req_body, admin_headers
                 expect(last_response.status).to eq(400)
                 expect(decoded_response['error_code']).to eq('CF-MessageParseError')
                 expect(decoded_response['description']).to match(/Request invalid due to parse error/)
               end
 
               it 'does not update the group' do
-                EnvironmentVariableGroup.make(name: 'running', environment_json: { 'foo' => 'bar' })
-                put '/v2/config/environment_variable_groups/running', 'jam sandwich', admin_headers
+                group = EnvironmentVariableGroup.running
+                group.environment_json = { 'foo' => 'bar' }
+                group.save
+
+                put '/v2/config/environment_variable_groups/running', req_body, admin_headers
+                expect(EnvironmentVariableGroup.running.environment_json).to eq({ 'foo' => 'bar' })
+              end
+            end
+
+            context 'when the json is null' do
+              let(:req_body) { 'null' }
+
+              it 'returns a 400' do
+                put '/v2/config/environment_variable_groups/running', req_body, admin_headers
+                expect(last_response.status).to eq(400)
+                expect(decoded_response['error_code']).to eq('CF-EnvironmentVariableGroupInvalid')
+                expect(decoded_response['description']).to match(/Cannot be 'null'. You may want to try empty object '{}' to clear the group./)
+              end
+
+              it 'does not update the group' do
+                group = EnvironmentVariableGroup.running
+                group.environment_json = { 'foo' => 'bar' }
+                group.save
+
+                put '/v2/config/environment_variable_groups/running', req_body, admin_headers
                 expect(EnvironmentVariableGroup.running.environment_json).to eq({ 'foo' => 'bar' })
               end
             end

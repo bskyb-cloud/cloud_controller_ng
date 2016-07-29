@@ -50,6 +50,30 @@ module VCAP::CloudController
         allow(VCAP::CloudController::Config.config).to receive(:[]).with(:default_app_memory).and_return(873565)
         expect(app.memory).to eq(873565)
       end
+      context 'has custom ports' do
+        let(:app) { App.make(ports: [8081, 8082]) }
+
+        context 'with default_to_diego_backend set to true' do
+          before { TestConfig.override(default_to_diego_backend: true) }
+
+          it 'return an app with custom port configuration' do
+            expect(app.ports).to eq([8081, 8082])
+          end
+        end
+
+        context 'with default_to_diego_backend set to false' do
+          before { TestConfig.override(default_to_diego_backend: false) }
+
+          it 'raises a validation error' do
+            expect {
+              app.save
+            }.to raise_error do |e|
+              expect(e.message).
+                to include('Custom app ports supported for Diego only. Enable Diego for the app or remove custom app ports')
+            end
+          end
+        end
+      end
     end
 
     describe 'Associations' do
@@ -66,6 +90,46 @@ module VCAP::CloudController
       it { is_expected.to have_associated :space }
       it { is_expected.to have_associated :stack }
       it { is_expected.to have_associated :routes, associated_instance: ->(app) { Route.make(space: app.space) } }
+      it { is_expected.to have_associated :route_mappings, associated_instance: -> (app) { RouteMapping.make(app_id: app.id, route_id: Route.make(space: app.space).id) } }
+
+      context 'when an app has multiple ports bound to the same route' do
+        let(:app) { AppFactory.make(space: space, diego: true, ports: [8080, 9090]) }
+        let(:route) { Route.make(host: 'host2', space: space, path: '/my%20path') }
+        let!(:route_mapping1) { RouteMapping.make(app: app, route: route, app_port: 8080) }
+        let!(:route_mapping2) { RouteMapping.make(app: app, route: route, app_port: 9090) }
+
+        it 'returns a single associated route' do
+          expect(app.routes.size).to eq 1
+        end
+      end
+
+      context 'when associating a route with a diego app' do
+        let(:app) { AppFactory.make(space: space, diego: true, ports: [9090, 7070]) }
+        let(:route) { Route.make(host: 'host2', space: space, path: '/my%20path') }
+
+        before do
+          app.add_route(route)
+        end
+
+        it 'maps the route to the first app port in the ports field of the app' do
+          expect(app.route_mappings.first.user_provided_app_port).to eq(9090)
+          expect(app.route_mappings.first.app_port).to eq(9090)
+        end
+      end
+
+      context 'when an app has no user provided ports' do
+        let(:app) { AppFactory.make(space: space, diego: true) }
+        let(:route) { Route.make(host: 'host2', space: space, path: '/my%20path') }
+
+        before do
+          app.add_route(route)
+        end
+
+        it 'does not save an app_port for the route mapping' do
+          expect(app.route_mappings.first.user_provided_app_port).to be_nil
+          expect(app.route_mappings.first.app_port).to eq(8080)
+        end
+      end
 
       context 'with Docker app' do
         before do
@@ -119,7 +183,7 @@ module VCAP::CloudController
         expect_validator(MinDiskQuotaPolicy)
         expect_validator(MetadataPolicy)
         expect_validator(MinMemoryPolicy)
-        expect_validator(MaxInstanceMemoryPolicy)
+        expect_validator(AppMaxInstanceMemoryPolicy)
         expect_validator(InstancesPolicy)
         expect_validator(HealthCheckPolicy)
         expect_validator(CustomBuildpackPolicy)
@@ -132,17 +196,13 @@ module VCAP::CloudController
         let(:space) { Space.make(organization: org, space_quota_definition: SpaceQuotaDefinition.make(organization: org)) }
 
         it 'validates org and space using MaxMemoryPolicy' do
-          max_memory_policies = app.validation_policies.select { |policy| policy.instance_of? MaxMemoryPolicy }
+          max_memory_policies = app.validation_policies.select { |policy| policy.instance_of? AppMaxMemoryPolicy }
           expect(max_memory_policies.length).to eq(2)
-          targets = max_memory_policies.collect(&:policy_target)
-          expect(targets).to match_array([org, space])
         end
 
         it 'validates org and space using MaxInstanceMemoryPolicy' do
-          max_instance_memory_policies = app.validation_policies.select { |policy| policy.instance_of? MaxInstanceMemoryPolicy }
+          max_instance_memory_policies = app.validation_policies.select { |policy| policy.instance_of? AppMaxInstanceMemoryPolicy }
           expect(max_instance_memory_policies.length).to eq(2)
-          targets = max_instance_memory_policies.collect(&:quota_definition)
-          expect(targets).to match_array([org.quota_definition, space.space_quota_definition])
         end
 
         it 'validates org and space using MaxAppInstancesPolicy' do
@@ -271,6 +331,11 @@ module VCAP::CloudController
           expect(app).to be_valid
         end
 
+        it "can be set to 'process'" do
+          app.health_check_type = 'process'
+          expect(app).to be_valid
+        end
+
         it "can not be set to 'bogus'" do
           app.health_check_type = 'bogus'
           expect(app).to_not be_valid
@@ -365,9 +430,9 @@ module VCAP::CloudController
         end
 
         context 'app update' do
-          def act_as_cf_admin(&block)
-            allow(VCAP::CloudController::SecurityContext).to receive_messages(:admin? => true)
-            block.call
+          def act_as_cf_admin
+            allow(VCAP::CloudController::SecurityContext).to receive_messages(admin?: true)
+            yield
           ensure
             allow(VCAP::CloudController::SecurityContext).to receive(:admin?).and_call_original
           end
@@ -514,65 +579,65 @@ module VCAP::CloudController
     describe 'Serialization' do
       it {
         is_expected.to export_attributes(
-            :enable_ssh,
-            :buildpack,
-            :command,
-            :console,
-            :debug,
-            :detected_buildpack,
-            :detected_start_command,
-            :diego,
-            :disk_quota,
-            :docker_image,
-            :docker_credentials_json,
-            :environment_json,
-            :health_check_timeout,
-            :health_check_type,
-            :instances,
-            :memory,
-            :name,
-            :package_state,
-            :package_updated_at,
-            :production,
-            :space_guid,
-            :stack_guid,
-            :staging_failed_reason,
-            :staging_failed_description,
-            :staging_task_id,
-            :state,
-            :version,
-            :ports
-          )
+          :enable_ssh,
+          :buildpack,
+          :command,
+          :console,
+          :debug,
+          :detected_buildpack,
+          :detected_start_command,
+          :diego,
+          :disk_quota,
+          :docker_image,
+          :docker_credentials_json,
+          :environment_json,
+          :health_check_timeout,
+          :health_check_type,
+          :instances,
+          :memory,
+          :name,
+          :package_state,
+          :package_updated_at,
+          :production,
+          :space_guid,
+          :stack_guid,
+          :staging_failed_reason,
+          :staging_failed_description,
+          :staging_task_id,
+          :state,
+          :version,
+          :ports
+        )
       }
 
       it {
         is_expected.to import_attributes(
-            :enable_ssh,
-            :app_guid,
-            :buildpack,
-            :command,
-            :console,
-            :debug,
-            :detected_buildpack,
-            :diego,
-            :disk_quota,
-            :docker_image,
-            :docker_credentials_json,
-            :environment_json,
-            :health_check_timeout,
-            :health_check_type,
-            :instances,
-            :memory,
-            :name,
-            :production,
-            :route_guids,
-            :service_binding_guids,
-            :space_guid,
-            :stack_guid,
-            :staging_task_id,
-            :state,
-            :ports
-          )
+          :enable_ssh,
+          :app_guid,
+          :buildpack,
+          :command,
+          :console,
+          :debug,
+          :detected_buildpack,
+          :diego,
+          :disk_quota,
+          :docker_image,
+          :docker_credentials_json,
+          :environment_json,
+          :health_check_timeout,
+          :health_check_type,
+          :instances,
+          :memory,
+          :name,
+          :production,
+          :route_guids,
+          :service_binding_guids,
+          :space_guid,
+          :stack_guid,
+          :staging_task_id,
+          :state,
+          :ports
+        )
       }
     end
 
@@ -751,25 +816,65 @@ module VCAP::CloudController
         )
       end
 
-      context 'when the app has a current droplet' do
-        before do
-          subject.add_droplet(Droplet.new(
-              app: subject,
-              droplet_hash: 'the-droplet-hash',
-              execution_metadata: 'some-staging-metadata',
+      context 'v2' do
+        context 'when the app has a current droplet' do
+          before do
+            subject.add_droplet(Droplet.new(
+                                  app: subject,
+                                  droplet_hash: 'the-droplet-hash',
+                                  execution_metadata: 'some-staging-metadata',
             ))
-          subject.droplet_hash = 'the-droplet-hash'
+            subject.droplet_hash = 'the-droplet-hash'
+          end
+
+          it "returns that droplet's staging metadata" do
+            expect(subject.execution_metadata).to eq('some-staging-metadata')
+          end
         end
 
-        it "returns that droplet's staging metadata" do
-          expect(subject.execution_metadata).to eq('some-staging-metadata')
+        context 'when the app does not have a current droplet' do
+          it 'returns the empty string' do
+            expect(subject.current_droplet).to be_nil
+            expect(subject.execution_metadata).to eq('')
+          end
         end
       end
 
-      context 'when the app does not have a current droplet' do
-        it 'returns the empty string' do
-          expect(subject.current_droplet).to be_nil
-          expect(subject.execution_metadata).to eq('')
+      context 'v3' do
+        let(:v3_app) { AppModel.make }
+        let(:v2_app) do
+          App.make(
+            package_hash: 'package-hash',
+            instances: 1,
+            package_state: 'STAGED',
+            app_guid: v3_app.guid
+          )
+        end
+
+        context 'when the app has a current droplet' do
+          let(:v3_droplet) do
+            DropletModel.make(
+              app_guid: v3_app.guid,
+              execution_metadata: 'some-other-metadata',
+              state: VCAP::CloudController::DropletModel::STAGED_STATE
+            )
+          end
+
+          before do
+            v3_app.droplet = v3_droplet
+            v3_app.save
+          end
+
+          it "returns that droplet's staging metadata" do
+            expect(v2_app.execution_metadata).to eq(v3_droplet.execution_metadata)
+          end
+        end
+
+        context 'when the app does not have a current droplet' do
+          it 'returns nil' do
+            expect(v2_app.current_droplet).to be_nil
+            expect(v2_app.execution_metadata).to be_nil
+          end
         end
       end
     end
@@ -786,10 +891,10 @@ module VCAP::CloudController
       context 'when the app has a current droplet' do
         before do
           subject.add_droplet(Droplet.new(
-              app: subject,
-              droplet_hash: 'the-droplet-hash',
-              detected_start_command: 'run-my-app',
-            ))
+                                app: subject,
+                                droplet_hash: 'the-droplet-hash',
+                                detected_start_command: 'run-my-app',
+          ))
           subject.droplet_hash = 'the-droplet-hash'
         end
 
@@ -825,25 +930,6 @@ module VCAP::CloudController
         end
       end
 
-      it 'should not associate an app with a route on a different space' do
-        app = AppFactory.make
-
-        domain = PrivateDomain.make(
-          owning_organization: app.space.organization
-        )
-
-        other_space = Space.make(organization: app.space.organization)
-
-        route = Route.make(
-          space: other_space,
-          domain: domain,
-        )
-
-        expect {
-          app.add_route(route)
-        }.to raise_error(Errors::InvalidRouteRelation, /The requested route relation is invalid/)
-      end
-
       it 'should not associate an app with a route created on another space with a shared domain' do
         shared_domain = SharedDomain.make
         app = AppFactory.make
@@ -858,60 +944,6 @@ module VCAP::CloudController
         expect {
           app.add_route(route)
         }.to raise_error Errors::InvalidRouteRelation
-      end
-    end
-
-    describe 'vcap_application' do
-      context 'when a v3 app is associated' do
-        it 'has the expected values' do
-          app_model = AppModel.make(name: 'jim-is-suiteeeee')
-          process = AppFactory.make(memory: 259, disk_quota: 799, file_descriptors: 1234, name: 'process-name')
-          app_model.add_process(process)
-          expected_hash = {
-            limits: {
-              mem: 259,
-              disk: 799,
-              fds: 1234,
-            },
-            application_id: process.guid,
-            application_version: process.version,
-            application_name: app_model.name,
-            application_uris: process.uris,
-            version: process.version,
-            name: process.name,
-            space_name: process.space.name,
-            space_id: process.space.guid,
-            uris: process.uris,
-            users: nil
-          }
-
-          expect(process.vcap_application).to eq(expected_hash)
-        end
-      end
-
-      context 'when a v3 app is not associated' do
-        it 'has the expected values' do
-          app = AppFactory.make(memory: 259, disk_quota: 799, file_descriptors: 1234, name: 'app-name')
-          expected_hash = {
-            limits: {
-              mem: 259,
-              disk: 799,
-              fds: 1234,
-            },
-            application_id: app.guid,
-            application_version: app.version,
-            application_name: 'app-name',
-            application_uris: app.uris,
-            version: app.version,
-            name: 'app-name',
-            space_name: app.space.name,
-            space_id: app.space.guid,
-            uris: app.uris,
-            users: nil
-          }
-
-          expect(app.vcap_application).to eq(expected_hash)
-        end
       end
     end
 
@@ -1122,63 +1154,6 @@ module VCAP::CloudController
       context 'when there are no services' do
         it 'returns nil' do
           expect(app.database_uri).to be_nil
-        end
-      end
-    end
-
-    describe '#system_env_json' do
-      context 'when there are no services' do
-        it 'contains an empty vcap_services' do
-          app = App.make(environment_json: { 'jesse' => 'awesome' })
-          expect(app.system_env_json['VCAP_SERVICES']).to eq({})
-        end
-      end
-
-      context 'when there are services' do
-        let(:space) { Space.make }
-        let(:app) { App.make(environment_json: { 'jesse' => 'awesome' }, space: space) }
-        let(:service) { Service.make(:v1, label: 'elephantsql-n/a') }
-        let(:service_alt) { Service.make(:v1, label: 'giraffesql-n/a') }
-        let(:service_plan) { ServicePlan.make(:v1, service: service) }
-        let(:service_plan_alt) { ServicePlan.make(:v1, service: service_alt) }
-        let(:service_instance) { ManagedServiceInstance.make(:v1, space: space, service_plan: service_plan, name: 'elephantsql-vip-uat') }
-        let(:service_instance_same_label) { ManagedServiceInstance.make(:v1, space: space, service_plan: service_plan, name: 'elephantsql-2') }
-        let(:service_instance_diff_label) { ManagedServiceInstance.make(:v1, space: space, service_plan: service_plan_alt, name: 'giraffesql-vip-uat') }
-
-        before do
-          ServiceBinding.make(app: app, service_instance: service_instance)
-        end
-
-        it 'contains a populated vcap_services' do
-          expect(app.system_env_json['VCAP_SERVICES']).not_to eq({})
-          expect(app.system_env_json['VCAP_SERVICES']).to have_key("#{service.label}-#{service.version}")
-          expect(app.system_env_json['VCAP_SERVICES']["#{service.label}-#{service.version}"]).to have(1).services
-        end
-
-        describe 'service hash includes only white-listed keys' do
-          subject(:service_hash_keys) do
-            app.system_env_json['VCAP_SERVICES']["#{service.label}-#{service.version}"].first.keys
-          end
-
-          its(:count) { should eq(5) }
-          it { is_expected.to include('name') }
-          it { is_expected.to include('label') }
-          it { is_expected.to include('tags') }
-          it { is_expected.to include('plan') }
-          it { is_expected.to include('credentials') }
-        end
-
-        describe 'grouping' do
-          before do
-            ServiceBinding.make(app: app, service_instance: service_instance_same_label)
-            ServiceBinding.make(app: app, service_instance: service_instance_diff_label)
-          end
-
-          it 'should group services by label' do
-            expect(app.system_env_json['VCAP_SERVICES']).to have(2).groups
-            expect(app.system_env_json['VCAP_SERVICES']["#{service.label}-#{service.version}"]).to have(2).services
-            expect(app.system_env_json['VCAP_SERVICES']["#{service_alt.label}-#{service_alt.version}"]).to have(1).service
-          end
         end
       end
     end
@@ -1495,6 +1470,27 @@ module VCAP::CloudController
       end
     end
 
+    describe 'staging?' do
+      let(:app) { AppFactory.make }
+
+      it 'should return true if package_state is PENDING and staging_task_id is not null' do
+        app.package_state = 'PENDING'
+        app.staging_task_id = 'some-non-null-value'
+        expect(app.staging?).to be true
+      end
+
+      it 'should return false if package_state is not PENDING' do
+        app.package_state = 'STARTED'
+        app.staging_task_id = 'some-non-null-value'
+        expect(app.staging?).to be false
+      end
+
+      it 'should return false if staging_task_id is empty' do
+        app.package_state = 'PENDING'
+        expect(app.staging?).to be false
+      end
+    end
+
     describe 'failed?' do
       let(:app) { AppFactory.make }
 
@@ -1606,6 +1602,51 @@ module VCAP::CloudController
 
       context 'for a started app' do
         before { app.update(state: 'STARTED') }
+
+        context 'when lazily backfilling default port values' do
+          before do
+            # Need to get the app in a state where diego is true but ports are
+            # nil. This would only occur on deployments that existed before we
+            # added the default port value.
+            default_ports = VCAP::CloudController::App::DEFAULT_PORTS
+            stub_const('VCAP::CloudController::App::DEFAULT_PORTS', nil)
+            app.update(diego: true)
+            stub_const('VCAP::CloudController::App::DEFAULT_PORTS', default_ports)
+          end
+
+          context 'when changing fields that do not update the version' do
+            it 'does not update the version' do
+              app.instances = 3
+
+              expect {
+                app.save
+                app.reload
+              }.not_to change { app.version }
+            end
+          end
+
+          context 'when changing a fields that updates the version' do
+            it 'updates the version' do
+              app.memory = 17
+
+              expect {
+                app.save
+                app.reload
+              }.to change { app.version }
+            end
+          end
+
+          context 'when the user updates the port' do
+            it 'updates the version' do
+              app.ports = [1753]
+
+              expect {
+                app.save
+                app.reload
+              }.to change { app.version }
+            end
+          end
+        end
 
         it 'should update the version when changing :memory' do
           app.memory = 2048
@@ -1903,22 +1944,203 @@ module VCAP::CloudController
         route
       end
 
-      it 'returns the mapped http routes associated with the app' do
-        app.add_route(route_with_service)
-        app.add_route(route_without_service)
+      context 'with no app ports specified' do
+        before do
+          app.add_route(route_with_service)
+          app.add_route(route_without_service)
+        end
 
-        expected_hash = {
-          'http_routes' => [
-            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url },
-            { 'hostname' => route_without_service.uri }
+        it 'returns the mapped http routes associated with the app' do
+          expected_http = [
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 8080 },
+            { 'hostname' => route_without_service.uri, 'port' => 8080 }
           ]
-        }
 
-        expect(app.routing_info).to match expected_hash
+          expect(app.routing_info.keys).to match_array ['http_routes']
+          expect(app.routing_info['http_routes']).to match_array expected_http
+        end
+      end
+
+      context 'with app port specified in route mapping' do
+        let(:app) { AppFactory.make(space: space, diego: true, ports: [9090]) }
+        let!(:route_mapping) { RouteMapping.make(app: app, route: route_with_service, app_port: 9090) }
+
+        it 'returns the app port in routing info' do
+          expected_http = [
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 9090 },
+          ]
+
+          expect(app.routing_info.keys).to match_array ['http_routes']
+          expect(app.routing_info['http_routes']).to match_array expected_http
+        end
+      end
+
+      context 'with multiple route mapping to same route with different app ports' do
+        let(:app) { AppFactory.make(space: space, diego: true, ports: [8080, 9090]) }
+        let!(:route_mapping1) { RouteMapping.make(app: app, route: route_with_service, app_port: 8080) }
+        let!(:route_mapping2) { RouteMapping.make(app: app, route: route_with_service, app_port: 9090) }
+
+        it 'returns the app port in routing info' do
+          expected_http = [
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 8080 },
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 9090 },
+          ]
+
+          expect(app.routing_info.keys).to match_array ['http_routes']
+          expect(app.routing_info['http_routes']).to match_array expected_http
+        end
+      end
+
+      context 'with multiple route mapping to different route with same app port' do
+        let(:app) { AppFactory.make(space: space, diego: true, ports: [9090]) }
+        let!(:route_mapping1) { RouteMapping.make(app: app, route: route_without_service, app_port: 9090) }
+        let!(:route_mapping2) { RouteMapping.make(app: app, route: route_with_service, app_port: 9090) }
+
+        it 'returns the app port in routing info' do
+          expected_http = [
+            { 'hostname' => route_without_service.uri, 'port' => 9090 },
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 9090 },
+          ]
+
+          expect(app.routing_info.keys).to match_array ['http_routes']
+          expect(app.routing_info['http_routes']).to match_array expected_http
+        end
+      end
+
+      context 'with multiple route mapping to different route with different app ports' do
+        let(:app) { AppFactory.make(space: space, diego: true, ports: [8080, 9090]) }
+        let!(:route_mapping1) { RouteMapping.make(app: app, route: route_without_service, app_port: 8080) }
+        let!(:route_mapping2) { RouteMapping.make(app: app, route: route_with_service, app_port: 9090) }
+
+        it 'returns the app port in routing info' do
+          expected_http = [
+            { 'hostname' => route_without_service.uri, 'port' => 8080 },
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 9090 },
+          ]
+          expect(app.routing_info.keys).to match_array ['http_routes']
+          expect(app.routing_info['http_routes']).to match_array expected_http
+        end
+      end
+
+      context 'tcp routes' do
+        context 'with only one app port mapped to route' do
+          let(:app) { AppFactory.make(space: space, diego: true, ports: [9090]) }
+          let(:domain) { SharedDomain.make(name: 'tcpdomain.com', router_group_guid: 'router-group-guid-1') }
+          let(:tcp_route) { Route.make(domain: domain, space: space, port: 52000) }
+          let!(:route_mapping) { RouteMapping.make(app: app, route: tcp_route, app_port: 9090) }
+
+          it 'returns the app port in routing info' do
+            expected_tcp = [
+              { 'router_group_guid' => domain.router_group_guid, 'external_port' => tcp_route.port, 'container_port' => 9090 },
+            ]
+
+            expect(app.routing_info.keys).to match_array ['tcp_routes']
+            expect(app.routing_info['tcp_routes']).to match_array expected_tcp
+          end
+        end
+
+        context 'with multiple app ports mapped to same route' do
+          let(:app) { AppFactory.make(space: space, diego: true, ports: [9090, 5555]) }
+          let(:domain) { SharedDomain.make(name: 'tcpdomain.com', router_group_guid: 'router-group-guid-1') }
+          let(:tcp_route) { Route.make(domain: domain, space: space, port: 52000) }
+          let!(:route_mapping_1) { RouteMapping.make(app: app, route: tcp_route, app_port: 9090) }
+          let!(:route_mapping_2) { RouteMapping.make(app: app, route: tcp_route, app_port: 5555) }
+
+          it 'returns the app ports in routing info' do
+            expected_tcp = [
+              { 'router_group_guid' => domain.router_group_guid, 'external_port' => tcp_route.port, 'container_port' => 9090 },
+              { 'router_group_guid' => domain.router_group_guid, 'external_port' => tcp_route.port, 'container_port' => 5555 },
+            ]
+
+            expect(app.routing_info.keys).to match_array ['tcp_routes']
+            expect(app.routing_info['tcp_routes']).to match_array expected_tcp
+          end
+        end
+
+        context 'with same app port mapped to different routes' do
+          let(:app) { AppFactory.make(space: space, diego: true, ports: [9090]) }
+          let(:domain) { SharedDomain.make(name: 'tcpdomain.com', router_group_guid: 'router-group-guid-1') }
+          let(:tcp_route_1) { Route.make(domain: domain, space: space, port: 52000) }
+          let(:tcp_route_2) { Route.make(domain: domain, space: space, port: 52001) }
+          let!(:route_mapping_1) { RouteMapping.make(app: app, route: tcp_route_1, app_port: 9090) }
+          let!(:route_mapping_2) { RouteMapping.make(app: app, route: tcp_route_2, app_port: 9090) }
+
+          it 'returns the app ports in routing info' do
+            expected_routes = [
+              { 'router_group_guid' => domain.router_group_guid, 'external_port' => tcp_route_1.port, 'container_port' => 9090 },
+              { 'router_group_guid' => domain.router_group_guid, 'external_port' => tcp_route_2.port, 'container_port' => 9090 },
+            ]
+
+            expect(app.routing_info.keys).to match_array ['tcp_routes']
+            expect(app.routing_info['tcp_routes']).to match_array expected_routes
+          end
+        end
+
+        context 'with different app ports mapped to different routes' do
+          let(:app) { AppFactory.make(space: space, diego: true, ports: [9090, 5555]) }
+          let(:domain) { SharedDomain.make(name: 'tcpdomain.com', router_group_guid: 'router-group-guid-1') }
+          let(:tcp_route_1) { Route.make(domain: domain, space: space, port: 52000) }
+          let(:tcp_route_2) { Route.make(domain: domain, space: space, port: 52001) }
+          let!(:route_mapping_1) { RouteMapping.make(app: app, route: tcp_route_1, app_port: 9090) }
+          let!(:route_mapping_2) { RouteMapping.make(app: app, route: tcp_route_2, app_port: 5555) }
+
+          it 'returns the multiple route mappings in routing info' do
+            expected_routes = [
+              { 'router_group_guid' => domain.router_group_guid, 'external_port' => tcp_route_1.port, 'container_port' => 9090 },
+              { 'router_group_guid' => domain.router_group_guid, 'external_port' => tcp_route_2.port, 'container_port' => 5555 },
+            ]
+
+            expect(app.routing_info.keys).to match_array ['tcp_routes']
+            expect(app.routing_info['tcp_routes']).to match_array expected_routes
+          end
+        end
+      end
+
+      context 'with both http and tcp routes' do
+        let(:app) { AppFactory.make(space: space, diego: true, ports: [8080, 9090, 5555]) }
+        let(:tcp_domain) { SharedDomain.make(name: 'tcpdomain.com', router_group_guid: 'router-group-guid-1') }
+        let(:tcp_route) { Route.make(domain: tcp_domain, space: space, port: 52000) }
+        let!(:route_mapping_1) { RouteMapping.make(app: app, route: route_with_service, app_port: 8080) }
+        let!(:route_mapping_2) { RouteMapping.make(app: app, route: route_with_service, app_port: 9090) }
+        let!(:tcp_route_mapping) { RouteMapping.make(app: app, route: tcp_route, app_port: 5555) }
+
+        it 'returns the app port in routing info' do
+          expected_http = [
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 8080 },
+            { 'hostname' => route_with_service.uri, 'route_service_url' => route_with_service.route_service_url, 'port' => 9090 },
+          ]
+
+          expected_tcp = [
+            { 'router_group_guid' => tcp_domain.router_group_guid, 'external_port' => tcp_route.port, 'container_port' => 5555 },
+          ]
+
+          expect(app.routing_info.keys).to match_array ['tcp_routes', 'http_routes']
+          expect(app.routing_info['tcp_routes']).to match_array expected_tcp
+          expect(app.routing_info['http_routes']).to match_array expected_http
+        end
       end
     end
 
     describe '#validate_route' do
+      it 'should not associate an app with a route on a different space' do
+        app = AppFactory.make
+
+        domain = PrivateDomain.make(
+          owning_organization: app.space.organization
+        )
+
+        other_space = Space.make(organization: app.space.organization)
+
+        route = Route.make(
+          space: other_space,
+          domain: domain,
+        )
+
+        expect {
+          app.add_route(route)
+        }.to raise_error(Errors::InvalidRouteRelation, /The requested route relation is invalid/)
+      end
+
       context 'adding routes to unsaved apps' do
         it 'should set a route by guid on a new but unsaved app' do
           app = App.new(name: Sham.name,
@@ -1938,9 +2160,7 @@ module VCAP::CloudController
           expect(app.routes).to be_empty
         end
       end
-      # context 'when the route is nil'
-      # context 'when the space is nil'
-      # context 'when the route is not in the same space as the app'
+
       context 'when the route is bound to a routing service' do
         let(:domain) { PrivateDomain.make(name: 'mydomain.com', owning_organization: org) }
         let(:app) { AppFactory.make(space: space, diego: diego?) }
@@ -1968,7 +2188,7 @@ module VCAP::CloudController
               app.add_route_by_guid(route_with_service.guid)
               app.save
             }.to raise_error(Errors::InvalidRouteRelation).
-            with_message("The requested route relation is invalid: #{route_with_service.guid} - Route services are only supported for apps on Diego")
+              with_message("The requested route relation is invalid: #{route_with_service.guid} - Route services are only supported for apps on Diego")
           end
         end
       end
@@ -2072,6 +2292,207 @@ module VCAP::CloudController
         it 'uses the instance_file_descriptor_limit config variable' do
           app = App.create_from_hash(name: 'awesome app', space_guid: space.guid)
           expect(app.file_descriptors).to eq(200)
+        end
+      end
+
+      describe 'default ports' do
+        context 'with a diego app' do
+          context 'and no ports are specified' do
+            it 'has a default port value' do
+              App.create_from_hash(name: 'test', space_guid: space.guid, diego: true)
+              expect(App.last.ports).to eq [8080]
+            end
+          end
+
+          context 'and ports are specified' do
+            it 'uses the ports provided' do
+              App.create_from_hash(name: 'test', space_guid: space.guid, diego: true, ports: [9999])
+              expect(App.last.ports).to eq [9999]
+            end
+          end
+        end
+      end
+    end
+
+    describe 'updating' do
+      context 'switching from diego to dea' do
+        let(:app_hash) do
+          {
+            name: 'test',
+            package_hash: 'abc',
+            package_state: 'STAGED',
+            state: 'STARTED',
+            space_guid: space.guid,
+            diego: true,
+            ports: [8080, 2345]
+          }
+        end
+        let(:app) { AppFactory.make(app_hash) }
+        let(:route) { Route.make(host: 'host', space: app.space) }
+        let(:route2) { Route.make(host: 'host', space: app.space) }
+        let!(:route_mapping_1) { RouteMapping.make(app: app, route: route) }
+        let!(:route_mapping_2) { RouteMapping.make(app: app, route: route2) }
+
+        before do
+          app.diego = false
+        end
+
+        it 'should not update the version' do
+          expect {
+            app.save
+            app.reload
+          }.not_to change { app.version }
+        end
+
+        it 'should update the version when the user updates a version-updating field' do
+          app.memory = 17
+
+          expect {
+            app.save
+            app.reload
+          }.to change { app.version }
+        end
+
+        it 'fails validations when ports are specified at the same time' do
+          app.ports = [45453]
+
+          expect {
+            app.save
+            app.reload
+          }.to raise_error Sequel::ValidationFailed
+        end
+
+        it 'should set ports to nil' do
+          expect(app.save.reload.ports).to be_nil
+        end
+
+        it 'should set route mappings app_port to nil' do
+          app.save
+          expect(route_mapping_1.reload.user_provided_app_port).to be_nil
+          expect(route_mapping_1.reload.app_port).to be_nil
+          expect(route_mapping_1.reload.user_provided_app_port).to be_nil
+          expect(route_mapping_2.reload.app_port).to be_nil
+        end
+
+        context 'app with one or more routes and multiple ports' do
+          before do
+            route_mapping_2.app_port = 2345
+          end
+
+          it 'should add an error' do
+            expect {
+              app.save
+            }.to raise_error Sequel::ValidationFailed, /Multiple app ports not allowed/
+          end
+        end
+      end
+
+      context 'switching from dea to diego' do
+        let(:app) { App.create_from_hash(name: 'test', space_guid: space.guid, diego: false) }
+        let(:route) { Route.make(host: 'host', space: space) }
+        let!(:route_mapping) { RouteMapping.make(app: app, route: route) }
+
+        context 'and no ports specified' do
+          before do
+            app.update_from_hash(diego: true)
+          end
+
+          it 'defaults to 8080' do
+            expect(app.reload.ports).to eq [8080]
+            app.route_mappings.each do |rm|
+              expect(rm.user_provided_app_port).to be_nil
+              expect(rm.app_port).to eq 8080
+            end
+          end
+        end
+
+        context 'and ports are specified' do
+          before do
+            app.update_from_hash(diego: true, ports: [2345, 1298])
+          end
+
+          it 'uses the ports provided' do
+            expect(app.reload.ports).to eq [2345, 1298]
+            app.route_mappings.each do |rm|
+              expect(rm.user_provided_app_port).to eq 2345
+              expect(rm.app_port).to eq 2345
+            end
+          end
+        end
+
+        context 'when using a docker app' do
+          before do
+            app.update_from_hash(diego: true, docker_image: 'some-docker-image', package_state: 'STAGED', package_hash: 'package-hash', instances: 1)
+            app.add_droplet(Droplet.new(
+                              app: app,
+                              droplet_hash: 'the-droplet-hash',
+                              execution_metadata: '{"ports":[{"Port":1024, "Protocol":"tcp"}, {"Port":4444, "Protocol":"udp"},{"Port":1025, "Protocol":"tcp"}]}',
+            ))
+            app.droplet_hash = 'the-droplet-hash'
+            app.save
+          end
+
+          it 'does not save the app port' do
+            expect(app.reload.ports).to eq [1024, 1025]
+            app.route_mappings.each do |rm|
+              expect(rm.user_provided_app_port).to be_nil
+              expect(rm.app_port).to eq 1024
+            end
+          end
+        end
+      end
+
+      context 'when changing ports from the default port' do
+        let(:app) { AppFactory.make(diego: true) }
+        let(:route) { Route.make(space: app.space) }
+
+        before do
+          RouteMapping.make(app: app, route: route)
+        end
+
+        it 'updates all route mappings associated with the app to the default port' do
+          app.ports = [7777, 8080]
+
+          expect {
+            app.save
+            app.reload
+          }.to change { app.route_mappings.map(&:user_provided_app_port) }.from([nil]).to([8080])
+        end
+      end
+
+      context 'when changing ports on a docker app' do
+        let(:app) { App.make(diego: true, docker_image: 'some-docker-image', package_state: 'PENDING') }
+        let(:route) { Route.make(space: app.space) }
+
+        before do
+          RouteMapping.make(app: app, route: route)
+        end
+
+        it 'does not change route mappings associated with the app' do
+          app.ports = [7777, 8080]
+
+          expect {
+            app.save
+            app.reload
+          }.to_not change { app.route_mappings.map(&:user_provided_app_port) }
+        end
+      end
+
+      context 'when updating user provided ports' do
+        let(:app) { AppFactory.make(diego: true, ports: [7777, 8080]) }
+        let(:route) { Route.make(space: app.space) }
+
+        before do
+          RouteMapping.make(app: app, route: route, app_port: 7777)
+        end
+
+        it 'does not update route mappings' do
+          app.ports = [8888, 7777, 8080]
+
+          expect {
+            app.save
+            app.reload
+          }.to_not change { app.route_mappings.map(&:user_provided_app_port) }
         end
       end
     end
@@ -2415,7 +2836,7 @@ module VCAP::CloudController
         end
 
         context 'when modifying multiple routes at one time' do
-          let(:routes) { 3.times.collect { Route.make domain: domain, space: subject.space } }
+          let(:routes) { Array.new(3) { Route.make domain: domain, space: subject.space } }
 
           before do
             allow(AppObserver).to receive(:updated).with(subject)
@@ -2435,6 +2856,29 @@ module VCAP::CloudController
           end
         end
       end
+
+      context 'when updating app ports' do
+        let!(:app) { AppFactory.make(diego: true, state: 'STARTED') }
+
+        before do
+          allow(AppObserver).to receive(:updated).with(app)
+        end
+
+        it 'calls the app observer with the app', isolation: :truncation do
+          expect(AppObserver).not_to have_received(:updated).with(app)
+          app.ports = [1111, 2222]
+          app.save
+          expect(AppObserver).to have_received(:updated).with(app)
+        end
+
+        it 'updates the app version' do
+          expect {
+            app.ports = [1111, 2222]
+            app.memory = 2048
+            app.save
+          }.to change(app, :version)
+        end
+      end
     end
 
     describe '#needs_package_in_current_state?' do
@@ -2449,15 +2893,177 @@ module VCAP::CloudController
     end
 
     describe 'ports' do
-      it 'serializes and deserializes arrays of integers' do
-        app = App.make(ports: [1, 2, 3, 4])
-        expect(app.ports).to eq([1, 2, 3, 4])
+      context 'serialization' do
+        it 'serializes and deserializes arrays of integers' do
+          app = App.make(diego: true, ports: [1025, 1026, 1027, 1028])
+          expect(app.ports).to eq([1025, 1026, 1027, 1028])
 
-        app = App.make(ports: [])
-        expect(app.ports).to eq(nil)
+          app = App.make(diego: true, ports: [1024])
+          expect(app.ports).to eq([1024])
+        end
+      end
 
-        app = App.make(ports: [1])
-        expect(app.ports).to eq([1])
+      context 'when user does not provide ports' do
+        let(:app) { App.make(diego: true) }
+
+        it 'returns the default port' do
+          expect(app.ports).to eq([8080])
+        end
+
+        it 'does not save the default ports to the DB' do
+          expect(app.user_provided_ports).to be_nil
+        end
+
+        context 'when the app is a DEA app' do
+          let(:app) { App.make }
+
+          it 'returns nil' do
+            app = App.make
+            expect(app.ports).to be_nil
+          end
+        end
+      end
+
+      context 'docker app' do
+        context 'when app is not staged' do
+          let(:app) { App.make(diego: true, docker_image: 'some-docker-image', package_state: 'PENDING') }
+
+          it 'returns the default ports' do
+            expect(app.ports).to eq([8080])
+          end
+
+          it 'does not save the ports to the database' do
+            expect(app.user_provided_ports).to be_nil
+          end
+
+          context 'when the app has a route' do
+            let(:route) { Route.make(space: app.space) }
+            before do
+              app.add_route(route)
+            end
+
+            it 'should not save app_port to the route mappings' do
+              route_mapping = RouteMapping.last
+              expect(route_mapping.user_provided_app_port).to be_nil
+            end
+
+            it 'returns the default app_port for the route mapping' do
+              route_mapping = RouteMapping.last
+              expect(route_mapping.app_port).to eq(8080)
+            end
+          end
+        end
+
+        context 'when app is staged' do
+          context 'when some tcp ports are exposed' do
+            let(:app) {
+              app = App.make(diego: true, docker_image: 'some-docker-image', package_state: 'STAGED', package_hash: 'package-hash', instances: 1)
+              app.add_droplet(Droplet.new(
+                                app: app,
+                                droplet_hash: 'the-droplet-hash',
+                                execution_metadata: '{"ports":[{"Port":1024, "Protocol":"tcp"}, {"Port":4444, "Protocol":"udp"},{"Port":1025, "Protocol":"tcp"}]}',
+                              ))
+              app.droplet_hash = 'the-droplet-hash'
+              app
+            }
+
+            it 'returns the ports that were specified in the execution_metadata' do
+              expect(app.ports).to eq([1024, 1025])
+            end
+
+            it 'does not save ports to the database' do
+              expect(app.user_provided_ports).to be_nil
+            end
+
+            context 'when the user provided ports' do
+              before do
+                app.ports = [1111]
+                app.save
+              end
+
+              it 'saves to db and returns the user provided ports' do
+                expect(app.user_provided_ports).to eq([1111])
+                expect(app.ports).to eq([1111])
+              end
+            end
+          end
+
+          context 'when no tcp ports are exposed' do
+            it 'returns the ports that were specified during creation' do
+              app = App.make(diego: true, docker_image: 'some-docker-image', package_state: 'STAGED', package_hash: 'package-hash', instances: 1)
+              app.add_droplet(Droplet.new(
+                                app: app,
+                                droplet_hash: 'the-droplet-hash',
+                                execution_metadata: '{"ports":[{"Port":1024, "Protocol":"udp"}, {"Port":4444, "Protocol":"udp"},{"Port":1025, "Protocol":"udp"}]}',
+                              ))
+              app.droplet_hash = 'the-droplet-hash'
+              expect(app.ports).to eq([8080])
+              expect(app.user_provided_ports).to be_nil
+            end
+          end
+
+          context 'when execution metadata is malformed' do
+            it 'returns the ports that were specified during creation' do
+              app = App.make(diego: true, docker_image: 'some-docker-image', package_state: 'STAGED', package_hash: 'package-hash', instances: 1, ports: [1111])
+              app.add_droplet(Droplet.new(
+                                app: app,
+                                droplet_hash: 'the-droplet-hash',
+                                execution_metadata: 'some-invalid-json',
+                              ))
+              app.droplet_hash = 'the-droplet-hash'
+              expect(app.user_provided_ports).to eq([1111])
+              expect(app.ports).to eq([1111])
+            end
+          end
+
+          context 'when no ports are specified in the execution metadata' do
+            it 'returns the default port' do
+              app = App.make(diego: true, docker_image: 'some-docker-image', package_state: 'STAGED', package_hash: 'package-hash', instances: 1)
+              app.add_droplet(Droplet.new(
+                                app: app,
+                                droplet_hash: 'the-droplet-hash',
+                                execution_metadata: '{"cmd":"run.sh"}',
+                              ))
+              app.droplet_hash = 'the-droplet-hash'
+              expect(app.ports).to eq([8080])
+              expect(app.user_provided_ports).to be_nil
+            end
+          end
+        end
+      end
+
+      context 'buildpack app' do
+        context 'when app is not staged' do
+          it 'returns the ports that were specified during creation' do
+            app = App.make(diego: true, ports: [1025, 1026, 1027, 1028], package_state: 'PENDING')
+            expect(app.ports).to eq([1025, 1026, 1027, 1028])
+            expect(app.user_provided_ports).to eq([1025, 1026, 1027, 1028])
+          end
+        end
+
+        context 'when app is staged' do
+          context 'with no execution_metadata' do
+            it 'returns the ports that were specified during creation' do
+              app = App.make(diego: true, ports: [1025, 1026, 1027, 1028], package_state: 'STAGED', package_hash: 'package-hash', instances: 1)
+              expect(app.ports).to eq([1025, 1026, 1027, 1028])
+              expect(app.user_provided_ports).to eq([1025, 1026, 1027, 1028])
+            end
+          end
+
+          context 'with execution_metadata' do
+            it 'returns the ports that were specified during creation' do
+              app = App.make(diego: true, ports: [1025, 1026, 1027, 1028], package_state: 'STAGED', package_hash: 'package-hash', instances: 1)
+              app.add_droplet(Droplet.new(
+                                app: app,
+                                droplet_hash: 'the-droplet-hash',
+                                execution_metadata: '{"ports":[{"Port":1024, "Protocol":"tcp"}, {"Port":4444, "Protocol":"udp"},{"Port":8080, "Protocol":"tcp"}]}',
+                              ))
+              app.droplet_hash = 'the-droplet-hash'
+              expect(app.ports).to eq([1025, 1026, 1027, 1028])
+              expect(app.user_provided_ports).to eq([1025, 1026, 1027, 1028])
+            end
+          end
+        end
       end
     end
   end

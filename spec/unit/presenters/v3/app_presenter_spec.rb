@@ -5,11 +5,11 @@ module VCAP::CloudController
   describe AppPresenter do
     let(:app) do
       AppModel.make(
-      created_at: Time.at(1),
-      updated_at: Time.at(2),
-      environment_variables: { 'some' => 'stuff' },
-      desired_state: 'STOPPED',
-    )
+        created_at: Time.at(1),
+        updated_at: Time.at(2),
+        environment_variables: { 'some' => 'stuff' },
+        desired_state: 'STOPPED',
+      )
     end
 
     before do
@@ -76,11 +76,18 @@ module VCAP::CloudController
           expect(result['links']['assign_current_droplet']['method']).to eq('PUT')
         end
 
-        it 'includes routes links' do
+        it 'includes route_mappings links' do
           json_result = AppPresenter.new.present_json(app)
           result      = MultiJson.load(json_result)
 
-          expect(result['links']['routes']['href']).to eq("/v3/apps/#{app.guid}/routes")
+          expect(result['links']['route_mappings']['href']).to eq("/v3/apps/#{app.guid}/route_mappings")
+        end
+
+        it 'includes tasks links' do
+          json_result = AppPresenter.new.present_json(app)
+          result      = MultiJson.load(json_result)
+
+          expect(result['links']['tasks']['href']).to eq("/v3/apps/#{app.guid}/tasks")
         end
 
         context 'droplets' do
@@ -116,6 +123,13 @@ module VCAP::CloudController
           desired_state: 'STOPPED',
         )
       end
+      let(:service) { Service.make(label: 'rabbit', tags: ['swell']) }
+      let(:service_plan) { ServicePlan.make(service: service) }
+      let(:service_instance) { ManagedServiceInstance.make(space: app_model.space, service_plan: service_plan, name: 'rabbit-instance') }
+      let!(:service_binding) do
+        ServiceBindingModel.create(app: app_model, service_instance: service_instance,
+                                   type: 'app', credentials: { 'url' => 'www.service.com/foo' }, syslog_drain_url: 'logs.go-here-2.com')
+      end
 
       it 'presents the app environment variables as json' do
         json_result = AppPresenter.new.present_json_env(app_model)
@@ -123,13 +137,15 @@ module VCAP::CloudController
 
         expect(result['environment_variables']).to eq(app_model.environment_variables)
         expect(result['application_env_json']['VCAP_APPLICATION']['name']).to eq(app_model.name)
+        expect(result['application_env_json']['VCAP_APPLICATION']['limits']['fds']).to eq(16384)
+        expect(result['system_env_json']['VCAP_SERVICES']['rabbit'][0]['name']).to eq('rabbit-instance')
         expect(result['staging_env_json']).to eq({})
         expect(result['running_env_json']).to eq({})
       end
     end
 
     describe '#present_json_list' do
-      let(:pagination_presenter) { double(:pagination_presenter, present_pagination_hash: 'pagination_stuff') }
+      let(:pagination_presenter) { instance_double(PaginationPresenter, :pagination_presenter, present_pagination_hash: 'pagination_stuff') }
       let(:app_model1) { app }
       let(:app_model2) { app }
       let(:apps) { [app_model1, app_model2] }

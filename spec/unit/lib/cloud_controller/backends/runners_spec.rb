@@ -19,10 +19,6 @@ module VCAP::CloudController
       instance_double(Dea::Pool)
     end
 
-    let(:stager_pool) do
-      instance_double(Dea::StagerPool)
-    end
-
     let(:package_hash) do
       'fake-package-hash'
     end
@@ -52,7 +48,7 @@ module VCAP::CloudController
     end
 
     subject(:runners) do
-      Runners.new(config, message_bus, dea_pool, stager_pool)
+      Runners.new(config, message_bus, dea_pool)
     end
 
     def make_diego_app(options={})
@@ -83,19 +79,6 @@ module VCAP::CloudController
         it 'finds a diego backend' do
           expect(runners).to receive(:diego_runner).with(app).and_call_original
           expect(runner).to be_a(Diego::Runner)
-        end
-
-        context 'when the app is a traditional buildpack app' do
-          let(:docker_image) { nil }
-
-          before do
-            locator = CloudController::DependencyLocator.instance
-            expect(locator).to receive(:blobstore_url_generator).with(true).and_call_original
-          end
-
-          it 'uses a service dns name blobstore url generator' do
-            expect(runner).to_not be_nil
-          end
         end
 
         context 'when the app has a docker image' do
@@ -258,7 +241,7 @@ module VCAP::CloudController
           :routes,
           :service_bindings,
           :domain
-        ].length)
+        ].freeze.length)
       end
     end
 
@@ -344,7 +327,7 @@ module VCAP::CloudController
           :routes,
           :service_bindings,
           :domain
-        ].length)
+        ].freeze.length)
       end
 
       context 'when the process guid is not found' do

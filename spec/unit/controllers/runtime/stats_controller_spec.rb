@@ -5,7 +5,7 @@ module VCAP::CloudController
     describe 'GET /v2/apps/:id/stats' do
       before :each do
         @app = AppFactory.make(package_hash: 'abc', package_state: 'STAGED')
-        @user =  make_user_for_space(@app.space)
+        @user = make_user_for_space(@app.space)
         @developer = make_developer_for_space(@app.space)
         @auditor = make_auditor_for_space(@app.space)
       end
@@ -58,7 +58,7 @@ module VCAP::CloudController
             expect(last_response.status).to eq(200)
             expect(MultiJson.load(last_response.body)).to eq(expected)
             expect(instances_reporters).to have_received(:stats_for_app).with(
-                                            satisfy { |requested_app| requested_app.guid == @app.guid })
+              satisfy { |requested_app| requested_app.guid == @app.guid })
           end
         end
 
@@ -89,7 +89,7 @@ module VCAP::CloudController
             expect(last_response.status).to eq(200)
             expect(MultiJson.load(last_response.body)).to eq(expected)
             expect(instances_reporters).to have_received(:stats_for_app).with(
-                                            satisfy { |requested_app| requested_app.guid == @app.guid })
+              satisfy { |requested_app| requested_app.guid == @app.guid })
           end
         end
 

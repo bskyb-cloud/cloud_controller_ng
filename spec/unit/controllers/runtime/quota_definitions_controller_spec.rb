@@ -12,11 +12,13 @@ module VCAP::CloudController
           name: { type: 'string', required: true },
           non_basic_services_allowed: { type: 'bool', required: true },
           total_services: { type: 'integer', required: true },
+          total_service_keys: { type: 'integer', required: false, default: -1 },
           total_routes: { type: 'integer', required: true },
           total_private_domains: { type: 'integer', required: false, default: -1 },
           memory_limit: { type: 'integer', required: true },
           instance_memory_limit: { type: 'integer', required: false, default: -1 },
-          app_instance_limit: { type: 'integer', required: false, default: -1 }
+          app_instance_limit: { type: 'integer', required: false, default: -1 },
+          app_task_limit: { type: 'integer', required: false, default: -1 }
         })
       end
 
@@ -25,11 +27,13 @@ module VCAP::CloudController
           name: { type: 'string' },
           non_basic_services_allowed: { type: 'bool' },
           total_services: { type: 'integer' },
+          total_service_keys: { type: 'integer' },
           total_routes: { type: 'integer' },
           total_private_domains: { type: 'integer' },
           memory_limit: { type: 'integer' },
           instance_memory_limit: { type: 'integer' },
-          app_instance_limit: { type: 'integer' }
+          app_instance_limit: { type: 'integer' },
+          app_task_limit: { type: 'integer' }
         })
       end
     end
@@ -43,7 +47,8 @@ module VCAP::CloudController
           total_routes: 10,
           total_private_domains: 20,
           memory_limit: 1024,
-          instance_memory_limit: 10_240
+          instance_memory_limit: 10_240,
+          app_task_limit: 10
         }
       end
       let(:existing_quota) { VCAP::CloudController::QuotaDefinition.make }

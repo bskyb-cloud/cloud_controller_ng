@@ -20,30 +20,13 @@ describe CloudController::DependencyLocator do
         droplets: {
           fog_connection: 'fog_connection',
           droplet_directory_key: 'key',
-          cdn: cdn_settings
         },
       }
     end
 
-    context 'when cdn is not configured' do
-      let(:cdn_settings) { nil }
-
-      it 'creates blob stores without the CDN' do
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', nil)
-        locator.droplet_blobstore
-      end
-    end
-
-    context 'when cdn is configured for package blog store' do
-      let(:cdn_host) { 'http://crazy_cdn.com' }
-      let(:cdn_settings) { { uri: cdn_host, key_pair_id: 'key_pair' } }
-      let(:cdn) { double(:cdn) }
-
-      it 'creates the blob stores with CDNs if configured' do
-        expect(CloudController::Blobstore::Cdn).to receive(:new).with(cdn_host).and_return(cdn)
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', cdn)
-        locator.droplet_blobstore
-      end
+    it 'creates blob store' do
+      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(options: config[:droplets], directory_key: 'key')
+      locator.droplet_blobstore
     end
   end
 
@@ -53,30 +36,13 @@ describe CloudController::DependencyLocator do
         droplets: {
           fog_connection: 'fog_connection',
           droplet_directory_key: 'key',
-          cdn: cdn_settings
         }
       }
     end
 
-    context 'when cdn is not configured' do
-      let(:cdn_settings) { nil }
-
-      it 'creates blob stores without the CDN' do
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', nil, 'buildpack_cache')
-        locator.buildpack_cache_blobstore
-      end
-    end
-
-    context 'when cdn is configured for package blog store' do
-      let(:cdn_host) { 'http://crazy_cdn.com' }
-      let(:cdn_settings) { { uri: cdn_host, key_pair_id: 'key_pair' } }
-      let(:cdn) { double(:cdn) }
-
-      it 'creates the blob stores with CDNs if configured' do
-        expect(CloudController::Blobstore::Cdn).to receive(:new).with(cdn_host).and_return(cdn)
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', cdn, 'buildpack_cache')
-        locator.buildpack_cache_blobstore
-      end
+    it 'creates blob store' do
+      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(options: config[:droplets], directory_key: 'key', root_dir: 'buildpack_cache')
+      locator.buildpack_cache_blobstore
     end
   end
 
@@ -86,30 +52,13 @@ describe CloudController::DependencyLocator do
         packages: {
           fog_connection: 'fog_connection',
           app_package_directory_key: 'key',
-          cdn: cdn_settings
         }
       }
     end
 
-    context 'when cdn is not configured' do
-      let(:cdn_settings) { nil }
-
-      it 'creates blob stores without the CDN' do
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', nil)
-        locator.package_blobstore
-      end
-    end
-
-    context 'when cdn is configured for package blog store' do
-      let(:cdn_host) { 'http://crazy_cdn.com' }
-      let(:cdn_settings) { { uri: cdn_host, key_pair_id: 'key_pair' } }
-      let(:cdn) { double(:cdn) }
-
-      it 'creates the blob stores with CDNs if configured' do
-        expect(CloudController::Blobstore::Cdn).to receive(:new).with(cdn_host).and_return(cdn)
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', cdn)
-        locator.package_blobstore
-      end
+    it 'creates blob store' do
+      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(options: config[:packages], directory_key: 'key')
+      locator.package_blobstore
     end
   end
 
@@ -119,58 +68,13 @@ describe CloudController::DependencyLocator do
         resource_pool: {
           fog_connection: 'fog_connection',
           resource_directory_key: 'key',
-          cdn: cdn_settings,
-          minimum_size: min_file_size,
-          maximum_size: max_file_size
         }
       }
     end
 
-    context 'when cdn is not configured' do
-      let(:cdn_settings) { nil }
-      let(:min_file_size) { nil }
-      let(:max_file_size) { nil }
-
-      it 'creates blob stores without the CDN' do
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', nil, nil, nil, nil)
-        locator.global_app_bits_cache
-      end
-    end
-
-    context 'when file size limits are not configured' do
-      let(:cdn_settings) { nil }
-      let(:min_file_size) { nil }
-      let(:max_file_size) { nil }
-
-      it 'creates blob stores without file size limits' do
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', nil, nil, nil, nil)
-        locator.global_app_bits_cache
-      end
-    end
-
-    context 'when file size limits are configured for package blobstore' do
-      let(:cdn_settings) { nil }
-      let(:min_file_size) { 1024 }
-      let(:max_file_size) { 512 * 1024 * 1024 }
-
-      it 'creates the blob stores with file size limits if configured' do
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', nil, nil, min_file_size, max_file_size)
-        locator.global_app_bits_cache
-      end
-    end
-
-    context 'when cdn is configured for package blog store' do
-      let(:cdn_host) { 'http://crazy_cdn.com' }
-      let(:cdn_settings) { { uri: cdn_host, key_pair_id: 'key_pair' } }
-      let(:cdn) { double(:cdn) }
-      let(:min_file_size) { nil }
-      let(:max_file_size) { nil }
-
-      it 'creates the blob stores with CDNs if configured' do
-        expect(CloudController::Blobstore::Cdn).to receive(:new).with(cdn_host).and_return(cdn)
-        expect(CloudController::Blobstore::Client).to receive(:new).with('fog_connection', 'key', cdn, nil, nil, nil)
-        locator.global_app_bits_cache
-      end
+    it 'creates blob store' do
+      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(options: config[:resource_pool], directory_key: 'key')
+      locator.global_app_bits_cache
     end
   end
 
@@ -179,11 +83,11 @@ describe CloudController::DependencyLocator do
     let(:my_config) do
       {
         internal_service_hostname: internal_service_hostname,
-        external_host: 'external.host',
-        external_port: 8282,
-        staging: {
+        external_host:             'external.host',
+        external_port:             8282,
+        staging:                   {
           auth: {
-            user: 'username',
+            user:     'username',
             password: 'password',
           }
         }
@@ -194,87 +98,21 @@ describe CloudController::DependencyLocator do
       TestConfig.override(my_config)
     end
 
-    context 'when called without an argument' do
-      it 'creates blobstore_url_generator with the external host, port, and blobstores' do
-        connection_options = {
-          blobstore_host: 'external.host',
-          blobstore_port: 8282,
-          user: 'username',
-          password: 'password'
-        }
-        expect(CloudController::Blobstore::UrlGenerator).to receive(:new).
-            with(hash_including(connection_options),
-              instance_of(CloudController::Blobstore::Client),
-              instance_of(CloudController::Blobstore::Client),
-              instance_of(CloudController::Blobstore::Client),
-              instance_of(CloudController::Blobstore::Client)
-            )
-        locator.blobstore_url_generator
-      end
-    end
-
-    context 'when the internal_service_hostname is nil' do
-      let(:internal_service_hostname) { nil }
-
-      it 'creates blobstore_url_generator with the external host, port, and blobstores' do
-        connection_options = {
-          blobstore_host: 'external.host',
-          blobstore_port: 8282,
-          user: 'username',
-          password: 'password'
-        }
-        expect(CloudController::Blobstore::UrlGenerator).to receive(:new).
-            with(hash_including(connection_options),
-              instance_of(CloudController::Blobstore::Client),
-              instance_of(CloudController::Blobstore::Client),
-              instance_of(CloudController::Blobstore::Client),
-              instance_of(CloudController::Blobstore::Client)
-            ).twice
-        locator.blobstore_url_generator(true)
-        locator.blobstore_url_generator(false)
-      end
-    end
-
-    context 'when the internal_service_hostname is not nil' do
-      let(:internal_service_hostname) { 'internal.service.hostname' }
-
-      context 'and use_service_dns is true' do
-        it 'creates blobstore_url_generator with the internal service hostname, port, and blobstores' do
-          connection_options = {
-            blobstore_host: 'internal.service.hostname',
-            blobstore_port: 8282,
-            user: 'username',
-            password: 'password'
-          }
-          expect(CloudController::Blobstore::UrlGenerator).to receive(:new).
-              with(hash_including(connection_options),
-                instance_of(CloudController::Blobstore::Client),
-                instance_of(CloudController::Blobstore::Client),
-                instance_of(CloudController::Blobstore::Client),
-                instance_of(CloudController::Blobstore::Client)
-              )
-          locator.blobstore_url_generator(true)
-        end
-      end
-
-      context 'and use_service_dns is false' do
-        it 'creates blobstore_url_generator with the external host, port, and blobstores' do
-          connection_options = {
-            blobstore_host: 'external.host',
-            blobstore_port: 8282,
-            user: 'username',
-            password: 'password'
-          }
-          expect(CloudController::Blobstore::UrlGenerator).to receive(:new).
-              with(hash_including(connection_options),
-                instance_of(CloudController::Blobstore::Client),
-                instance_of(CloudController::Blobstore::Client),
-                instance_of(CloudController::Blobstore::Client),
-                instance_of(CloudController::Blobstore::Client)
-              )
-          locator.blobstore_url_generator(false)
-        end
-      end
+    it 'creates blobstore_url_generator with the internal_service_hostname, port, and blobstores' do
+      connection_options = {
+        blobstore_host: 'internal.service.hostname',
+        blobstore_port: 8282,
+        user:           'username',
+        password:       'password'
+      }
+      expect(CloudController::Blobstore::UrlGenerator).to receive(:new).
+        with(hash_including(connection_options),
+          kind_of(CloudController::Blobstore::Client),
+          kind_of(CloudController::Blobstore::Client),
+          kind_of(CloudController::Blobstore::Client),
+          kind_of(CloudController::Blobstore::Client)
+        )
+      locator.blobstore_url_generator
     end
   end
 
@@ -395,6 +233,20 @@ describe CloudController::DependencyLocator do
     end
   end
 
+  describe '#router_group_type_populating_collection_renderer' do
+    it 'returns paginated collection renderer with a RouterGroupTypePopulator transformer' do
+      renderer = locator.router_group_type_populating_collection_renderer
+      expect(renderer.collection_transformer).to be_a(VCAP::CloudController::RouterGroupTypePopulator)
+    end
+
+    it 'uses the routing_api_client for the populator' do
+      routing_api_client = double('routing api client')
+      expect(locator).to receive(:routing_api_client).and_return(routing_api_client)
+      renderer = locator.router_group_type_populating_collection_renderer
+      expect(renderer.collection_transformer.routing_api_client).to eq(routing_api_client)
+    end
+  end
+
   describe '#username_lookup_uaa_client' do
     it 'returns a uaa client with credentials for lookuping up usernames' do
       uaa_client = locator.username_lookup_uaa_client
@@ -423,6 +275,17 @@ describe CloudController::DependencyLocator do
       }
                          )
       TestConfig.config
+    end
+
+    context 'when routing api in not enabled' do
+      before do
+        config[:routing_api] = nil
+      end
+
+      it 'returns a disabled client' do
+        expect(locator.routing_api_client).
+          to be_an_instance_of(VCAP::CloudController::RoutingApi::DisabledClient)
+      end
     end
 
     it 'returns a routing_api_client' do

@@ -13,10 +13,11 @@ module VCAP::CloudController
       end
 
       def deleted(app)
-        begin
+        with_diego_communication_handling do
+          if app.staging?
+            @stagers.stager_for_app(app).stop_stage
+          end
           @runners.runner_for_app(app).stop
-        rescue VCAP::CloudController::Diego::Runner::CannotCommunicateWithDiegoError
-          # This is a hail mary.  Diego will eventually be consistent.  If this communication fails, we're cool with it.
         end
 
         delete_package(app) if app.package_hash
@@ -27,25 +28,31 @@ module VCAP::CloudController
         changes = app.previous_changes
         return unless changes
 
-        if changes.key?(:state) || changes.key?(:diego) || changes.key?(:enable_ssh)
-          react_to_state_change(app)
-        elsif changes.key?(:instances)
-          react_to_instances_change(app)
+        with_diego_communication_handling do
+          if changes.key?(:state) || changes.key?(:diego) || changes.key?(:enable_ssh) || changes.key?(:ports)
+            react_to_state_change(app)
+          elsif changes.key?(:instances)
+            react_to_instances_change(app)
+          end
         end
       end
 
       def routes_changed(app)
-        @runners.runner_for_app(app).update_routes if app.started? && app.active?
+        with_diego_communication_handling do
+          @runners.runner_for_app(app).update_routes if app.started? && app.active?
+        end
       end
 
       private
 
       def delete_buildpack_cache(app)
+        return if app.is_v3?
         delete_job = Jobs::Runtime::BlobstoreDelete.new(app.buildpack_cache_key, :buildpack_cache_blobstore)
         Jobs::Enqueuer.new(delete_job, queue: 'cc-generic').enqueue
       end
 
       def delete_package(app)
+        return if app.is_v3?
         delete_job = Jobs::Runtime::BlobstoreDelete.new(app.guid, :package_blobstore)
         Jobs::Enqueuer.new(delete_job, queue: 'cc-generic').enqueue
       end
@@ -66,6 +73,16 @@ module VCAP::CloudController
 
       def react_to_instances_change(app)
         @runners.runner_for_app(app).scale if app.started? && app.active?
+      end
+
+      def with_diego_communication_handling
+        yield
+      rescue Diego::Runner::CannotCommunicateWithDiegoError => e
+        logger.error("failed communicating with diego backend: #{e.message}")
+      end
+
+      def logger
+        @logger ||= Steno.logger('cc.app_observer')
       end
     end
   end

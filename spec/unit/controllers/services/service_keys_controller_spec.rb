@@ -29,9 +29,9 @@ module VCAP::CloudController
 
     def stub_requests(broker)
       stub_request(:put, %r{#{broker_url(broker)}/v2/service_instances/#{guid_pattern}/service_bindings/#{guid_pattern}}).
-          to_return(status: bind_status, body: bind_body.to_json)
+        to_return(status: bind_status, body: bind_body.to_json)
       stub_request(:delete, %r{#{broker_url(broker)}/v2/service_instances/#{guid_pattern}/service_bindings/#{guid_pattern}}).
-          to_return(status: unbind_status, body: unbind_body.to_json)
+        to_return(status: unbind_status, body: unbind_body.to_json)
     end
 
     def bind_url_regex(opts={})
@@ -67,14 +67,14 @@ module VCAP::CloudController
       before do
         @service_instance_a = ManagedServiceInstance.make(space: @space_a)
         @obj_a = ServiceKey.make(
-            name: 'fake-name-a',
-            service_instance: @service_instance_a
+          name: 'fake-name-a',
+          service_instance: @service_instance_a
         )
 
         @service_instance_b = ManagedServiceInstance.make(space: @space_b)
         @obj_b = ServiceKey.make(
-            name: 'fake-name-b',
-            service_instance: @service_instance_b
+          name: 'fake-name-b',
+          service_instance: @service_instance_b
         )
       end
 
@@ -255,7 +255,7 @@ module VCAP::CloudController
               post '/v2/service_keys', req, headers_for(developer)
 
               expect(a_request(:put, %r{#{broker_url(broker)}/v2/service_instances/#{guid_pattern}/service_bindings/#{guid_pattern}})).
-                  to_not have_been_made
+                to_not have_been_made
             end
 
             it 'should show an error message for create key operation' do
@@ -367,19 +367,6 @@ module VCAP::CloudController
 
             expect(a_request(:put, url_regex).with(body: expected_body)).to have_been_made
           end
-        end
-      end
-
-      context 'for a v1 service instance' do
-        let(:instance) { ManagedServiceInstance.make(:v1) }
-
-        it 'returns an error to the user' do
-          post '/v2/service_keys', req, headers_for(developer)
-          expect(last_response).to have_status_code 400
-          expect(decoded_response['description']).to eq(
-              'Service keys are not supported for this service. The service broker ' \
-              'implements the v1 Service Broker API which has been deprecated. To ' \
-              'generate credentials, try binding an application to the service instance.')
         end
       end
 

@@ -14,9 +14,13 @@ namespace :spec do
     run_specs("spec")
   end
 
-  desc "Generate the API documents"
-  task api: "db:pick" do
-    sh "bundle exec rspec spec/api --format RspecApiDocumentation::ApiFormatter"
+  desc "Generate the API documents, use path to generate docs for one file"
+  task :api, [:path] => "db:pick" do |t, args|
+    if args[:path]
+      run_docs("documentation/#{args[:path]}")
+    else
+      run_docs
+    end
   end
 
   desc "Run the acceptance tests"
@@ -29,7 +33,12 @@ namespace :spec do
     run_specs("spec/integration")
   end
 
-  task outer: %w[api acceptance integration]
+  desc "Run the request tests"
+  task request: "db:pick" do
+    run_specs("spec/request")
+  end
+
+  task outer: %w[api acceptance integration request]
 
   desc 'Run only previously failing tests'
   task failed: "db:pick" do
@@ -40,7 +49,6 @@ namespace :spec do
     fast_suites = %w[
         access
         actions
-        builders
         collection_transformers
         jobs
         messages
@@ -77,6 +85,10 @@ namespace :spec do
 
   def run_specs(path)
     sh "bundle exec rspec #{path} --require rspec/instafail --format RSpec::Instafail"
+  end
+
+  def run_docs(path="")
+    sh "bundle exec rspec spec/api/#{path} --format RspecApiDocumentation::ApiFormatter"
   end
 
   def run_failed_specs

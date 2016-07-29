@@ -39,7 +39,7 @@ resource 'Spaces', type: [:api, :legacy_api] do
     standard_model_list :space, VCAP::CloudController::SpacesController
     standard_model_get :space, nested_associations: [:organization]
     standard_model_delete :space do
-      parameter :recursive, 'Will delete all apps, services, and routes associated with the space', valid_values: [true, false]
+      parameter :recursive, 'Will delete all apps, services, routes, and service brokers associated with the space', valid_values: [true, false]
     end
 
     def after_standard_model_delete(guid)
@@ -89,7 +89,7 @@ resource 'Spaces', type: [:api, :legacy_api] do
         VCAP::CloudController::Route.make(domain: domain, space: space)
       end
 
-      standard_model_list :route, VCAP::CloudController::RoutesController, outer_model: :space
+      standard_model_list :route, VCAP::CloudController::RoutesController, outer_model: :space, exclude_parameters: ['organization_guid']
     end
 
     describe 'Developers' do
@@ -107,11 +107,14 @@ resource 'Spaces', type: [:api, :legacy_api] do
         let(:associated_developer_guid) { associated_developer.guid }
         let(:developer_guid) { developer.guid }
 
-        parameter :developer_guid, 'The guid of the developer'
-
         standard_model_list :user, VCAP::CloudController::UsersController, outer_model: :space, path: :developers
-        nested_model_associate :developer, :space
-        nested_model_remove :developer, :space
+
+        context 'has user guid param' do
+          parameter :developer_guid, 'The guid of the developer'
+
+          nested_model_associate :developer, :space
+          nested_model_remove :developer, :space
+        end
       end
 
       context 'by username' do
@@ -131,7 +134,7 @@ resource 'Spaces', type: [:api, :legacy_api] do
         end
 
         delete 'v2/spaces/:guid/developers' do
-          example 'Disassociate Developer with the Space by Username' do
+          example 'Remove Developer with the Space by Username' do
             uaa_client = double(:uaa_client)
             allow(CloudController::DependencyLocator.instance).to receive(:username_lookup_uaa_client).and_return(uaa_client)
             allow(uaa_client).to receive(:id_for_username).and_return(associated_developer.guid)
@@ -160,11 +163,14 @@ resource 'Spaces', type: [:api, :legacy_api] do
         let(:associated_manager_guid) { associated_manager.guid }
         let(:manager_guid) { manager.guid }
 
-        parameter :manager_guid, 'The guid of the manager'
-
         standard_model_list :user, VCAP::CloudController::UsersController, outer_model: :space, path: :managers
-        nested_model_associate :manager, :space
-        nested_model_remove :manager, :space
+
+        context 'has user guid param' do
+          parameter :manager_guid, 'The guid of the manager'
+
+          nested_model_associate :manager, :space
+          nested_model_remove :manager, :space
+        end
       end
 
       context 'by username' do
@@ -184,7 +190,7 @@ resource 'Spaces', type: [:api, :legacy_api] do
         end
 
         delete 'v2/spaces/:guid/managers' do
-          example 'Disassociate Manager with the Space by Username' do
+          example 'Remove Manager with the Space by Username' do
             uaa_client = double(:uaa_client)
             allow(CloudController::DependencyLocator.instance).to receive(:username_lookup_uaa_client).and_return(uaa_client)
             allow(uaa_client).to receive(:id_for_username).and_return(associated_manager.guid)
@@ -213,11 +219,14 @@ resource 'Spaces', type: [:api, :legacy_api] do
         let(:associated_auditor_guid) { associated_auditor.guid }
         let(:auditor_guid) { auditor.guid }
 
-        parameter :auditor_guid, 'The guid of the auditor'
-
         standard_model_list :user, VCAP::CloudController::UsersController, outer_model: :space, path: :auditors
-        nested_model_associate :auditor, :space
-        nested_model_remove :auditor, :space
+
+        context 'has user guid param' do
+          parameter :auditor_guid, 'The guid of the auditor'
+
+          nested_model_associate :auditor, :space
+          nested_model_remove :auditor, :space
+        end
       end
 
       context 'by username' do
@@ -237,7 +246,7 @@ resource 'Spaces', type: [:api, :legacy_api] do
         end
 
         delete 'v2/spaces/:guid/auditors' do
-          example 'Disassociate Auditor with the Space by Username' do
+          example 'Remove Auditor with the Space by Username' do
             uaa_client = double(:uaa_client)
             allow(CloudController::DependencyLocator.instance).to receive(:username_lookup_uaa_client).and_return(uaa_client)
             allow(uaa_client).to receive(:id_for_username).and_return(associated_auditor.guid)
@@ -306,7 +315,7 @@ resource 'Spaces', type: [:api, :legacy_api] do
         VCAP::CloudController::ServicePlanVisibility.make(service_plan: some_service.service_plans.first, organization: space.organization)
       end
 
-      standard_model_list :service, VCAP::CloudController::ServicesController, outer_model: :space, path: :service
+      standard_model_list :service, VCAP::CloudController::ServicesController, outer_model: :space, path: :service, exclude_parameters: ['provider']
     end
 
     describe 'Events' do
@@ -325,11 +334,14 @@ resource 'Spaces', type: [:api, :legacy_api] do
       let(:security_group) { VCAP::CloudController::SecurityGroup.make }
       let(:security_group_guid) { security_group.guid }
 
-      parameter :security_group_guid, 'The guid of the security group'
-
       standard_model_list :security_group, VCAP::CloudController::SecurityGroupsController, outer_model: :space
-      nested_model_associate :security_group, :space
-      nested_model_remove :security_group, :space
+
+      context 'has security group guid param' do
+        parameter :security_group_guid, 'The guid of the security group'
+
+        nested_model_associate :security_group, :space
+        nested_model_remove :security_group, :space
+      end
     end
   end
 end

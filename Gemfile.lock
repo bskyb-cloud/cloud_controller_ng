@@ -8,9 +8,9 @@ GIT
 
 GIT
   remote: https://github.com/cloudfoundry/delayed_job_sequel.git
-  revision: ae606dd8dd72f3491ff5073da2276dc6fcdd204e
+  revision: 908f3883e136bdf53d3b7caac1b88710ef1c7742
   specs:
-    delayed_job_sequel (4.0.1)
+    delayed_job_sequel (4.1.0)
       delayed_job (~> 4.0.0)
       sequel (>= 3.38, < 5.0)
       tzinfo
@@ -21,6 +21,17 @@ GIT
   ref: 2a5b0179
   specs:
     vcap-concurrency (0.1.0)
+
+GIT
+  remote: https://github.com/nats-io/ruby-nats
+  revision: 8571cf9d685b6063002486614b66a28bad254a64
+  ref: 8571cf9d685b6063002486614b66a28bad254a64
+  specs:
+    nats (0.5.1)
+      daemons (~> 1.1, >= 1.2.2)
+      eventmachine (~> 1.0, = 1.0.7)
+      json_pure (~> 1.8, >= 1.8.1)
+      thin (~> 1.6, >= 1.6.3)
 
 GIT
   remote: https://github.com/zipmark/rspec_api_documentation.git
@@ -35,32 +46,34 @@ GIT
 GEM
   remote: http://rubygems.org/
   specs:
-    CFPropertyList (2.3.1)
-    actionpack (4.1.13)
-      actionview (= 4.1.13)
-      activesupport (= 4.1.13)
-      rack (~> 1.5.2)
+    CFPropertyList (2.3.2)
+    actionpack (4.2.5.2)
+      actionview (= 4.2.5.2)
+      activesupport (= 4.2.5.2)
+      rack (~> 1.6)
       rack-test (~> 0.6.2)
-    actionview (4.1.13)
-      activesupport (= 4.1.13)
+      rails-dom-testing (~> 1.0, >= 1.0.5)
+      rails-html-sanitizer (~> 1.0, >= 1.0.2)
+    actionview (4.2.5.2)
+      activesupport (= 4.2.5.2)
       builder (~> 3.1)
       erubis (~> 2.7.0)
-    activemodel (4.1.13)
-      activesupport (= 4.1.13)
+      rails-dom-testing (~> 1.0, >= 1.0.5)
+      rails-html-sanitizer (~> 1.0, >= 1.0.2)
+    activemodel (4.2.5.2)
+      activesupport (= 4.2.5.2)
       builder (~> 3.1)
-    activesupport (4.1.13)
-      i18n (~> 0.6, >= 0.6.9)
+    activesupport (4.2.5.2)
+      i18n (~> 0.7)
       json (~> 1.7, >= 1.7.7)
       minitest (~> 5.1)
-      thread_safe (~> 0.1)
+      thread_safe (~> 0.3, >= 0.3.4)
       tzinfo (~> 1.1)
-    addressable (2.3.6)
+    addressable (2.4.0)
     allowy (1.0.0)
       activesupport (>= 3.2)
       i18n
-    ast (2.0.0)
-    astrolabe (1.3.0)
-      parser (>= 2.2.0.pre.3, < 3.0)
+    ast (2.2.0)
     awesome_print (1.2.0)
     backports (3.6.4)
     beefcake (1.0.0)
@@ -84,35 +97,35 @@ GEM
     crack (0.4.2)
       safe_yaml (~> 1.0.0)
     daemons (1.2.3)
-    delayed_job (4.0.4)
-      activesupport (>= 3.0, < 4.2)
+    delayed_job (4.0.6)
+      activesupport (>= 3.0, < 5.0)
     diff-lcs (1.2.5)
     docile (1.1.5)
-    em-http-request (1.1.2)
+    em-http-request (1.1.3)
       addressable (>= 2.3.4)
-      cookiejar
+      cookiejar (<= 0.3.0)
       em-socksify (>= 0.3)
       eventmachine (>= 1.0.3)
       http_parser.rb (>= 0.6.0)
-    em-socksify (0.3.0)
+    em-socksify (0.3.1)
       eventmachine (>= 1.0.0.beta.4)
     erubis (2.7.0)
-    eventmachine (1.0.8)
-    excon (0.45.4)
+    eventmachine (1.0.9.1)
+    excon (0.48.0)
     fakefs (0.6.0)
     fission (0.5.0)
       CFPropertyList (~> 2.2)
-    fluent-logger (0.4.9)
+    fluent-logger (0.5.1)
       msgpack (>= 0.4.4, < 0.6.0, != 0.5.3, != 0.5.2, != 0.5.1, != 0.5.0)
-      yajl-ruby (~> 1.0)
-    fog (1.34.0)
+    fog (1.37.0)
+      fog-aliyun (>= 0.1.0)
       fog-atmos
       fog-aws (>= 0.6.0)
       fog-brightbox (~> 0.4)
       fog-core (~> 1.32)
       fog-dynect (~> 0.0.2)
       fog-ecloud (~> 0.1)
-      fog-google (>= 0.0.2)
+      fog-google (<= 0.1.0)
       fog-json
       fog-local
       fog-powerdns (>= 0.1.1)
@@ -126,43 +139,46 @@ GEM
       fog-terremark
       fog-vmfusion
       fog-voxel
+      fog-vsphere (>= 0.4.0)
+      fog-xenserver
       fog-xml (~> 0.1.1)
       ipaddress (~> 0.5)
-      nokogiri (~> 1.5, >= 1.5.11)
+    fog-aliyun (0.1.0)
+      fog-core (~> 1.27)
+      fog-json (~> 1.0)
+      ipaddress (~> 0.8)
+      xml-simple (~> 1.1)
     fog-atmos (0.1.0)
       fog-core
       fog-xml
-    fog-aws (0.7.6)
+    fog-aws (0.9.1)
       fog-core (~> 1.27)
       fog-json (~> 1.0)
       fog-xml (~> 0.1)
       ipaddress (~> 0.8)
-    fog-brightbox (0.9.0)
+    fog-brightbox (0.10.1)
       fog-core (~> 1.22)
       fog-json
       inflecto (~> 0.0.2)
-    fog-core (1.32.1)
+    fog-core (1.36.0)
       builder
       excon (~> 0.45)
       formatador (~> 0.2)
-      mime-types
-      net-scp (~> 1.1)
-      net-ssh (>= 2.1.3)
-    fog-dynect (0.0.2)
+    fog-dynect (0.0.3)
       fog-core
       fog-json
       fog-xml
     fog-ecloud (0.3.0)
       fog-core
       fog-xml
-    fog-google (0.0.7)
+    fog-google (0.1.0)
       fog-core
       fog-json
       fog-xml
     fog-json (1.0.2)
       fog-core (~> 1.0)
       multi_json (~> 1.10)
-    fog-local (0.2.1)
+    fog-local (0.3.0)
       fog-core (~> 1.27)
     fog-powerdns (0.1.1)
       fog-core (~> 1.27)
@@ -172,7 +188,7 @@ GEM
       fog-core
       fog-xml
       nokogiri
-    fog-radosgw (0.0.4)
+    fog-radosgw (0.0.5)
       fog-core (>= 1.21.0)
       fog-json
       fog-xml (>= 0.0.1)
@@ -180,13 +196,13 @@ GEM
       fog-core
       fog-json
       fog-xml
-    fog-sakuracloud (1.0.1)
+    fog-sakuracloud (1.7.5)
       fog-core
       fog-json
     fog-serverlove (0.1.2)
       fog-core
       fog-json
-    fog-softlayer (0.4.7)
+    fog-softlayer (1.1.0)
       fog-core
       fog-json
     fog-storm_on_demand (0.1.1)
@@ -201,51 +217,50 @@ GEM
     fog-voxel (0.1.0)
       fog-core
       fog-xml
+    fog-vsphere (0.6.3)
+      fog-core
+      rbvmomi (~> 1.8)
+    fog-xenserver (0.2.3)
+      fog-core
+      fog-xml
     fog-xml (0.1.2)
       fog-core
       nokogiri (~> 1.5, >= 1.5.11)
     formatador (0.2.5)
     http_parser.rb (0.6.0)
-    httpclient (2.6.0.1)
+    httpclient (2.7.1)
     i18n (0.7.0)
     inflecto (0.0.2)
-    ipaddress (0.8.0)
+    ipaddress (0.8.3)
     json (1.8.3)
-    json_pure (1.8.2)
+    json_pure (1.8.3)
     loggregator_emitter (5.0.1)
       beefcake (~> 1.0.0)
+    loofah (2.0.3)
+      nokogiri (>= 1.5.9)
     machinist (1.0.6)
     membrane (1.1.0)
     method_source (0.8.2)
-    mime-types (2.6.1)
-    mini_portile (0.6.2)
-    minitest (5.8.2)
-    msgpack (0.5.9)
+    mime-types (2.6.2)
+    mini_portile2 (2.0.0)
+    minitest (5.8.4)
+    msgpack (0.5.12)
     multi_json (1.11.2)
     multipart-post (2.0.0)
     mustache (0.99.8)
     mysql2 (0.3.20)
-    nats (0.5.1)
-      daemons (~> 1.1, >= 1.2.2)
-      eventmachine (~> 1.0, >= 1.0.7)
-      json_pure (~> 1.8, >= 1.8.1)
-      thin (~> 1.6, >= 1.6.3)
-    net-scp (1.2.1)
-      net-ssh (>= 2.6.5)
-    net-ssh (2.9.2)
     netaddr (1.5.0)
     newrelic_rpm (3.12.0.288)
-    nokogiri (1.6.6.2)
-      mini_portile (~> 0.6.0)
+    nokogiri (1.6.7.2)
+      mini_portile2 (~> 2.0.0.rc2)
     parallel (1.3.3)
     parallel_tests (1.0.7)
       parallel
-    parser (2.2.0.1)
-      ast (>= 1.1, < 3.0)
-      slop (~> 3.4, >= 3.4.5)
+    parser (2.3.0.6)
+      ast (~> 2.2)
     pg (0.16.0)
-    posix-spawn (0.3.9)
-    powerpack (0.0.9)
+    posix-spawn (0.3.11)
+    powerpack (0.1.1)
     pry (0.10.1)
       coderay (~> 1.1.0)
       method_source (~> 0.8.1)
@@ -253,62 +268,75 @@ GEM
     pry-byebug (3.1.0)
       byebug (~> 4.0)
       pry (~> 0.10)
+    public_suffix (1.5.3)
     rack (1.6.4)
     rack-protection (1.5.3)
       rack
-    rack-test (0.6.2)
+    rack-test (0.6.3)
       rack (>= 1.0)
-    railties (4.1.13)
-      actionpack (= 4.1.13)
-      activesupport (= 4.1.13)
+    rails-deprecated_sanitizer (1.0.3)
+      activesupport (>= 4.2.0.alpha)
+    rails-dom-testing (1.0.7)
+      activesupport (>= 4.2.0.beta, < 5.0)
+      nokogiri (~> 1.6.0)
+      rails-deprecated_sanitizer (>= 1.0.1)
+    rails-html-sanitizer (1.0.3)
+      loofah (~> 2.0)
+    railties (4.2.5.2)
+      actionpack (= 4.2.5.2)
+      activesupport (= 4.2.5.2)
       rake (>= 0.8.7)
       thor (>= 0.18.1, < 2.0)
-    rainbow (2.0.0)
-    rake (10.4.2)
+    rainbow (2.1.0)
+    rake (10.5.0)
+    rbvmomi (1.8.2)
+      builder
+      nokogiri (>= 1.4.1)
+      trollop
     rfc822 (0.1.5)
     roodi (4.0.0)
       ruby_parser (~> 3.2, >= 3.2.2)
-    rspec (3.3.0)
-      rspec-core (~> 3.3.0)
-      rspec-expectations (~> 3.3.0)
-      rspec-mocks (~> 3.3.0)
+    rspec (3.4.0)
+      rspec-core (~> 3.4.0)
+      rspec-expectations (~> 3.4.0)
+      rspec-mocks (~> 3.4.0)
     rspec-collection_matchers (1.1.2)
       rspec-expectations (>= 2.99.0.beta1)
-    rspec-core (3.3.2)
-      rspec-support (~> 3.3.0)
-    rspec-expectations (3.3.1)
+    rspec-core (3.4.1)
+      rspec-support (~> 3.4.0)
+    rspec-expectations (3.4.0)
       diff-lcs (>= 1.2.0, < 2.0)
-      rspec-support (~> 3.3.0)
+      rspec-support (~> 3.4.0)
     rspec-instafail (0.2.5)
       rspec
     rspec-its (1.1.0)
       rspec-core (>= 3.0.0)
       rspec-expectations (>= 3.0.0)
-    rspec-mocks (3.3.2)
+    rspec-mocks (3.4.0)
       diff-lcs (>= 1.2.0, < 2.0)
-      rspec-support (~> 3.3.0)
-    rspec-rails (3.3.3)
+      rspec-support (~> 3.4.0)
+    rspec-rails (3.4.0)
       actionpack (>= 3.0, < 4.3)
       activesupport (>= 3.0, < 4.3)
       railties (>= 3.0, < 4.3)
-      rspec-core (~> 3.3.0)
-      rspec-expectations (~> 3.3.0)
-      rspec-mocks (~> 3.3.0)
-      rspec-support (~> 3.3.0)
-    rspec-support (3.3.0)
-    rubocop (0.28.0)
-      astrolabe (~> 1.3)
-      parser (>= 2.2.0.pre.7, < 3.0)
-      powerpack (~> 0.0.6)
+      rspec-core (~> 3.4.0)
+      rspec-expectations (~> 3.4.0)
+      rspec-mocks (~> 3.4.0)
+      rspec-support (~> 3.4.0)
+    rspec-support (3.4.1)
+    rubocop (0.37.2)
+      parser (>= 2.3.0.4, < 3.0)
+      powerpack (~> 0.1)
       rainbow (>= 1.99.1, < 3.0)
-      ruby-progressbar (~> 1.4)
+      ruby-progressbar (~> 1.7)
+      unicode-display_width (~> 0.3)
     ruby-debug-ide (0.5.0)
       rake (>= 0.8.1)
-    ruby-progressbar (1.7.1)
+    ruby-progressbar (1.7.5)
     ruby_parser (3.6.3)
       sexp_processor (~> 4.1)
     safe_yaml (1.0.4)
-    sequel (4.21.0)
+    sequel (4.29.0)
     sexp_processor (4.4.4)
     simplecov (0.9.1)
       docile (~> 1.1.0)
@@ -333,21 +361,23 @@ GEM
     steno (1.2.4)
       fluent-logger
       yajl-ruby (~> 1.0)
-    thin (1.6.3)
+    thin (1.6.4)
       daemons (~> 1.0, >= 1.0.9)
-      eventmachine (~> 1.0)
+      eventmachine (~> 1.0, >= 1.0.4)
       rack (~> 1.0)
     thor (0.19.1)
     thread_safe (0.3.5)
     tilt (1.4.1)
     timecop (0.7.1)
+    trollop (2.1.2)
     tzinfo (1.2.2)
       thread_safe (~> 0.1)
     unf (0.1.4)
       unf_ext
     unf_ext (0.0.6)
+    unicode-display_width (0.3.1)
     uuidtools (2.1.5)
-    vcap_common (4.0.2)
+    vcap_common (4.0.3)
       addressable (~> 2.2)
       cookiejar (<= 0.3.0)
       em-http-request (~> 1.0)
@@ -356,7 +386,7 @@ GEM
       membrane (~> 1.0)
       mime-types
       multipart-post
-      nats (>= 0.5.0.beta.12, < 0.6)
+      nats (>= 0.5.0.beta.16, < 0.6)
       posix-spawn (~> 0.3.6)
       squash_ruby
       steno
@@ -368,16 +398,18 @@ GEM
     webmock (1.20.4)
       addressable (>= 2.3.6)
       crack (>= 0.3.2)
+    xml-simple (1.1.5)
     yajl-ruby (1.2.1)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
-  activemodel
+  actionpack (~> 4.2.5.2)
+  actionview (~> 4.2.5.2)
+  activemodel (~> 4.2.5.2)
   addressable
   allowy
-  astrolabe
   awesome_print
   byebug
   cf-message-bus (~> 0.3.0)
@@ -394,16 +426,19 @@ DEPENDENCIES
   loggregator_emitter (~> 5.0)
   machinist (~> 1.0.6)
   membrane (~> 1.0)
+  mime-types (~> 2.6.2)
   multi_json
   mysql2 (= 0.3.20)
+  nats!
   netaddr
   newrelic_rpm (= 3.12.0.288)
   nokogiri (~> 1.6.2)
   parallel_tests
   pg (= 0.16.0)
   pry-byebug
+  public_suffix
   rack-test
-  railties
+  railties (~> 4.2.5.2)
   rake
   rfc822
   roodi
@@ -424,9 +459,9 @@ DEPENDENCIES
   timecop
   unf
   vcap-concurrency!
-  vcap_common (~> 4.0)
+  vcap_common (~> 4.0.3)
   webmock
   yajl-ruby
 
 BUNDLED WITH
-   1.10.6
+   1.11.2

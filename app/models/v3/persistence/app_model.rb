@@ -1,12 +1,14 @@
 module VCAP::CloudController
   class AppModel < Sequel::Model(:apps_v3)
     include Serializer
-    APP_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/.freeze
+    APP_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/
 
-    many_to_many :routes, join_table: :apps_v3_routes, left_key: :app_v3_id
+    many_to_many :routes, join_table: :route_mappings, left_key: :app_guid, left_primary_key: :guid, right_primary_key: :guid, right_key: :route_guid
+    one_to_many :service_bindings, class: 'VCAP::CloudController::ServiceBindingModel', key: :app_id
+    one_to_many :tasks, class: 'VCAP::CloudController::TaskModel', key: :app_id
 
     many_to_one :space, class: 'VCAP::CloudController::Space', key: :space_guid, primary_key: :guid, without_guid_generation: true
-    one_through_one :organization, join_table: Space.table_name, left_key: :guid, left_primary_key: :space_guid, right_primary_key: :guid, right_key: :space_guid
+    one_through_one :organization, join_table: Space.table_name, left_key: :guid, left_primary_key: :space_guid, right_primary_key: :id, right_key: :organization_id
 
     one_to_many :processes, class: 'VCAP::CloudController::App', key: :app_guid, primary_key: :guid
     one_to_many :packages, class: 'VCAP::CloudController::PackageModel', key: :app_guid, primary_key: :guid
@@ -33,10 +35,20 @@ module VCAP::CloudController
 
     def lifecycle_type
       return BuildpackLifecycleDataModel::LIFECYCLE_TYPE if self.buildpack_lifecycle_data
+      DockerLifecycleDataModel::LIFECYCLE_TYPE
     end
 
     def lifecycle_data
       return buildpack_lifecycle_data if self.buildpack_lifecycle_data
+      DockerLifecycleDataModel.new
+    end
+
+    def staging_in_progress?
+      droplets.each do |droplet|
+        return true if droplet.state == DropletModel::STAGING_STATE || droplet.state == DropletModel::PENDING_STATE
+      end
+
+      false
     end
 
     class << self
@@ -54,13 +66,10 @@ module VCAP::CloudController
 
       def space_guids_where_visible(user)
         Space.join(:spaces_developers, space_id: :id, user_id: user.id).select(:spaces__guid).
-        union(
-          Space.join(:spaces_managers, space_id: :id, user_id: user.id).select(:spaces__guid)
-        ).union(
-          Space.join(:spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__guid)
-        ).union(
-          Space.join(:organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__guid)
-        ).select(:space_guid)
+          union(Space.join(:spaces_managers, space_id: :id, user_id: user.id).select(:spaces__guid)).
+          union(Space.join(:spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__guid)).
+          union(Space.join(:organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__guid)).
+          select(:space_guid)
       end
     end
 

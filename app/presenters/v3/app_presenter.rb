@@ -46,25 +46,20 @@ module VCAP::CloudController
     end
 
     def env_hash(app)
+      vars_builder = VCAP::VarsBuilder.new(
+        app,
+        file_descriptors: Config.config[:instance_file_descriptor_limit] || 16384
+      )
+
       vcap_application = {
-        'VCAP_APPLICATION' => {
-          limits: {
-            fds: Config.config[:instance_file_descriptor_limit] || 16384,
-          },
-          application_name: app.name,
-          application_uris: app.routes.map(&:fqdn),
-          name: app.name,
-          space_name: app.space.name,
-          space_id: app.space.guid,
-          uris: app.routes.map(&:fqdn),
-          users: nil
-        }
+        'VCAP_APPLICATION' => vars_builder.vcap_application
       }
 
       {
         'environment_variables' => app.environment_variables,
         'staging_env_json' => EnvironmentVariableGroup.staging.environment_json,
         'running_env_json' => EnvironmentVariableGroup.running.environment_json,
+        'system_env_json' => SystemEnvPresenter.new(app.service_bindings).system_env,
         'application_env_json' => vcap_application
       }
     end
@@ -81,10 +76,11 @@ module VCAP::CloudController
         self:                   { href: "/v3/apps/#{app.guid}" },
         space:                  { href: "/v2/spaces/#{app.space_guid}" },
         processes:              { href: "/v3/apps/#{app.guid}/processes" },
-        routes:                 { href: "/v3/apps/#{app.guid}/routes" },
+        route_mappings:         { href: "/v3/apps/#{app.guid}/route_mappings" },
         packages:               { href: "/v3/apps/#{app.guid}/packages" },
         droplet:                droplet_link,
         droplets:               { href: "/v3/apps/#{app.guid}/droplets" },
+        tasks:                  { href: "/v3/apps/#{app.guid}/tasks" },
         start:                  { href: "/v3/apps/#{app.guid}/start", method: 'PUT' },
         stop:                   { href: "/v3/apps/#{app.guid}/stop", method: 'PUT' },
         assign_current_droplet: { href: "/v3/apps/#{app.guid}/current_droplet", method: 'PUT' },

@@ -58,8 +58,7 @@ resource 'Service Instances', type: [:api, :legacy_api] do
     response_field 'space_url', 'The relative path to the space resource that this service instance belongs to.'
     response_field 'service_plan_url', 'The relative path to the service plan resource that this service instance belongs to.'
     response_field 'service_binding_url', 'The relative path to the service bindings that this service instance is bound to.'
-    response_field 'routes_url', 'Routes bound to the service instance. Requests to these routes will be forwarded to the service instance.',
-      experimental: true
+    response_field 'routes_url', 'Routes bound to the service instance. Requests to these routes will be forwarded to the service instance.'
     response_field 'tags', 'A list of tags for the service instance'
 
     standard_model_list :managed_service_instance, VCAP::CloudController::ServiceInstancesController, path: :service_instance
@@ -71,7 +70,7 @@ resource 'Service Instances', type: [:api, :legacy_api] do
       field :space_guid, 'The guid of the space in which the instance will be created', required: true
       field :parameters, 'Arbitrary parameters to pass along to the service broker. Must be a JSON object', required: false
       field :gateway_data, 'Configuration information for the broker gateway in v1 services', required: false, deprecated: true
-      field :tags, 'A list of tags for the service instance',
+      field :tags, 'A list of tags for the service instance. Max characters: 2048',
             required: false, example_values: [%w(db), tags], default: []
 
       param_description = <<EOF
@@ -114,7 +113,7 @@ EOF
       field :name, 'The new name for the service instance', required: false, example_values: ['my-new-service-instance']
       field :service_plan_guid, 'The new plan guid for the service instance', required: false, example_values: ['6c4bd80f-4593-41d1-a2c9-b20cb65ec76e']
       field :parameters, 'Arbitrary parameters to pass along to the service broker. Must be a JSON object', required: false
-      field :tags, 'A list of tags for the service instance. NOTE: Updating the tags will overwrite any old tags.',
+      field :tags, 'A list of tags for the service instance. NOTE: Updating the tags will overwrite any old tags. Max characters: 2048.',
             required: false, example_values: [['db'], ['accounting', 'mongodb']]
 
       param_description = <<EOF
@@ -154,9 +153,17 @@ EOF
 Recursively remove a service instance and child objects from Cloud Foundry database without making requests to a service broker.
 The user must have the cloud_controller.admin scope on their OAuth token in order to perform a purge.
 EOF
+      recursive_description = <<EOF
+Will delete service bindings, service keys, and routes associated with the service instance.
+EOF
+      async_description = <<EOF
+Will run the delete request in a background job. Recommended: 'true'.
+EOF
 
       parameter :accepts_incomplete, accepts_incomplete_description, valid_values: [true, false]
       parameter :purge, purge_description, valid_values: [true, false]
+      parameter :recursive, recursive_description, valid_values: [true, false]
+      parameter :async, async_description, valid_values: [true, false]
 
       before do
         uri = URI(service_broker.broker_url)
@@ -176,8 +183,6 @@ EOF
   end
 
   describe 'Nested endpoints' do
-    field :guid, 'The guid of the Service Instance.', required: true
-
     describe 'Service Bindings' do
       before do
         VCAP::CloudController::ServiceBinding.make(service_instance: service_instance)
@@ -196,8 +201,16 @@ EOF
           stub_bind(service_instance)
         end
 
-        example 'Binding a service instance to a route (experimental)' do
-          client.put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}.to_json, headers
+        field :parameters, 'Arbitrary parameters to pass along to the service broker. Must be a JSON object.', required: false
+
+        example 'Binding a Service Instance to a Route' do
+          request_hash = {
+              parameters: {
+                  the_service_broker: 'wants this object'
+              }
+          }
+
+          client.put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", MultiJson.dump(request_hash, pretty: true), headers
 
           expect(status).to eq(201)
           expect(parsed_response['metadata']['guid']).to eq(service_instance.guid)
@@ -211,8 +224,8 @@ EOF
           stub_unbind(binding)
         end
 
-        example 'Unbinding a service instance from a route (experimental)' do
-          client.delete "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}.to_json, headers
+        example 'Unbinding a service instance from a route' do
+          client.delete "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers
           expect(status).to eq(204)
           expect(response_body).to be_empty
         end
@@ -228,25 +241,6 @@ EOF
       expect(status).to eq(200)
 
       expect(parsed_response).to eql({ 'manage' => true })
-    end
-  end
-
-  put '/v2/service_plans/:service_plan_guid/service_instances' do
-    let(:new_plan) { VCAP::CloudController::ServicePlan.make }
-    let(:old_plan) { service_instance.service_plan }
-    let(:request_json) { { service_plan_guid: new_plan.guid }.to_json }
-
-    field :service_plan_guid, 'The guid of the plan to move the existing instances to', required: true, example_values: %w(6c4bd80f-4593-41d1-a2c9-b20cb65ec76e)
-
-    example 'Migrate Service Instances from one Service Plan to another Service Plan (experimental)' do
-      explanation <<-EOD
-          Move all Service Instances for the service plan from the URL to the service plan in the request body
-      EOD
-
-      client.put "/v2/service_plans/#{old_plan.guid}/service_instances", request_json, headers
-
-      expect(status).to eq(200)
-      expect(parsed_response['changed_count']).to eq(1)
     end
   end
 end

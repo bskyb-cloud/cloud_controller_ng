@@ -65,6 +65,7 @@ module VCAP::CloudController
           expect(decoded_response['routes']).to eq([{
             'guid' => @route1.guid,
             'host' => @route1.host,
+            'path' => @route1.path,
             'domain' => {
               'guid' => @route1.domain.guid,
               'name' => @route1.domain.name
@@ -72,6 +73,7 @@ module VCAP::CloudController
           }, {
             'guid' => @route2.guid,
             'host' => @route2.host,
+            'path' => @route2.path,
             'domain' => {
               'guid' => @route2.domain.guid,
               'name' => @route2.domain.name }
@@ -98,6 +100,7 @@ module VCAP::CloudController
             { 'guid' => domain.guid,
               'name' => domain.name,
               'router_group_guid' => domain.router_group_guid,
+              'router_group_type' => domain.router_group_type,
             }
           end
 

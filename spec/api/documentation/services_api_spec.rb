@@ -34,7 +34,7 @@ resource 'Services', type: [:api, :legacy_api] do
     field :bindable, 'A boolean describing that the service can be bound to applications', required: false, default: true
     field :extra, 'A JSON field with extra data pertaining to the service', required: false, default: nil, example_values: ['{"providerDisplayName": "MyServiceProvider"}']
     field :unique_id, 'A guid that identifies the service with the broker (not the same as the guid above)', required: false, default: nil
-    field :tags, 'A list of tags for the service', required: false, default: [], example_values: ['database', 'mysql']
+    field :tags, 'A list of tags for the service. Max characters: 2048', required: false, default: [], example_values: ['database', 'mysql']
     field :requires, 'A list of dependencies for services. The presence of "syslog_drain" indicates that on binding an instance of the service to an application,
                       logs for the app will be streamed to a url provided by the service. The presence of "route_forwarding" indicates that on binding an instance of the
                       service to a route, requests for the route may be processed by the service before being forwarded to an application mapped to the route.',
@@ -42,39 +42,25 @@ resource 'Services', type: [:api, :legacy_api] do
 
     field :provider, 'The name of the service provider (used only by v1 service gateways)', required: true, deprecated: true, example_values: ['MySql Provider']
     field :version, 'The version of the service (used only by v1 service gateways)', required: true, deprecated: true, example_values: ['2.0']
-    field :url, 'The url of ther service provider (used only by v1 service gateways)', required: true, deprecated: true, example_values: ['http://myql.provider.com']
+    field :url, 'The url of the service provider (used only by v1 service gateways)', required: true, deprecated: true, example_values: ['http://myql.provider.com']
     field :service_broker_guid, 'The guid of the v2 service broker associated with the service', required: false, deprecated: false
     field :plan_updateable, 'A boolean describing that an instance of this service can be updated to a different plan', default: false
-
-    standard_model_list(:services, VCAP::CloudController::ServicesController)
+    standard_model_list(:services, VCAP::CloudController::ServicesController, exclude_parameters: ['provider'])
     standard_model_get(:services)
+  end
 
-    delete '/v2/services/:guid' do
-      request_parameter :async, "Will run the delete request in a background job. Recommended: 'true'."
-      request_parameter :purge, 'Recursively remove a service and child objects from Cloud Foundry database without making requests to a service broker'
+  delete '/v2/services/:guid' do
+    request_parameter :async, "Will run the delete request in a background job. Recommended: 'true'."
+    request_parameter :purge, 'Recursively remove a service and child objects from Cloud Foundry database without making requests to a service broker'
 
-      example 'Delete a Particular Service' do
-        client.delete "/v2/services/#{guid}", {}, headers
-        expect(status).to eq 204
-      end
-    end
+    example 'Delete a Particular Service' do
+      explanation <<-EOD
+          Deleting with async not set to true will return a 204 status code and an empty response body.
+      EOD
 
-    post '/v2/services', deprecated: true do
-      example 'Creating a Service (deprecated)' do
-        client.post '/v2/services', fields_json, headers
-        expect(status).to eq(201)
-
-        standard_entity_response parsed_response, :services
-      end
-    end
-
-    put '/v2/services' do
-      example 'Updating a Service (deprecated)' do
-        client.put "/v2/services/#{guid}", fields_json, headers
-        expect(status).to eq(201)
-
-        standard_entity_response parsed_response, :services
-      end
+      allow_any_instance_of(VCAP::CloudController::RestController::BaseController).to receive(:async?).and_return(true)
+      client.delete "/v2/services/#{guid}", {}, headers
+      expect(status).to eq 202
     end
   end
 

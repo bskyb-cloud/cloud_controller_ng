@@ -9,7 +9,7 @@ module VCAP::CloudController
     class RoutePortTaken < ValidationError
     end
 
-    attr_reader :domain_guid, :port, :routing_api_client, :host, :path, :domain
+    attr_reader :domain_guid, :port, :host, :path, :domain
 
     def initialize(routing_api_client, domain_guid, route_attrs)
       @routing_api_client = routing_api_client
@@ -36,8 +36,13 @@ module VCAP::CloudController
 
     private
 
+    def routing_api_client
+      raise RoutingApi::Client::RoutingApiDisabled if @routing_api_client.nil?
+      @routing_api_client
+    end
+
     def is_tcp_router_group?
-      domain.router_group_guid && !router_group.nil? && (router_group.type == 'tcp')
+      domain.router_group_guid && !router_group.nil? && router_group.type == 'tcp'
     end
 
     def router_group
@@ -51,7 +56,7 @@ module VCAP::CloudController
     end
 
     def validate_path_not_included
-      unless path.nil?
+      unless path.blank?
         raise RouteInvalid.new('Host and path are not supported, as domain belongs to a TCP router group.')
       end
     end
@@ -75,9 +80,7 @@ module VCAP::CloudController
     end
 
     def validate_port_number
-      if port < 1024 || port > 65535
-        raise RouteInvalid.new('Port must within the range 1024-65535.')
-      end
+      raise RouteInvalid.new('Port must be one of the reservable ports.') unless router_group.reservable_ports.include? port
     end
 
     def validate_port_not_taken
@@ -88,9 +91,9 @@ module VCAP::CloudController
 
     def port_taken?(port, router_group_guid)
       domains = Route.dataset.select_all(Route.table_name).
-          join(Domain.table_name, id: :domain_id).
-          where(:"#{Domain.table_name}__router_group_guid" => router_group_guid,
-                :"#{Route.table_name}__port" => port)
+                join(Domain.table_name, id: :domain_id).
+                where(:"#{Domain.table_name}__router_group_guid" => router_group_guid,
+                      :"#{Route.table_name}__port" => port)
 
       domains.count > 0
     end

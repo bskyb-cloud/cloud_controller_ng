@@ -2,7 +2,7 @@ require 'spec_helper'
 
 module VCAP::Services::ServiceBrokers
   describe ServiceBrokerRegistration do
-    subject(:registration) { ServiceBrokerRegistration.new(broker, service_manager, services_event_repository) }
+    subject(:registration) { ServiceBrokerRegistration.new(broker, service_manager, services_event_repository, false) }
 
     let(:client_manager) { instance_double(VCAP::Services::SSO::DashboardClientManager, synchronize_clients_with_catalog: true, warnings: []) }
     let(:catalog) { instance_double(VCAP::Services::ServiceBrokers::V2::Catalog, valid?: true) }
@@ -31,6 +31,7 @@ module VCAP::Services::ServiceBrokers
         stub_request(:get, 'http://cc:auth1234@broker.example.com/v2/catalog').to_return(body: '{}')
         allow(VCAP::Services::SSO::DashboardClientManager).to receive(:new).and_return(client_manager)
         allow(V2::Catalog).to receive(:new).and_return(catalog)
+        allow(catalog).to receive(:services).and_return([])
         allow(ServiceManager).to receive(:new).and_return(service_manager)
 
         allow(client_manager).to receive(:has_warnings?).and_return(false)
@@ -78,16 +79,16 @@ module VCAP::Services::ServiceBrokers
         registration.create
 
         expect(VCAP::Services::SSO::DashboardClientManager).to have_received(:new).with(
-                                                                 broker,
-                                                                 services_event_repository
-                                                               )
+          broker,
+          services_event_repository
+        )
         expect(client_manager).to have_received(:synchronize_clients_with_catalog).with(catalog)
       end
 
       context 'when invalid' do
         context 'because the broker has errors' do
           let(:broker) { VCAP::CloudController::ServiceBroker.new }
-          let(:registration) { ServiceBrokerRegistration.new(broker, service_manager, services_event_repository) }
+          let(:registration) { ServiceBrokerRegistration.new(broker, service_manager, services_event_repository, false) }
 
           it 'returns nil' do
             expect(registration.create).to be_nil
@@ -316,6 +317,7 @@ module VCAP::Services::ServiceBrokers
         stub_request(:get, "http://cc:auth1234@#{new_broker_host}/v2/catalog").to_return(status: status, body: body)
         allow(VCAP::Services::SSO::DashboardClientManager).to receive(:new).and_return(client_manager)
         allow(V2::Catalog).to receive(:new).and_return(catalog)
+        allow(catalog).to receive(:services).and_return([])
         allow(ServiceManager).to receive(:new).and_return(service_manager)
 
         allow(client_manager).to receive(:has_warnings?).and_return(false)
@@ -387,15 +389,15 @@ module VCAP::Services::ServiceBrokers
         registration.update
 
         expect(VCAP::Services::SSO::DashboardClientManager).to have_received(:new).with(
-                                                                 broker,
-                                                                 services_event_repository
-                                                               )
+          broker,
+          services_event_repository
+        )
         expect(client_manager).to have_received(:synchronize_clients_with_catalog).with(catalog)
       end
 
       context 'when invalid' do
         context 'because the broker has errors' do
-          let(:registration) { ServiceBrokerRegistration.new(broker, service_manager, services_event_repository) }
+          let(:registration) { ServiceBrokerRegistration.new(broker, service_manager, services_event_repository, false) }
 
           before do
             broker.name = nil

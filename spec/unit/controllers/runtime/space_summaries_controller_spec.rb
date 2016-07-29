@@ -6,8 +6,8 @@ module VCAP::CloudController
     let(:app_obj) { AppFactory.make(space: space) }
     let!(:first_route) { Route.make(space: space, app_guids: [app_obj.guid]) }
     let!(:second_route) { Route.make(space: space, app_guids: [app_obj.guid]) }
-    let(:first_service) {  ManagedServiceInstance.make(space: space) }
-    let(:second_service) {  ManagedServiceInstance.make(space: space) }
+    let(:first_service) { ManagedServiceInstance.make(space: space) }
+    let(:second_service) { ManagedServiceInstance.make(space: space) }
 
     let(:instances_reporters) { double(:instances_reporters) }
     let(:running_instances) { { app_obj.guid => 5 } }
@@ -34,7 +34,7 @@ module VCAP::CloudController
         get "/v2/spaces/#{space.guid}/summary", '', admin_headers
         expected_app_hash = [{
           guid: app_obj.guid,
-          urls: [first_route.fqdn, second_route.fqdn],
+          urls: [first_route.uri, second_route.uri],
           routes: [
             first_route.as_summary_json,
             second_route.as_summary_json

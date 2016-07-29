@@ -4,13 +4,14 @@ require 'queries/organization_user_roles_fetcher'
 module VCAP::CloudController
   class OrganizationsController < RestController::ModelController
     def self.dependencies
-      [:username_and_roles_populating_collection_renderer, :username_lookup_uaa_client]
+      [:username_and_roles_populating_collection_renderer, :username_lookup_uaa_client, :services_event_repository]
     end
 
     def inject_dependencies(dependencies)
       super
       @user_roles_collection_renderer = dependencies.fetch(:username_and_roles_populating_collection_renderer)
       @username_lookup_uaa_client = dependencies.fetch(:username_lookup_uaa_client)
+      @services_event_repository = dependencies.fetch(:services_event_repository)
     end
 
     define_attributes do
@@ -69,11 +70,10 @@ module VCAP::CloudController
 
     get '/v2/organizations/:guid/services', :enumerate_services
     def enumerate_services(guid)
-      logger.debug 'cc.enumerate.related', guid: guid, association: 'services'
-
       org = find_guid_and_validate_access(:read, guid)
 
-      associated_controller, associated_model = ServicesController, Service
+      associated_controller = ServicesController
+      associated_model = Service
 
       filtered_dataset = Query.filtered_dataset_from_query_params(
         associated_model,
@@ -166,26 +166,26 @@ module VCAP::CloudController
         org = find_guid_and_validate_access(:update, guid)
         org.send("remove_#{role}", user)
 
-        [HTTP::OK, object_renderer.render_json(self.class, org, @opts)]
+        [HTTP::NO_CONTENT]
       end
     end
 
     def delete(guid)
       org = find_guid_and_validate_access(:delete, guid)
-      raise_if_has_associations!(org) if v2_api? && !recursive?
+      raise_if_has_dependent_associations!(org) if v2_api? && !recursive_delete?
 
-      if !org.spaces.empty? && !recursive?
+      if !org.spaces.empty? && !recursive_delete?
         raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', 'spaces', Organization.table_name)
       end
 
-      delete_action = OrganizationDelete.new(SpaceDelete.new(current_user.guid, current_user_email))
+      delete_action = OrganizationDelete.new(SpaceDelete.new(current_user.guid, current_user_email, @services_event_repository))
       deletion_job = VCAP::CloudController::Jobs::DeleteActionJob.new(Organization, guid, delete_action)
       enqueue_deletion_job(deletion_job)
     end
 
     def remove_related(guid, name, other_guid)
       model.db.transaction do
-        if recursive? && name.to_s.eql?('users')
+        if recursive_delete? && name.to_s.eql?('users')
           org = find_guid_and_validate_access(:update, guid)
           user = User.find(guid: other_guid)
 

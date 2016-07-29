@@ -17,6 +17,7 @@ module VCAP::CloudController::Metrics
       EM.add_periodic_timer(30) { update_failed_job_count }
       EM.add_periodic_timer(30) { update_vitals }
       EM.add_periodic_timer(30) { update_log_counts }
+      EM.add_periodic_timer(30) { update_task_stats }
     end
 
     def update!
@@ -26,6 +27,15 @@ module VCAP::CloudController::Metrics
       update_failed_job_count
       update_vitals
       update_log_counts
+      update_task_stats
+    end
+
+    def update_task_stats
+      running_tasks = VCAP::CloudController::TaskModel.where(state: VCAP::CloudController::TaskModel::RUNNING_STATE)
+      running_task_count = running_tasks.count
+      running_task_memory = running_tasks.sum(:memory_in_mb)
+      running_task_memory = 0 if running_task_memory.nil?
+      @updaters.each { |u| u.update_task_stats(running_task_count, running_task_memory) }
     end
 
     def update_log_counts
@@ -50,7 +60,7 @@ module VCAP::CloudController::Metrics
 
       total                      = 0
       pending_job_count_by_queue = jobs_by_queue_with_count.each_with_object({}) do |row, hash|
-        total                    += row[:count]
+        total += row[:count]
         hash[row[:queue].to_sym] = row[:count]
       end
 
@@ -68,7 +78,7 @@ module VCAP::CloudController::Metrics
 
       total                = 0
       failed_jobs_by_queue = jobs_by_queue_with_count.each_with_object({}) do |row, hash|
-        total                    += row[:count]
+        total += row[:count]
         hash[row[:queue].to_sym] = row[:count]
       end
 
@@ -102,7 +112,7 @@ module VCAP::CloudController::Metrics
             size:        threadqueue.size,
             num_waiting: threadqueue.is_a?(Array) ? 0 : threadqueue.num_waiting,
           },
-          resultqueue:      {
+          resultqueue: {
             size:        resultqueue.size,
             num_waiting: resultqueue.is_a?(Array) ? 0 : resultqueue.num_waiting,
           },

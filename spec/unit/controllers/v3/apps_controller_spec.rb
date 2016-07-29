@@ -24,7 +24,7 @@ describe AppsV3Controller, type: :controller do
     it 'returns 200 and lists the apps for spaces user is allowed to read' do
       get :index
 
-      response_guids = JSON.parse(response.body)['resources'].map { |r| r['guid'] }
+      response_guids = parsed_body['resources'].map { |r| r['guid'] }
       expect(response.status).to eq(200)
       expect(response_guids).to match_array([app_model_1.guid])
     end
@@ -45,7 +45,7 @@ describe AppsV3Controller, type: :controller do
       it 'fetches all the apps' do
         get :index
 
-        response_guids = JSON.parse(response.body)['resources'].map { |r| r['guid'] }
+        response_guids = parsed_body['resources'].map { |r| r['guid'] }
         expect(response.status).to eq(200)
         expect(response_guids).to match_array([app_model_1, app_model_2, app_model_3].map(&:guid))
       end
@@ -121,7 +121,7 @@ describe AppsV3Controller, type: :controller do
       get :show, guid: app_model.guid
 
       expect(response.status).to eq 200
-      expect(MultiJson.load(response.body)['guid']).to eq(app_model.guid)
+      expect(parsed_body['guid']).to eq(app_model.guid)
     end
 
     context 'admin' do
@@ -134,7 +134,7 @@ describe AppsV3Controller, type: :controller do
         get :show, guid: app_model.guid
 
         expect(response.status).to eq 200
-        expect(MultiJson.load(response.body)['guid']).to eq(app_model.guid)
+        expect(parsed_body['guid']).to eq(app_model.guid)
       end
     end
 
@@ -203,7 +203,7 @@ describe AppsV3Controller, type: :controller do
       app_model = space.app_models.last
 
       expect(response.status).to eq 201
-      expect(MultiJson.load(response.body)['guid']).to eq(app_model.guid)
+      expect(parsed_body['guid']).to eq(app_model.guid)
     end
 
     context 'when the user does not have write scope' do
@@ -212,7 +212,7 @@ describe AppsV3Controller, type: :controller do
       end
 
       it 'raises an ApiError with a 403 code' do
-        get :create, body: req_body
+        post :create, body: req_body
 
         expect(response.status).to eq 403
         expect(response.body).to include 'NotAuthorized'
@@ -226,11 +226,11 @@ describe AppsV3Controller, type: :controller do
       end
 
       it 'returns a 201 Created and the app' do
-        get :create, body: req_body
+        post :create, body: req_body
         app_model = space.app_models.last
 
         expect(response.status).to eq 201
-        expect(MultiJson.load(response.body)['guid']).to eq(app_model.guid)
+        expect(parsed_body['guid']).to eq(app_model.guid)
       end
     end
 
@@ -238,7 +238,7 @@ describe AppsV3Controller, type: :controller do
       let(:req_body) { { name: 200000 } }
 
       it 'returns an UnprocessableEntity error' do
-        get :create, body: req_body
+        post :create, body: req_body
 
         expect(response.status).to eq 422
         expect(response.body).to include 'UnprocessableEntity'
@@ -249,11 +249,11 @@ describe AppsV3Controller, type: :controller do
       before do
         allow_any_instance_of(VCAP::CloudController::AppCreate).
           to receive(:create).
-                and_raise(VCAP::CloudController::AppCreate::InvalidApp.new('ya done goofed'))
+          and_raise(VCAP::CloudController::AppCreate::InvalidApp.new('ya done goofed'))
       end
 
       it 'returns an UnprocessableEntity error' do
-        get :create, body: req_body
+        post :create, body: req_body
 
         expect(response.status).to eq 422
         expect(response.body).to include 'UnprocessableEntity'
@@ -264,12 +264,16 @@ describe AppsV3Controller, type: :controller do
     context 'when the user is not a member of the requested space' do
       before do
         allow(membership).to receive(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).
-                               and_return(false)
+          [VCAP::CloudController::Membership::SPACE_DEVELOPER,
+           VCAP::CloudController::Membership::SPACE_MANAGER,
+           VCAP::CloudController::Membership::SPACE_AUDITOR,
+           VCAP::CloudController::Membership::ORG_MANAGER],
+          space.guid, space.organization_guid).
+          and_return(false)
       end
 
       it 'returns an NotFound error' do
-        get :create, body: req_body
+        post :create, body: req_body
 
         expect(response.status).to eq(404)
         expect(response.body).to include 'ResourceNotFound'
@@ -277,36 +281,42 @@ describe AppsV3Controller, type: :controller do
       end
     end
 
-    context 'lifecycle data' do
-      context 'when the requested buildpack is not a valid url and is not a known buildpack' do
-        let(:req_body) do
-          {
-            name: 'some-name',
-            relationships: { space: { guid: space.guid } },
-            lifecycle: { type: 'buildpack', data: { buildpack: 'blawgow', stack: nil } }
-          }
-        end
+    context 'when the user is a space manager and thus can see the space but not create apps' do
+      before do
+        allow(membership).to receive(:has_any_roles?).with(
+          [VCAP::CloudController::Membership::SPACE_DEVELOPER,
+           VCAP::CloudController::Membership::SPACE_MANAGER,
+           VCAP::CloudController::Membership::SPACE_AUDITOR,
+           VCAP::CloudController::Membership::ORG_MANAGER],
+          space.guid, space.organization_guid).
+          and_return(true)
 
-        it 'returns an UnprocessableEntity error' do
-          get :create, body: req_body
-
-          expect(response.status).to eq 422
-          expect(response.body).to include 'UnprocessableEntity'
-          expect(response.body).to include 'must be an existing admin buildpack or a valid git URI'
-        end
+        allow(membership).to receive(:has_any_roles?).with(
+          [VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).
+          and_return(false)
       end
 
-      context 'when the space developer does not request lifecycle data' do
+      it 'returns an Unauthorized error' do
+        post :create, body: req_body
+
+        expect(response.status).to eq(403)
+        expect(response.body).to include 'NotAuthorized'
+      end
+    end
+
+    context 'lifecycle data' do
+      context 'when the space developer does not request a lifecycle' do
         let(:req_body) do
           {
-            name: 'some-name',
+            name:          'some-name',
             relationships: { space: { guid: space.guid } }
           }
         end
-        it 'uses the defaults and returns a 201 and the app' do
-          get :create, body: req_body
 
-          response_body = MultiJson.load(response.body)
+        it 'uses the defaults and returns a 201 and the app' do
+          post :create, body: req_body
+
+          response_body  = parsed_body
           lifecycle_data = response_body['lifecycle']['data']
 
           expect(response.status).to eq 201
@@ -315,58 +325,161 @@ describe AppsV3Controller, type: :controller do
         end
       end
 
-      context 'when the space developer requests lifecycle data' do
-        context 'and leaves part of the data blank' do
+      context 'buildpack' do
+        context 'when the requested buildpack is not a valid url and is not a known buildpack' do
           let(:req_body) do
             {
-              name: 'some-name',
+              name:          'some-name',
               relationships: { space: { guid: space.guid } },
-              lifecycle: { type: 'buildpack', data: { stack: 'cflinuxfs2' } }
+              lifecycle:     { type: 'buildpack', data: { buildpack: 'blawgow', stack: nil } }
             }
           end
 
-          it 'creates the app with the lifecycle data, filling in defaults' do
-            get :create, body: req_body
+          it 'returns an UnprocessableEntity error' do
+            post :create, body: req_body
 
-            response_body = MultiJson.load(response.body)
-            lifecycle_data = response_body['lifecycle']['data']
-
-            expect(response.status).to eq 201
-            expect(lifecycle_data['stack']).to eq 'cflinuxfs2'
-            expect(lifecycle_data['buildpack']).to be_nil
+            expect(response.status).to eq 422
+            expect(response.body).to include 'UnprocessableEntity'
+            expect(response.body).to include 'must be an existing admin buildpack or a valid git URI'
           end
         end
 
-        context 'and they do not include the data section' do
+        context 'when the space developer requests lifecycle data' do
+          context 'and leaves part of the data blank' do
+            let(:req_body) do
+              {
+                name:          'some-name',
+                relationships: { space: { guid: space.guid } },
+                lifecycle:     { type: 'buildpack', data: { stack: 'cflinuxfs2' } }
+              }
+            end
+
+            it 'creates the app with the lifecycle data, filling in defaults' do
+              post :create, body: req_body
+
+              response_body  = parsed_body
+              lifecycle_data = response_body['lifecycle']['data']
+
+              expect(response.status).to eq 201
+              expect(lifecycle_data['stack']).to eq 'cflinuxfs2'
+              expect(lifecycle_data['buildpack']).to be_nil
+            end
+          end
+
+          context 'and they do not include the data section' do
+            let(:req_body) do
+              {
+                name:          'some-name',
+                relationships: { space: { guid: space.guid } },
+                lifecycle:     { type: 'buildpack' }
+              }
+            end
+
+            it 'raises an UnprocessableEntity error' do
+              post :create, body: req_body
+
+              expect(response.status).to eq(422)
+              expect(response.body).to include 'UnprocessableEntity'
+              expect(response.body).to include 'The request is semantically invalid: Lifecycle data must be a hash'
+            end
+          end
+        end
+      end
+
+      context 'docker' do
+        context 'when lifecycle data is not empty' do
           let(:req_body) do
             {
-              name: 'some-name',
+              name:          'some-name',
               relationships: { space: { guid: space.guid } },
-              lifecycle: { type: 'buildpack' }
+              lifecycle:     { type: 'docker', data: { foo: 'bar' } }
             }
           end
 
           it 'raises an UnprocessableEntity error' do
-            get :create, body: req_body
+            post :create, body: req_body
 
             expect(response.status).to eq(422)
             expect(response.body).to include 'UnprocessableEntity'
-            expect(response.body).to include 'The request is semantically invalid: Lifecycle data must be present, Lifecycle data must be a hash'
+            expect(response.body).to include "Lifecycle Unknown field(s): 'foo'"
           end
+        end
+
+        context 'when lifecycle data is not a hash' do
+          let(:req_body) do
+            {
+              name:          'some-name',
+              relationships: { space: { guid: space.guid } },
+              lifecycle:     { type: 'docker', data: 'yay' }
+            }
+          end
+
+          it 'raises an UnprocessableEntity error' do
+            post :create, body: req_body
+
+            expect(response.status).to eq(422)
+            expect(response.body).to include 'UnprocessableEntity'
+            expect(response.body).to include 'The request is semantically invalid: Lifecycle data must be a hash'
+          end
+        end
+      end
+    end
+
+    context 'when the space does not exist' do
+      before do
+        req_body[:relationships][:space][:guid] = 'made-up'
+      end
+
+      it 'returns 404 space not found' do
+        post :create, body: req_body
+
+        expect(response).to have_status_code(404)
+        expect(response.body).to include('Space not found')
+      end
+    end
+
+    context 'when requesting docker lifecycle and diego_docker feature flag is disabled' do
+      let(:req_body) do
+        {
+          name:          'some-name',
+          relationships: { space: { guid: space.guid } },
+          lifecycle:     { type: 'docker', data: {} }
+        }
+      end
+
+      before do
+        VCAP::CloudController::FeatureFlag.make(name: 'diego_docker', enabled: false, error_message: nil)
+      end
+
+      context 'admin' do
+        before do
+          @request.env.merge!(json_headers(admin_headers))
+          allow(membership).to receive(:has_any_roles?).and_return(false)
+        end
+
+        it 'returns a 201 Created and the app' do
+          post :create, body: req_body
+          app_model = space.app_models.last
+
+          expect(response.status).to eq 201
+          expect(parsed_body['guid']).to eq(app_model.guid)
+        end
+      end
+
+      context 'non-admin' do
+        it 'raises 403' do
+          post :create, body: req_body
+
+          expect(response.status).to eq(403)
+          expect(response.body).to include('FeatureDisabled')
+          expect(response.body).to include('diego_docker')
         end
       end
     end
   end
 
   describe '#update' do
-    let(:app_model) { VCAP::CloudController::AppModel.make }
-    let!(:app_lifecycle_data) do
-      VCAP::CloudController::BuildpackLifecycleDataModel.make(
-        app: app_model,
-        buildpack: VCAP::CloudController::Buildpack.make,
-        stack: VCAP::CloudController::Stack.default.name
-      )
-    end
+    let(:app_model) { VCAP::CloudController::AppModel.make(:buildpack) }
 
     let(:space) { app_model.space }
     let(:org) { space.organization }
@@ -383,8 +496,8 @@ describe AppsV3Controller, type: :controller do
       put :update, guid: app_model.guid, body: req_body
 
       expect(response.status).to eq 200
-      expect(MultiJson.load(response.body)['guid']).to eq(app_model.guid)
-      expect(MultiJson.load(response.body)['name']).to eq('new-name')
+      expect(parsed_body['guid']).to eq(app_model.guid)
+      expect(parsed_body['name']).to eq('new-name')
     end
 
     context 'admin' do
@@ -396,131 +509,13 @@ describe AppsV3Controller, type: :controller do
         put :update, guid: app_model.guid, body: req_body
 
         expect(response.status).to eq 200
-        expect(MultiJson.load(response.body)['guid']).to eq(app_model.guid)
-        expect(MultiJson.load(response.body)['name']).to eq('new-name')
+        expect(parsed_body['guid']).to eq(app_model.guid)
+        expect(parsed_body['name']).to eq('new-name')
       end
     end
 
     context 'when the request has invalid data' do
       let(:req_body) { { name: false } }
-
-      context 'lifecycle data' do
-        let(:new_name) { 'new freaking name' }
-
-        context 'when the user specifies the buildpack' do
-          let(:buildpack_url) { 'http://some.url' }
-          let(:req_body) do
-            { name: new_name,
-              lifecycle: {
-                type: 'buildpack',
-                data: {
-                  buildpack: buildpack_url
-                }
-              } }
-          end
-
-          it 'sets the buildpack to the provided buildpack' do
-            put :update, guid: app_model.guid, body: req_body
-            expect(app_model.reload.lifecycle_data.buildpack).to eq(buildpack_url)
-          end
-        end
-
-        context 'when the user does not provide a buildpack' do
-          let(:req_body) do
-            { name: new_name,
-              lifecycle: {
-                type: 'buildpack',
-                data: {
-                  buildpack: nil
-                }
-              } }
-          end
-
-          it 'sets the buildpack to nil' do
-            expect(app_model.lifecycle_data.buildpack).to_not be_nil
-            put :update, guid: app_model.guid, body: req_body
-            expect(app_model.reload.lifecycle_data.buildpack).to be_nil
-          end
-        end
-
-        context 'when the requested buildpack is not a valid url and is not a known buildpack' do
-          let(:req_body) do
-            {
-              lifecycle: {
-                type: 'buildpack',
-                data: {
-                  buildpack: 'blagow!'
-                }
-              } }
-          end
-
-          it 'returns a 422 and an UnprocessableEntity error' do
-            put :update, guid: app_model.guid, body: req_body
-
-            expect(response.status).to eq(422)
-            expect(response.body).to include 'UnprocessableEntity'
-            expect(response.body).to include('must be an existing admin buildpack or a valid git URI')
-          end
-        end
-
-        context 'when a user specifies a stack' do
-          context 'when the requested stack is valid' do
-            let(:req_body) do
-              { name: new_name,
-                lifecycle: {
-                  type: 'buildpack',
-                  data: {
-                    stack: 'redhat'
-                  }
-                } }
-            end
-
-            before(:each) { VCAP::CloudController::Stack.create(name: 'redhat') }
-
-            it 'sets the stack to the user provided stack' do
-              put :update, guid: app_model.guid, body: req_body
-              expect(app_model.lifecycle_data.stack).to eq('redhat')
-            end
-          end
-
-          context 'when the requested stack is invalid' do
-            let(:req_body) do
-              { name: new_name,
-                lifecycle: {
-                  type: 'buildpack',
-                  data: {
-                    stack: 'stacks on stacks lol'
-                  }
-                } }
-            end
-
-            it 'returns an UnprocessableEntity error' do
-              put :update, guid: app_model.guid, body: req_body
-
-              expect(response.body).to include 'UnprocessableEntity'
-              expect(response.status).to eq(422)
-              expect(response.body).to include('Stack')
-            end
-          end
-        end
-
-        context 'when a user does not provide any data' do
-          let(:req_body) do
-            { name: new_name,
-              lifecycle: {
-                type: 'buildpack',
-                data: {
-                }
-              } }
-          end
-
-          it 'does not modify the lifecycle data' do
-            expect(app_model.lifecycle_data.stack).to eq VCAP::CloudController::Stack.default.name
-            put :update, guid: app_model.guid, body: req_body
-            expect(app_model.reload.lifecycle_data.stack).to eq VCAP::CloudController::Stack.default.name
-          end
-        end
-      end
 
       context 'when the app is invalid' do
         it 'returns an UnprocessableEntity error' do
@@ -549,20 +544,58 @@ describe AppsV3Controller, type: :controller do
           expect(response.body).to include 'The request is semantically invalid: environment_variables cannot start with CF_'
         end
       end
+    end
 
-      context 'lifecycle data' do
-        before do
-          allow(membership).to receive(:has_any_roles?).with(
-            [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-             VCAP::CloudController::Membership::SPACE_MANAGER,
-             VCAP::CloudController::Membership::SPACE_AUDITOR,
-             VCAP::CloudController::Membership::ORG_MANAGER], space.guid, org.guid).and_return(true)
+    context 'lifecycle data' do
+      let(:new_name) { 'potato' }
+
+      context 'when the space developer does not request lifecycle' do
+        let(:req_body) do
+          {
+            name: new_name,
+          }
         end
 
+        context 'buildpack app' do
+          before do
+            app_model.lifecycle_data.stack = 'some-stack-name'
+            app_model.lifecycle_data.buildpack = 'some-buildpack-name'
+            app_model.lifecycle_data.save
+          end
+
+          it 'uses the existing lifecycle on app' do
+            put :update, guid: app_model.guid, body: req_body
+            expect(response.status).to eq 200
+
+            app_model.reload
+            app_model.lifecycle_data.reload
+
+            expect(app_model.name).to eq(new_name)
+            expect(app_model.lifecycle_data.stack).to eq('some-stack-name')
+            expect(app_model.lifecycle_data.buildpack).to eq('some-buildpack-name')
+          end
+        end
+
+        context 'docker app' do
+          let(:app_model) { VCAP::CloudController::AppModel.make(:docker) }
+
+          it 'uses the existing lifecycle on app' do
+            put :update, guid: app_model.guid, body: req_body
+            expect(response.status).to eq 200
+
+            app_model.reload
+
+            expect(app_model.name).to eq(new_name)
+            expect(app_model.lifecycle_type).to eq('docker')
+          end
+        end
+      end
+
+      context 'buildpack request' do
         context 'when the requested buildpack is not a valid url and is not a known buildpack' do
           let(:req_body) do
             {
-              name: 'some-name',
+              name:      'some-name',
               lifecycle: { type: 'buildpack', data: { buildpack: 'blawgow' } }
             }
           end
@@ -576,57 +609,196 @@ describe AppsV3Controller, type: :controller do
           end
         end
 
-        context 'when the space developer does not request lifecycle data' do
+        context 'when the user specifies the buildpack' do
+          let(:buildpack_url) { 'http://some.url' }
           let(:req_body) do
-            {
-              name: 'some-name',
-            }
+            { name:      new_name,
+              lifecycle: {
+                type: 'buildpack',
+                data: {
+                  buildpack: buildpack_url
+                }
+              } }
           end
 
-          it 'uses the data on app' do
+          it 'sets the buildpack to the provided buildpack' do
             put :update, guid: app_model.guid, body: req_body
-            expect(response.status).to eq 200
-
-            expect(app_model.lifecycle_data.stack).not_to be_nil
-            expect(app_model.lifecycle_data.buildpack).not_to be_nil
+            expect(app_model.reload.lifecycle_data.buildpack).to eq(buildpack_url)
           end
         end
 
-        context 'when the space developer requests lifecycle data' do
-          context 'and leaves part of the data blank' do
+        context 'when the user requests a nil buildpack' do
+          let(:req_body) do
+            { name:      new_name,
+              lifecycle: {
+                type: 'buildpack',
+                data: {
+                  buildpack: nil
+                }
+              } }
+          end
+
+          it 'sets the buildpack to nil' do
+            expect(app_model.lifecycle_data.buildpack).to_not be_nil
+            put :update, guid: app_model.guid, body: req_body
+            expect(app_model.reload.lifecycle_data.buildpack).to be_nil
+          end
+        end
+
+        context 'when a user specifies a stack' do
+          context 'when the requested stack is valid' do
             let(:req_body) do
               {
-                name: 'some-name',
-                lifecycle: { type: 'buildpack', data: { buildpack: nil } }
+                name:      new_name,
+                lifecycle: {
+                  type: 'buildpack',
+                  data: {
+                    stack: 'redhat'
+                  }
+                }
               }
             end
 
-            it 'updates the app with the lifecycle data provided' do
-              put :update, guid: app_model.guid, body: req_body
-              created_app = VCAP::CloudController::AppModel.last
+            before(:each) { VCAP::CloudController::Stack.create(name: 'redhat') }
 
-              expect(created_app.lifecycle_data.stack).not_to be_nil
-              expect(created_app.lifecycle_data.buildpack).to be_nil
-              expect(response.status).to eq 200
+            it 'sets the stack to the user provided stack' do
+              put :update, guid: app_model.guid, body: req_body
+              expect(app_model.lifecycle_data.stack).to eq('redhat')
             end
           end
 
-          context 'and they do not include the data section' do
+          context 'when the requested stack is invalid' do
             let(:req_body) do
               {
-                name: 'some-name',
-                lifecycle: { type: 'buildpack' }
+                name:      new_name,
+                lifecycle: {
+                  type: 'buildpack',
+                  data: {
+                    stack: 'stacks on stacks lol'
+                  }
+                }
               }
             end
 
-            it 'raises an error' do
+            it 'returns an UnprocessableEntity error' do
               put :update, guid: app_model.guid, body: req_body
 
-              expect(response.status).to eq 422
               expect(response.body).to include 'UnprocessableEntity'
-              expect(response.body).to include('Lifecycle data must be present')
-              expect(response.body).to include('Lifecycle data must be a hash')
+              expect(response.status).to eq(422)
+              expect(response.body).to include('Stack')
             end
+          end
+        end
+
+        context 'when a user provides empty lifecycle data' do
+          let(:req_body) do
+            {
+              name:      new_name,
+              lifecycle: {
+                type: 'buildpack',
+                data: {}
+              }
+            }
+          end
+
+          before do
+            app_model.lifecycle_data.stack = VCAP::CloudController::Stack.default.name
+            app_model.lifecycle_data.save
+          end
+
+          it 'does not modify the lifecycle data' do
+            expect(app_model.lifecycle_data.stack).to eq VCAP::CloudController::Stack.default.name
+            put :update, guid: app_model.guid, body: req_body
+            expect(app_model.reload.lifecycle_data.stack).to eq VCAP::CloudController::Stack.default.name
+          end
+        end
+
+        context 'when the space developer requests a lifecycle without a data key' do
+          let(:req_body) do
+            {
+              name:      'some-name',
+              lifecycle: { type: 'buildpack' }
+            }
+          end
+
+          it 'raises an error' do
+            put :update, guid: app_model.guid, body: req_body
+
+            expect(response.status).to eq 422
+            expect(response.body).to include 'UnprocessableEntity'
+            expect(response.body).to include('Lifecycle data must be a hash')
+          end
+        end
+
+        context 'when attempting to change to another lifecycle type' do
+          let(:req_body) do
+            {
+              name:      'some-name',
+              lifecycle: { type: 'docker', data: {} }
+            }
+          end
+
+          it 'raises an error' do
+            put :update, guid: app_model.guid, body: req_body
+
+            expect(response.status).to eq 422
+            expect(response.body).to include 'UnprocessableEntity'
+            expect(response.body).to include('Lifecycle type cannot be changed')
+          end
+        end
+      end
+
+      context 'docker request' do
+        let(:app_model) { VCAP::CloudController::AppModel.make(:docker) }
+
+        context 'when attempting to change to another lifecycle type' do
+          let(:req_body) do
+            {
+              name:      'some-name',
+              lifecycle: { type: 'buildpack', data: {} }
+            }
+          end
+
+          it 'raises an error' do
+            put :update, guid: app_model.guid, body: req_body
+
+            expect(response.status).to eq 422
+            expect(response.body).to include 'UnprocessableEntity'
+            expect(response.body).to include('Lifecycle type cannot be changed')
+          end
+        end
+
+        context 'when a user provides empty lifecycle data' do
+          let(:req_body) do
+            {
+              name:      'some-name',
+              lifecycle: {
+                type: 'docker',
+                data: {}
+              }
+            }
+          end
+
+          it 'does not fail' do
+            put :update, guid: app_model.guid, body: req_body
+            expect(response).to have_status_code(200)
+          end
+        end
+
+        context 'when the space developer requests a lifecycle without a data key' do
+          let(:req_body) do
+            {
+              name:      'some-name',
+              lifecycle: { type: 'docker' }
+            }
+          end
+
+          it 'raises an error' do
+            put :update, guid: app_model.guid, body: req_body
+
+            expect(response.status).to eq 422
+            expect(response.body).to include 'UnprocessableEntity'
+            expect(response.body).to include('Lifecycle data must be a hash')
           end
         end
       end
@@ -661,8 +833,8 @@ describe AppsV3Controller, type: :controller do
            VCAP::CloudController::Membership::SPACE_AUDITOR,
            VCAP::CloudController::Membership::ORG_MANAGER], space.guid, org.guid).and_return(true)
         allow(membership).to receive(:has_any_roles?).
-                               with([VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).
-                               and_return(false)
+          with([VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).
+          and_return(false)
       end
 
       it 'raises ApiError NotAuthorized' do
@@ -766,11 +938,25 @@ describe AppsV3Controller, type: :controller do
         expect(response.body).to include 'ResourceNotFound'
       end
     end
+
+    context 'when AppDelete::InvalidDelete is raised' do
+      before do
+        allow_any_instance_of(VCAP::CloudController::AppDelete).to receive(:delete).
+          and_raise(VCAP::CloudController::AppDelete::InvalidDelete.new('it is broke'))
+      end
+
+      it 'returns a 400' do
+        delete :destroy, guid: app_model.guid
+
+        expect(response.status).to eq 422
+        expect(response.body).to include 'it is broke'
+      end
+    end
   end
 
   describe '#start' do
     let(:app_model) { VCAP::CloudController::AppModel.make(droplet_guid: droplet.guid) }
-    let(:droplet) { VCAP::CloudController::DropletModel.make(state: VCAP::CloudController::DropletModel::STAGED_STATE) }
+    let(:droplet) { VCAP::CloudController::DropletModel.make(:buildpack, state: VCAP::CloudController::DropletModel::STAGED_STATE) }
     let(:space) { app_model.space }
     let(:org) { space.organization }
 
@@ -784,7 +970,7 @@ describe AppsV3Controller, type: :controller do
     it 'returns a 200 and the app' do
       put :start, guid: app_model.guid
 
-      response_body = MultiJson.load(response.body)
+      response_body = parsed_body
 
       expect(response.status).to eq 200
       expect(response_body['guid']).to eq(app_model.guid)
@@ -801,7 +987,7 @@ describe AppsV3Controller, type: :controller do
         it 'returns a 200 and the app' do
           put :start, guid: app_model.guid
 
-          response_body = MultiJson.load(response.body)
+          response_body = parsed_body
 
           expect(response.status).to eq 200
           expect(response_body['guid']).to eq app_model.guid
@@ -817,7 +1003,7 @@ describe AppsV3Controller, type: :controller do
         it 'raises an ApiError with a 403 code' do
           put :start, guid: app_model.guid
 
-          response_body = MultiJson.load(response.body)
+          response_body = parsed_body
           expect(response_body['error_code']).to eq 'CF-NotAuthorized'
           expect(response.status).to eq 403
         end
@@ -835,7 +1021,7 @@ describe AppsV3Controller, type: :controller do
         it 'returns a 404 ResourceNotFound error' do
           put :start, guid: app_model.guid
 
-          response_body = MultiJson.load(response.body)
+          response_body = parsed_body
           expect(response_body['error_code']).to eq 'CF-ResourceNotFound'
           expect(response.status).to eq 404
         end
@@ -855,7 +1041,7 @@ describe AppsV3Controller, type: :controller do
         it 'raises ApiError NotAuthorized' do
           put :start, guid: app_model.guid
 
-          response_body = MultiJson.load(response.body)
+          response_body = parsed_body
           expect(response_body['error_code']).to eq 'CF-NotAuthorized'
           expect(response.status).to eq 403
         end
@@ -870,7 +1056,7 @@ describe AppsV3Controller, type: :controller do
       it 'raises an API 404 error' do
         put :start, guid: app_model.guid
 
-        response_body = MultiJson.load(response.body)
+        response_body = parsed_body
         expect(response_body['error_code']).to eq 'CF-ResourceNotFound'
         expect(response.status).to eq 404
       end
@@ -880,7 +1066,7 @@ describe AppsV3Controller, type: :controller do
       it 'raises an API 404 error' do
         put :start, guid: 'meowmeowmeow'
 
-        response_body = MultiJson.load(response.body)
+        response_body = parsed_body
         expect(response_body['error_code']).to eq 'CF-ResourceNotFound'
         expect(response.status).to eq 404
       end
@@ -890,15 +1076,50 @@ describe AppsV3Controller, type: :controller do
       before do
         allow_any_instance_of(VCAP::CloudController::AppStart).
           to receive(:start).
-                and_raise(VCAP::CloudController::AppStart::InvalidApp.new)
+          and_raise(VCAP::CloudController::AppStart::InvalidApp.new)
       end
 
       it 'returns an UnprocessableEntity error' do
         put :start, guid: app_model.guid
 
-        response_body = MultiJson.load(response.body)
+        response_body = parsed_body
         expect(response_body['error_code']).to eq 'CF-UnprocessableEntity'
         expect(response.status).to eq 422
+      end
+    end
+
+    context 'when requesting docker lifecycle and diego_docker feature flag is disabled' do
+      let(:droplet) { VCAP::CloudController::DropletModel.make(:docker, state: VCAP::CloudController::DropletModel::STAGED_STATE) }
+
+      before do
+        VCAP::CloudController::FeatureFlag.make(name: 'diego_docker', enabled: false, error_message: nil)
+      end
+
+      context 'admin' do
+        before do
+          @request.env.merge!(json_headers(admin_headers))
+          allow(membership).to receive(:has_any_roles?).and_return(false)
+        end
+
+        it 'returns a 200 and the app' do
+          put :start, guid: app_model.guid
+
+          response_body = parsed_body
+
+          expect(response.status).to eq 200
+          expect(response_body['guid']).to eq(app_model.guid)
+          expect(response_body['desired_state']).to eq('STARTED')
+        end
+      end
+
+      context 'non-admin' do
+        it 'raises 403' do
+          put :start, guid: app_model.guid
+
+          expect(response.status).to eq(403)
+          expect(response.body).to include('FeatureDisabled')
+          expect(response.body).to include('diego_docker')
+        end
       end
     end
   end
@@ -919,7 +1140,7 @@ describe AppsV3Controller, type: :controller do
     it 'returns a 200 and the app' do
       put :stop, guid: app_model.guid
 
-      response_body = MultiJson.load(response.body)
+      response_body = parsed_body
 
       expect(response.status).to eq 200
       expect(response_body['guid']).to eq(app_model.guid)
@@ -935,7 +1156,7 @@ describe AppsV3Controller, type: :controller do
       it 'returns a 200 and the app' do
         put :stop, guid: app_model.guid
 
-        response_body = MultiJson.load(response.body)
+        response_body = parsed_body
 
         expect(response.status).to eq 200
         expect(response_body['guid']).to eq(app_model.guid)
@@ -981,10 +1202,10 @@ describe AppsV3Controller, type: :controller do
              VCAP::CloudController::Membership::SPACE_MANAGER,
              VCAP::CloudController::Membership::SPACE_AUDITOR,
              VCAP::CloudController::Membership::ORG_MANAGER], space.guid, org.guid).
-                                 and_return(true)
+            and_return(true)
           allow(membership).to receive(:has_any_roles?).
-                                 with([VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).
-                                 and_return(false)
+            with([VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).
+            and_return(false)
         end
 
         it 'raises ApiError NotAuthorized' do
@@ -1036,7 +1257,7 @@ describe AppsV3Controller, type: :controller do
       get :show_environment, guid: app_model.guid
 
       expect(response.status).to eq 200
-      expect(MultiJson.load(response.body)['environment_variables']).to eq(app_model.environment_variables)
+      expect(parsed_body['environment_variables']).to eq(app_model.environment_variables)
     end
 
     context 'admin' do
@@ -1049,7 +1270,7 @@ describe AppsV3Controller, type: :controller do
         get :show_environment, guid: app_model.guid
 
         expect(response.status).to eq(200)
-        expect(MultiJson.load(response.body)['environment_variables']).to eq(app_model.environment_variables)
+        expect(parsed_body['environment_variables']).to eq(app_model.environment_variables)
       end
     end
 
@@ -1091,9 +1312,9 @@ describe AppsV3Controller, type: :controller do
              VCAP::CloudController::Membership::SPACE_MANAGER,
              VCAP::CloudController::Membership::SPACE_AUDITOR,
              VCAP::CloudController::Membership::ORG_MANAGER], space.guid, org.guid).
-                                 and_return(true)
+            and_return(true)
           allow(membership).to receive(:has_any_roles?).
-                                 with([VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).and_return(false)
+            with([VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).and_return(false)
         end
 
         it 'raises ApiError NotAuthorized' do
@@ -1101,6 +1322,47 @@ describe AppsV3Controller, type: :controller do
 
           expect(response.status).to eq 403
           expect(response.body).to include 'NotAuthorized'
+        end
+      end
+
+      context 'when the space_developer_env_var_visibility feature flag is disabled' do
+        before do
+          VCAP::CloudController::FeatureFlag.make(name: 'space_developer_env_var_visibility', enabled: false, error_message: nil)
+        end
+
+        it 'raises 403 for non-admins' do
+          get :show_environment, guid: app_model.guid
+
+          expect(response.status).to eq(403)
+          expect(response.body).to include('FeatureDisabled')
+          expect(response.body).to include('space_developer_env_var_visibility')
+        end
+
+        it 'succeeds for admins' do
+          @request.env.merge!(admin_headers)
+          get :show_environment, guid: app_model.guid
+
+          expect(response.status).to eq(200)
+        end
+
+        context 'when the user can read but cannot write to the app' do
+          before do
+            allow(membership).to receive(:has_any_roles?).with(
+              [VCAP::CloudController::Membership::SPACE_DEVELOPER,
+               VCAP::CloudController::Membership::SPACE_MANAGER,
+               VCAP::CloudController::Membership::SPACE_AUDITOR,
+               VCAP::CloudController::Membership::ORG_MANAGER], space.guid, org.guid).
+              and_return(true)
+            allow(membership).to receive(:has_any_roles?).
+              with([VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).and_return(false)
+          end
+
+          it 'raises ApiError NotAuthorized as opposed to FeatureDisabled' do
+            get :show_environment, guid: app_model.guid
+
+            expect(response.status).to eq 403
+            expect(response.body).to include 'NotAuthorized'
+          end
         end
       end
     end
@@ -1134,7 +1396,7 @@ describe AppsV3Controller, type: :controller do
     it 'returns 200 and the app' do
       put :assign_current_droplet, guid: app_model.guid, body: req_body
 
-      response_body = MultiJson.load(response.body)
+      response_body = parsed_body
 
       expect(response.status).to eq(200)
       expect(response_body['guid']).to eq(app_model.guid)
@@ -1150,7 +1412,7 @@ describe AppsV3Controller, type: :controller do
       it 'returns 200' do
         put :assign_current_droplet, guid: app_model.guid, body: req_body
 
-        response_body = MultiJson.load(response.body)
+        response_body = parsed_body
 
         expect(response.status).to eq(200)
         expect(response_body['guid']).to eq(app_model.guid)
@@ -1194,7 +1456,7 @@ describe AppsV3Controller, type: :controller do
       before do
         allow_any_instance_of(VCAP::CloudController::SetCurrentDroplet).
           to receive(:update_to).
-                and_raise(VCAP::CloudController::SetCurrentDroplet::InvalidApp.new('app is broked'))
+          and_raise(VCAP::CloudController::SetCurrentDroplet::InvalidApp.new('app is broked'))
       end
 
       it 'returns an UnprocessableEntity error' do
@@ -1240,7 +1502,7 @@ describe AppsV3Controller, type: :controller do
              VCAP::CloudController::Membership::SPACE_MANAGER,
              VCAP::CloudController::Membership::SPACE_AUDITOR,
              VCAP::CloudController::Membership::ORG_MANAGER], space.guid, org.guid).
-                                 and_return(false)
+            and_return(false)
         end
 
         it 'returns a 404 ResourceNotFound' do
@@ -1258,10 +1520,10 @@ describe AppsV3Controller, type: :controller do
              VCAP::CloudController::Membership::SPACE_MANAGER,
              VCAP::CloudController::Membership::SPACE_AUDITOR,
              VCAP::CloudController::Membership::ORG_MANAGER], space.guid, org.guid).
-                                 and_return(true)
+            and_return(true)
           allow(membership).to receive(:has_any_roles?).with(
             [VCAP::CloudController::Membership::SPACE_DEVELOPER], space.guid).
-                                 and_return(false)
+            and_return(false)
         end
 
         it 'returns a 403 NotAuthorized' do
@@ -1270,6 +1532,103 @@ describe AppsV3Controller, type: :controller do
           expect(response.status).to eq 403
           expect(response.body).to include 'NotAuthorized'
         end
+      end
+    end
+  end
+
+  describe '#stats' do
+    let(:app_model) { VCAP::CloudController::AppModel.make }
+    let(:instances_reporters) { double(:instances_reporters) }
+    let(:presenter) { double(:presenter) }
+
+    before do
+      CloudController::DependencyLocator.instance.register(:instances_reporters, instances_reporters)
+      allow(instances_reporters).to receive(:stats_for_app).and_return('some_stats')
+
+      allow(VCAP::CloudController::AppStatsPresenter).to receive(:new).and_return(presenter)
+      allow(presenter).to receive(:present_json).and_return('controller response')
+
+      @request.env.merge!(headers_for(VCAP::CloudController::User.make))
+      allow(VCAP::CloudController::Membership).to receive(:new).and_return(membership)
+      allow(membership).to receive(:has_any_roles?).and_return(true)
+    end
+
+    it 'returns 200' do
+      get :stats, guid: app_model.guid
+
+      expect(response.status).to eq(200)
+      expect(response.body).to eq('controller response')
+    end
+
+    context 'admin' do
+      before do
+        @request.env.merge!(admin_headers)
+        allow(membership).to receive(:has_any_roles?).and_return(false)
+      end
+
+      it 'returns a 200 and the app' do
+        get :stats, guid: app_model.guid
+
+        expect(response.status).to eq 200
+      end
+    end
+
+    context 'when the app has no processes' do
+      it 'returns an empty list' do
+        get :stats, guid: app_model.guid
+
+        expect(response.status).to eq(200)
+        expect(presenter).to have_received(:present_json).with([])
+      end
+    end
+
+    context 'when the app has processes' do
+      let!(:process1) { VCAP::CloudController::App.make(app_guid: app_model.guid, type: 'web', instances: 2) }
+      let!(:process2) { VCAP::CloudController::App.make(app_guid: app_model.guid, type: 'worker', instances: 1) }
+
+      it 'returns a list of processes' do
+        expected_stats = [
+          { type: process1.type, stats: 'some_stats' },
+          { type: process2.type, stats: 'some_stats' },
+        ]
+
+        get :stats, guid: app_model.guid
+
+        expect(response.status).to eq(200)
+        expect(presenter).to have_received(:present_json).with(array_including(expected_stats))
+      end
+    end
+
+    context 'when the app does not exist' do
+      it 'returns 404' do
+        get :stats, guid: 'made-up-guid'
+
+        expect(response.status).to eq(404)
+      end
+    end
+
+    context 'when the requestor does not have the cloud_controller.read scope' do
+      before do
+        @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make, scopes: ['cloud_controller.write'])))
+      end
+
+      it 'raises an ApiError with a 403 code' do
+        get :stats, guid: app_model.guid
+
+        expect(response.status).to eq 403
+        expect(response.body).to include 'NotAuthorized'
+      end
+    end
+
+    context 'when the requestor is unable to read the app due to roles' do
+      before do
+        allow(membership).to receive(:has_any_roles?).and_return(false)
+      end
+
+      it 'returns 404' do
+        get :stats, guid: app_model.guid
+
+        expect(response.status).to eq(404)
       end
     end
   end

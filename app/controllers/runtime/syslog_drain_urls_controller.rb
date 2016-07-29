@@ -10,32 +10,63 @@ module VCAP::CloudController
 
     get '/v2/syslog_drain_urls', :list
     def list
-      id_for_next_token = nil
-      apps_with_bindings = App.
-        select_all(:apps).
-        join(:service_bindings, app_id: :id).
-        where('apps.id > ?', last_id).
-        where('syslog_drain_url IS NOT NULL').
-        where("syslog_drain_url != ''").
-        order(:app_id).
-        distinct(:app_id).
+      guid_to_drain_maps =
+        v2_apps_with_syslog_drains_dataset.
+        union(v3_apps_with_syslog_drains_dataset, from_self: false, all: true).
+        order(:guid).
         limit(batch_size).
-        eager(:service_bindings).
+        offset(last_id).
         all
 
-      drain_urls = apps_with_bindings.each_with_object({}) do |app, hash|
-        drains = app.service_bindings.map(&:syslog_drain_url).reject(&:blank?)
-        hash[app.guid] = drains
-        id_for_next_token = app.id
+      next_page_token = nil
+      drain_urls = {}
+
+      guid_to_drain_maps.each do |guid_and_drains|
+        drain_urls[guid_and_drains[:guid]] = guid_and_drains[:syslog_drain_urls].split(',')
+        next_page_token = last_id + batch_size
       end
 
-      [HTTP::OK, {}, MultiJson.dump({ results: drain_urls, next_id: id_for_next_token }, pretty: true)]
+      [HTTP::OK, {}, MultiJson.dump({ results: drain_urls, next_id: next_page_token }, pretty: true)]
     end
 
     private
 
+    def v2_apps_with_syslog_drains_dataset
+      App.db[App.table_name].
+        join(ServiceBinding.table_name, app_id: :id).
+        where('syslog_drain_url IS NOT NULL').
+        where("syslog_drain_url != ''").
+        group("#{App.table_name}__guid".to_sym).
+        select(
+          "#{App.table_name}__guid".to_sym,
+          aggregate_function("#{ServiceBinding.table_name}__syslog_drain_url".to_sym).as(:syslog_drain_urls)
+        )
+    end
+
+    def v3_apps_with_syslog_drains_dataset
+      AppModel.db[AppModel.table_name].
+        join(ServiceBindingModel.table_name, app_id: :id).
+        where('syslog_drain_url IS NOT NULL').
+        where("syslog_drain_url != ''").
+        group("#{AppModel.table_name}__guid".to_sym).
+        select(
+          "#{AppModel.table_name}__guid".to_sym,
+          aggregate_function("#{ServiceBindingModel.table_name}__syslog_drain_url".to_sym).as(:syslog_drain_urls)
+        )
+    end
+
+    def aggregate_function(column)
+      if App.db.database_type == :postgres
+        Sequel.function(:string_agg, column, ',')
+      elsif App.db.database_type == :mysql
+        Sequel.function(:group_concat, column)
+      else
+        raise 'Unknown database type'
+      end
+    end
+
     def last_id
-      Integer(params.fetch('next_id',  0))
+      Integer(params.fetch('next_id', 0))
     end
 
     def batch_size

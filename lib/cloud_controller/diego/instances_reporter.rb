@@ -111,8 +111,8 @@ module VCAP::CloudController
               'mem_quota'  => app[:memory] * 1024 * 1024,
               'disk_quota' => app[:disk_quota] * 1024 * 1024,
               'fds_quota' => app.file_descriptors,
-              'usage'      => {
-                  'time'  => usage[:time] || Time.now.utc.to_s,
+              'usage' => {
+                  'time' => usage[:time] || Time.now.utc.to_s,
                   'cpu'  => usage[:cpu] || 0,
                   'mem'  => usage[:mem] || 0,
                   'disk' => usage[:disk] || 0,
@@ -133,10 +133,10 @@ module VCAP::CloudController
 
       private
 
-      def for_each_desired_instance(instances, app, &blk)
+      def for_each_desired_instance(instances, app)
         instances.each do |instance|
           next unless instance_is_desired(instance, app)
-          blk.call(instance)
+          yield(instance)
         end
       end
 

@@ -24,26 +24,41 @@ module VCAP::CloudController
           expect(app.processes.count).to eq(2)
         end
 
-        context 'when adding processes it sets the default instance count' do
+        context 'when a missing process has a route mapping' do
+          let(:route) { Route.make(space: app.space) }
+          let!(:route_mapping) { RouteMappingModel.make(route: route, app: app, process_type: 'web') }
+
+          it 'adds the route to the process' do
+            expect(app.processes.count).to eq(0)
+            current_process_types.process_current_droplet(app)
+
+            process = App.where(app_guid: app.guid, type: 'web').first
+            expect(process.routes).to include(route)
+          end
+        end
+
+        context 'when adding processes it sets default values' do
           context 'web processes' do
             let(:process_types) { { web: 'thing' } }
 
-            it '1 instance' do
+            it '1 instance, port health_check_type' do
               current_process_types.process_current_droplet(app)
               app.reload
 
               expect(app.processes[0].instances).to eq(1)
+              expect(app.processes[0].health_check_type).to eq('port')
             end
           end
 
           context 'non-web processes' do
             let(:process_types) { { other: 'stuff' } }
 
-            it '0 instances' do
+            it '0 instances, process health_check_type' do
               current_process_types.process_current_droplet(app)
               app.reload
 
               expect(app.processes[0].instances).to eq(0)
+              expect(app.processes[0].health_check_type).to eq('process')
             end
           end
         end

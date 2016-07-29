@@ -34,29 +34,29 @@ module VCAP::CloudController
       it { is_expected.to validate_presence :space }
       it { is_expected.to validate_uniqueness [:space_id, :name] }
       it { is_expected.to strip_whitespace :name }
-      let(:max_tags) { build_max_tags }
+      let(:max_tags) { ['a' * 1024, 'b' * 1024] }
 
-      it 'accepts user-provided tags where combined length of all tags is exactly 255 characters' do
+      it 'accepts user-provided tags where combined length of all tags is exactly 2048 characters' do
         expect {
           ManagedServiceInstance.make tags: max_tags
         }.not_to raise_error
       end
 
-      it 'accepts user-provided tags where combined length of all tags is less than 255 characters' do
+      it 'accepts user-provided tags where combined length of all tags is less than 2048 characters' do
         expect {
           ManagedServiceInstance.make tags: max_tags[0..50]
         }.not_to raise_error
       end
 
-      it 'does not accept user-provided tags with combined length of over 255 characters' do
+      it 'does not accept user-provided tags with combined length of over 2048 characters' do
         expect {
           ManagedServiceInstance.make tags: max_tags + ['z']
         }.to raise_error(Sequel::ValidationFailed).with_message('tags too_long')
       end
 
-      it 'does not accept a single user-provided tag of length greater than 255 characters' do
+      it 'does not accept a single user-provided tag of length greater than 2048 characters' do
         expect {
-          ManagedServiceInstance.make tags: ['a' * 256]
+          ManagedServiceInstance.make tags: ['a' * 2049]
         }.to raise_error(Sequel::ValidationFailed).with_message('tags too_long')
       end
 
@@ -113,7 +113,7 @@ module VCAP::CloudController
       end
     end
 
-    describe '#save_with_new_operation'  do
+    describe '#save_with_new_operation' do
       let(:service_instance) { ManagedServiceInstance.make }
       let(:developer) { make_developer_for_space(service_instance.space) }
 
@@ -310,12 +310,12 @@ module VCAP::CloudController
               })
 
           expect(service_instance.as_summary_json['last_operation']).to include(
-              {
-                'state' => 'in progress',
-                'description' => '50% all the time',
-                'type' => 'create',
-              }
-            )
+            {
+              'state' => 'in progress',
+              'description' => '50% all the time',
+              'type' => 'create',
+            }
+          )
         end
       end
       context 'when the last_operation does not exist' do
@@ -453,109 +453,6 @@ module VCAP::CloudController
 
         expect(ServiceInstance.find(guid: service_instance.guid)).to be_nil
         expect(ServiceInstanceOperation.find(guid: last_operation.guid)).to be_nil
-      end
-    end
-
-    describe '#enum_snapshots' do
-      subject { ManagedServiceInstance.make(:v1) }
-      let(:enum_snapshots_url_matcher) { "gw.example.com:12345/gateway/v2/configurations/#{subject.gateway_name}/snapshots" }
-      let(:service_auth_token) { 'tokenvalue' }
-      before do
-        subject.service_plan.service.update(url: 'http://gw.example.com:12345/')
-        subject.service_plan.service.service_auth_token.update(token: service_auth_token)
-      end
-
-      context "when there isn't a service auth token" do
-        it 'fails' do
-          subject.service_plan.service.service_auth_token.destroy
-          subject.refresh
-          expect do
-            subject.enum_snapshots
-          end.to raise_error(VCAP::Errors::ApiError, /Missing service auth token/)
-        end
-      end
-
-      context 'returns a list of snapshots' do
-        let(:success_response) { MultiJson.dump({ snapshots: [{ snapshot_id: '1', name: 'foo', state: 'ok', size: 0 },
-                                                              { snapshot_id: '2', name: 'bar', state: 'bad', size: 0 }] })
-        }
-        before do
-          stub_request(:get, enum_snapshots_url_matcher).to_return(body: success_response)
-        end
-
-        it 'return a list of snapshot from the gateway' do
-          snapshots = subject.enum_snapshots
-          expect(snapshots).to have(2).items
-          expect(snapshots.first.snapshot_id).to eq('1')
-          expect(snapshots.first.state).to eq('ok')
-          expect(snapshots.last.snapshot_id).to eq('2')
-          expect(snapshots.last.state).to eq('bad')
-          expect(a_request(:get, enum_snapshots_url_matcher).with(headers: {
-            'Content-Type' => 'application/json',
-            'X-Vcap-Service-Token' => 'tokenvalue'
-          })).to have_been_made
-        end
-      end
-    end
-
-    describe '#create_snapshot' do
-      let(:name) { 'New snapshot' }
-      subject { ManagedServiceInstance.make(:v1) }
-      let(:create_snapshot_url_matcher) { "gw.example.com:12345/gateway/v2/configurations/#{subject.gateway_name}/snapshots" }
-      before do
-        subject.service_plan.service.update(url: 'http://gw.example.com:12345/')
-        subject.service_plan.service.service_auth_token.update(token: 'tokenvalue')
-      end
-
-      context "when there isn't a service auth token" do
-        it 'fails' do
-          subject.service_plan.service.service_auth_token.destroy
-          subject.refresh
-          expect do
-            subject.create_snapshot(name)
-          end.to raise_error(VCAP::Errors::ApiError, /Missing service auth token/)
-        end
-      end
-
-      it 'rejects empty string as name' do
-        expect do
-          subject.create_snapshot('')
-        end.to raise_error(JsonMessage::ValidationError, /Field: name/)
-      end
-
-      context 'when the request succeeds' do
-        let(:success_response) { %({"snapshot_id": "1", "state": "empty", "name": "foo", "size": 0}) }
-        before do
-          stub_request(:post, create_snapshot_url_matcher).to_return(body: success_response)
-        end
-
-        it 'makes an HTTP call to the corresponding service gateway and returns the decoded response' do
-          snapshot = subject.create_snapshot(name)
-          expect(snapshot.snapshot_id).to eq('1')
-          expect(snapshot.state).to eq('empty')
-          expect(a_request(:post, create_snapshot_url_matcher)).to have_been_made
-        end
-
-        it 'uses the correct svc auth token' do
-          subject.create_snapshot(name)
-
-          expect(a_request(:post, create_snapshot_url_matcher).with(
-            headers: { 'X-VCAP-Service-Token' => 'tokenvalue' })).to have_been_made
-        end
-
-        it 'has the name in the payload' do
-          payload = MultiJson.dump({ name: name })
-          subject.create_snapshot(name)
-
-          expect(a_request(:post, create_snapshot_url_matcher).with(body: payload)).to have_been_made
-        end
-      end
-
-      context 'when the request fails' do
-        it 'should raise an error' do
-          stub_request(:post, create_snapshot_url_matcher).to_return(body: 'Something went wrong', status: 500)
-          expect { subject.create_snapshot(name) }.to raise_error(ManagedServiceInstance::ServiceGatewayError, /upstream failure/)
-        end
       end
     end
 
@@ -768,15 +665,6 @@ module VCAP::CloudController
           expect(service_instance.to_hash['dashboard_url']).to eq('')
         end
       end
-    end
-
-    # Construct an array of unique tags with 255 characters total
-    def build_max_tags
-      tags = []
-      (10..94).each do |i|
-        tags.push('a' + i.to_s)
-      end
-      tags
     end
   end
 end

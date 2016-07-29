@@ -13,7 +13,7 @@ module VCAP::CloudController
     describe 'GET /v2/apps/:id/instances' do
       before :each do
         @app = AppFactory.make(package_hash: 'abc', package_state: 'STAGED')
-        @user =  make_user_for_space(@app.space)
+        @user = make_user_for_space(@app.space)
         @developer = make_developer_for_space(@app.space)
       end
 
@@ -116,7 +116,7 @@ module VCAP::CloudController
             expect(last_response.status).to eq(200)
             expect(MultiJson.load(last_response.body)).to eq(expected)
             expect(instances_reporters).to have_received(:all_instances_for_app).with(
-                satisfy { |requested_app| requested_app.guid == @app.guid })
+              satisfy { |requested_app| requested_app.guid == @app.guid })
           end
 
           context 'when the instances reporter fails' do

@@ -15,27 +15,31 @@ resource 'Routes', type: [:api, :legacy_api] do
     VCAP::CloudController::RoutingApi::RouterGroup.new({
                                                            'guid' => 'tcp-guid',
                                                            'type' => 'tcp',
+                                                           'reservable_ports' => '1024-65535'
                                                        })
   }
   before do
     allow(CloudController::DependencyLocator.instance).to receive(:routing_api_client).
-                                                              and_return(routing_api_client)
+      and_return(routing_api_client)
     allow(routing_api_client).to receive(:router_group).and_return(router_group)
   end
 
   authenticated_request
 
-  describe 'Standard endpoints' do
-    path_description = 'The path for a route as raw text.'
-    path_description += ' 1) Paths must be between 2 and 128 characters'
-    path_description += ' 2) Paths must start with a /'
-    path_description += ' 3) Paths must not contain a "?"'
+  shared_context 'guid_field' do
+    field :guid, 'The guid of the route.'
+  end
 
+  path_description = 'The path for a route as raw text.'
+  path_description += ' 1) Paths must be between 2 and 128 characters'
+  path_description += ' 2) Paths must start with a forward slash "/"'
+  path_description += ' 3) Paths must not contain a "?"'
+
+  describe 'Standard endpoints' do
     shared_context 'updatable_fields' do |opts|
-      field :guid, 'The guid of the route.'
       field :domain_guid, 'The guid of the associated domain', required: opts[:required], example_values: [Sham.guid]
       field :space_guid, 'The guid of the associated space', required: opts[:required], example_values: [Sham.guid]
-      field :host, 'The host portion of the route'
+      field :host, 'The host portion of the route. Required for shared-domains.'
       field :port, 'The port of the route. Supported for domains of TCP router groups only.', required: false,
                                                                                               valid_values: '1024-65535', example_values: [50000], experimental: true
       field :path, path_description, required: false, example_values: ['/apps/v1/path', '/apps/v2/path']
@@ -50,6 +54,11 @@ resource 'Routes', type: [:api, :legacy_api] do
       standard_model_list :route, VCAP::CloudController::RoutesController
       standard_model_get :route, nested_associations: [:domain, :space, :service_instance]
       standard_model_delete :route, query_string: 'recursive=true'
+
+      def after_standard_model_delete(guid)
+        event = VCAP::CloudController::Event.find(type: 'audit.route.delete-request', actee: guid)
+        audited_event event
+      end
     end
 
     post '/v2/routes/' do
@@ -62,40 +71,45 @@ EOF
 
       example 'Creating a Route' do
         body = MultiJson.dump(
-            required_fields.merge(
-                domain_guid: domain.guid,
-                space_guid: space.guid,
-                port: 10000
-            ), pretty: true
+          required_fields.merge(
+            domain_guid: domain.guid,
+            space_guid: space.guid,
+            port: 10000
+          ), pretty: true
         )
         client.post '/v2/routes', body, headers
         expect(status).to eq(201)
 
         standard_entity_response parsed_response, :route
         expect(parsed_response['entity']['space_guid']).to eq(space.guid)
+        route_guid = parsed_response['metadata']['guid']
+        audited_event VCAP::CloudController::Event.find(type: 'audit.route.create', actee: route_guid)
       end
     end
 
     put '/v2/routes/:guid' do
+      include_context 'guid_field', required: true
       include_context 'updatable_fields', required: false
 
       example 'Update a Route' do
         body = MultiJson.dump(
-            {
-                port: 10000
-            }, pretty: true
+          {
+              port: 10000
+          }, pretty: true
         )
         client.put "/v2/routes/#{guid}", body, headers
 
         expect(status).to eq 201
-        # expect(parsed_response['entity']['host']).to eq('')
-        # expect(parsed_response['entity']['path']).to eq('/bar/baz')
+
+        standard_entity_response parsed_response, :route
+        route_guid = parsed_response['metadata']['guid']
+        audited_event VCAP::CloudController::Event.find(type: 'audit.route.update', actee: route_guid)
       end
     end
   end
 
   describe 'Nested endpoints' do
-    field :guid, 'The guid of the route.', required: true
+    include_context 'guid_field', required: true
 
     describe 'Apps' do
       let!(:associated_app) { VCAP::CloudController::AppFactory.make(space: space, route_guids: [route.guid]) }
@@ -109,6 +123,13 @@ EOF
       nested_model_associate :app, :route
       nested_model_remove :app, :route
     end
+
+    describe 'Route Mappings' do
+      let(:app_obj) { VCAP::CloudController::AppFactory.make(space: space, diego: true) }
+      let!(:route_mapping) { VCAP::CloudController::RouteMapping.make(app: app_obj, route: route) }
+
+      standard_model_list :route_mapping, VCAP::CloudController::RouteMappingsController, outer_model: :route
+    end
   end
 
   describe 'Reserved Routes' do
@@ -118,10 +139,12 @@ EOF
     end
     get '/v2/routes/reserved/domain/:domain_guid/host/:host?path=:path' do
       request_parameter :domain_guid, 'The guid of a domain'
-      request_parameter :host, 'The host portion of the route'
-      request_parameter :path, 'The path of a route', required: false, example_values: ['/apps/v1/path', '/apps/v2/path']
+      request_parameter :host, 'The host portion of the route. Required for shared-domains.'
+      request_parameter :path, path_description, required: false, example_values: ['/apps/v1/path', '/apps/v2/path']
 
       example 'Check a Route exists' do
+        explanation 'This endpoint returns a status code of 204 if the route exists, and 404 if it does not.'
+
         client.get "/v2/routes/reserved/domain/#{domain.guid}/host/#{route.host}?path=#{route_path}", {}, headers
         expect(status).to eq 204
       end

@@ -5,6 +5,7 @@ module VCAP::CloudController
     class InvalidPackage < StandardError; end
 
     def copy(app_guid, source_package)
+      raise InvalidPackage.new('Source and destination app cannot be the same') if app_guid == source_package.app_guid
       logger.info("copying package #{source_package.guid} to app #{app_guid}")
 
       package          = PackageModel.new
@@ -34,8 +35,6 @@ module VCAP::CloudController
       source_data = source_package.docker_data
       data = PackageDockerDataModel.new
       data.image = source_data.image
-      data.store_image = source_data.store_image
-      data.credentials = source_data.credentials
       data.package = package
       data.save
       package.reload

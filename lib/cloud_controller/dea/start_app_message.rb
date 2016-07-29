@@ -6,8 +6,6 @@ module VCAP::CloudController
       def initialize(app, index, config, blobstore_url_generator)
         super()
 
-        droplet_download_url = nil
-        droplet_hash = nil
         # Grab the v3 droplet if the app is a v3 process
         if app.app.nil?
           droplet_download_url = blobstore_url_generator.droplet_download_url(app)
@@ -48,7 +46,11 @@ module VCAP::CloudController
         self[:debug]                = app.debug
         self[:start_command]        = app.command
         self[:health_check_timeout] = app.health_check_timeout
-        self[:vcap_application]     = app.vcap_application
+
+        vars_builder = VCAP::VarsBuilder.new(app)
+        vcap_application = vars_builder.vcap_application
+        self[:vcap_application]     = vcap_application
+
         self[:index]                = index
         self[:egress_network_rules] = EgressNetworkRulesPresenter.new(app.space.security_groups).to_array
       end

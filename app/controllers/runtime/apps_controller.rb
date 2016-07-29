@@ -1,7 +1,9 @@
+require 'presenters/system_env_presenter'
+
 module VCAP::CloudController
   class AppsController < RestController::ModelController
     def self.dependencies
-      [:app_event_repository, :droplet_blobstore, :blobstore_url_generator, :blob_sender]
+      [:app_event_repository, :droplet_blobstore, :blob_sender]
     end
 
     define_attributes do
@@ -11,7 +13,7 @@ module VCAP::CloudController
       attribute :console,                 Message::Boolean, default: false
       attribute :diego,                   Message::Boolean, default: nil
       attribute :docker_image,            String,           default: nil
-      attribute :docker_credentials_json, Hash,             default: {},       redact_in: [:create, :update]
+      attribute :docker_credentials_json, Hash,             default: {}, redact_in: [:create, :update]
       attribute :debug,                   String,           default: nil
       attribute :disk_quota,              Integer,          default: nil
       attribute :environment_json,        Hash,             default: {}
@@ -22,15 +24,16 @@ module VCAP::CloudController
       attribute :name,                    String
       attribute :production,              Message::Boolean, default: false
       attribute :state,                   String,           default: 'STOPPED'
-      attribute :detected_start_command,  String,                              exclude_in: [:create, :update]
+      attribute :detected_start_command,  String,           exclude_in: [:create, :update]
       attribute :ports,                   [Integer],        default: nil
 
       to_one :space
-      to_one :stack,               optional_in: :create
+      to_one :stack, optional_in: :create
 
+      to_many :routes
       to_many :events,              link_only: true
       to_many :service_bindings,    exclude_in: :create
-      to_many :routes
+      to_many :route_mappings,      link_only: true, exclude_in: [:create, :update], route_for: :get
     end
 
     query_parameters :name, :space_guid, :organization_guid, :diego, :stack_guid
@@ -38,6 +41,11 @@ module VCAP::CloudController
     get '/v2/apps/:guid/env', :read_env
     def read_env(guid)
       app = find_guid_and_validate_access(:read_env, guid, App)
+
+      vars_builder = VCAP::VarsBuilder.new(app)
+      vcap_application = vars_builder.vcap_application
+
+      FeatureFlag.raise_unless_enabled!('space_developer_env_var_visibility') unless roles.admin?
       [
         HTTP::OK,
         {},
@@ -45,8 +53,8 @@ module VCAP::CloudController
           staging_env_json:     EnvironmentVariableGroup.staging.environment_json,
           running_env_json:     EnvironmentVariableGroup.running.environment_json,
           environment_json:     app.environment_json,
-          system_env_json:      app.system_env_json,
-          application_env_json: { 'VCAP_APPLICATION' => app.vcap_application },
+          system_env_json:      SystemEnvPresenter.new(app.all_service_bindings).system_env,
+          application_env_json: { 'VCAP_APPLICATION' => vcap_application },
         }, pretty: true)
       ]
     end
@@ -58,6 +66,7 @@ module VCAP::CloudController
       app_instance_limit_errors = e.errors.on(:app_instance_limit)
       state_errors           = e.errors.on(:state)
       docker_errors          = e.errors.on(:docker)
+      diego_to_dea_errors    = e.errors.on(:diego_to_dea)
 
       if space_and_name_errors && space_and_name_errors.include?(:unique)
         Errors::ApiError.new_from_details('AppNameTaken', attributes['name'])
@@ -75,6 +84,8 @@ module VCAP::CloudController
         Errors::ApiError.new_from_details('AppInvalid', 'Invalid app state provided')
       elsif docker_errors && docker_errors.include?(:docker_disabled)
         Errors::ApiError.new_from_details('DockerDisabled')
+      elsif diego_to_dea_errors
+        Errors::ApiError.new_from_details('MultipleAppPortsMappedDiegoToDea')
       else
         Errors::ApiError.new_from_details('AppInvalid', e.errors.full_messages)
       end
@@ -98,25 +109,24 @@ module VCAP::CloudController
       super
       @app_event_repository = dependencies.fetch(:app_event_repository)
       @blobstore = dependencies.fetch(:droplet_blobstore)
-      @blobstore_url_generator = dependencies.fetch(:blobstore_url_generator)
       @blob_sender = dependencies.fetch(:blob_sender)
     end
 
     def delete(guid)
       app = find_guid_and_validate_access(:delete, guid)
 
-      if !recursive? && app.service_bindings.present?
+      if !recursive_delete? && app.service_bindings.present?
         raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', 'service_bindings', app.class.table_name)
       end
 
       app.destroy
 
       @app_event_repository.record_app_delete_request(
-          app,
-          app.space,
-          SecurityContext.current_user.guid,
-          SecurityContext.current_user_email,
-          recursive?)
+        app,
+        app.space,
+        SecurityContext.current_user.guid,
+        SecurityContext.current_user_email,
+        recursive_delete?)
 
       [HTTP::NO_CONTENT, nil]
     end
@@ -125,18 +135,17 @@ module VCAP::CloudController
     def download_droplet(guid)
       app = find_guid_and_validate_access(:read, guid)
 
-      if @blobstore.local?
-        droplet = app.current_droplet
-        raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', "Droplet not found for app with guid #{app.guid}") unless droplet && droplet.blob
-        @blob_sender.send_blob(app.guid, 'droplet', droplet.blob, self)
-      else
-        url = @blobstore_url_generator.droplet_download_url(app)
-        raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', "Droplet not found for app with guid #{app.guid}") unless url
-        redirect url
-      end
+      droplet = app.current_droplet
+      raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', "Droplet not found for app with guid #{app.guid}") unless droplet && droplet.blob
+
+      blob_dispatcher.send_or_redirect(local: @blobstore.local?, blob: droplet.blob)
     end
 
     private
+
+    def blob_dispatcher
+      BlobDispatcher.new(blob_sender: @blob_sender, controller: self)
+    end
 
     def before_create
       space = VCAP::CloudController::Space[guid: request_attrs['space_guid']]
@@ -145,6 +154,31 @@ module VCAP::CloudController
 
     def before_update(app)
       verify_enable_ssh(app.space)
+      updated_diego_flag = request_attrs['diego']
+      ports = request_attrs['ports']
+      ignore_empty_ports! if ports == []
+      if should_warn_about_changed_ports?(app.diego, updated_diego_flag, ports)
+        add_warning('App ports have changed but are unknown. The app should now listen on the port specified by environment variable PORT.')
+      end
+      return if request_attrs['route'].blank?
+      route = Route.find(guid: request_attrs['route'])
+      begin
+        RouteMappingValidator.new(route, app).validate
+      rescue RouteMappingValidator::RouteInvalidError
+        raise Errors::ApiError.new_from_details('RouteNotFound', request_attrs['route_guid'])
+      rescue RouteMappingValidator::TcpRoutingDisabledError
+        raise Errors::ApiError.new_from_details('TcpRoutingDisabled')
+      end
+    end
+
+    def ignore_empty_ports!
+      @request_attrs = @request_attrs.deep_dup
+      @request_attrs.delete 'ports'
+      @request_attrs.freeze
+    end
+
+    def should_warn_about_changed_ports?(old_diego, new_diego, ports)
+      !new_diego.nil? && old_diego && !new_diego && ports.nil?
     end
 
     def verify_enable_ssh(space)
@@ -154,19 +188,19 @@ module VCAP::CloudController
 
       if app_enable_ssh && !ssh_allowed
         raise VCAP::Errors::ApiError.new_from_details(
-            'InvalidRequest',
-            'enable_ssh must be false due to global allow_ssh setting',
+          'InvalidRequest',
+          'enable_ssh must be false due to global allow_ssh setting',
           )
       end
     end
 
     def after_create(app)
       record_app_create_value = @app_event_repository.record_app_create(
-          app,
-          app.space,
-          SecurityContext.current_user.guid,
-          SecurityContext.current_user_email,
-          request_attrs)
+        app,
+        app.space,
+        SecurityContext.current_user.guid,
+        SecurityContext.current_user_email,
+        request_attrs)
       record_app_create_value if request_attrs
     end
 

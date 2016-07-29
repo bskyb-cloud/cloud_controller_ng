@@ -1,7 +1,7 @@
 require 'spec_helper'
 require 'cloud_controller/diego/v3/stager'
 require 'cloud_controller/diego/v3/messenger'
-require 'cloud_controller/diego/traditional/v3/staging_completion_handler'
+require 'cloud_controller/diego/buildpack/v3/staging_completion_handler'
 
 module VCAP::CloudController
   module Diego
@@ -11,7 +11,7 @@ module VCAP::CloudController
         let(:package) { PackageModel.make }
         let(:config) { TestConfig.config }
         let(:completion_handler) do
-          instance_double(Diego::Traditional::V3::StagingCompletionHandler)
+          instance_double(Diego::Buildpack::V3::StagingCompletionHandler)
         end
 
         subject(:stager) do
@@ -19,20 +19,16 @@ module VCAP::CloudController
         end
 
         describe '#stage' do
-          let(:stack) { 'cflinuxfs2' }
           let(:memory_limit) { 1024 }
           let(:disk_limit) { 1024 }
-          let(:buildpack_info) { 'some-buildpack-info' }
           let(:droplet) { DropletModel.make(environment_variables: environment_variables, package_guid: package.guid) }
           let(:environment_variables) { { 'nightshade_vegetable' => 'potato' } }
           let(:staging_details) do
-            details                       = VCAP::CloudController::Diego::Traditional::V3::StagingDetails.new
+            details                       = VCAP::CloudController::Diego::V3::StagingDetails.new
             details.droplet               = droplet
-            details.stack                 = stack
             details.environment_variables = environment_variables
             details.memory_limit          = memory_limit
             details.disk_limit            = disk_limit
-            details.buildpack_info        = buildpack_info
             details
           end
 

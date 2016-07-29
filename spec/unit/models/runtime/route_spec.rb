@@ -8,6 +8,8 @@ module VCAP::CloudController
       it { is_expected.to have_associated :domain }
       it { is_expected.to have_associated :space, associated_instance: ->(route) { Space.make(organization: route.domain.owning_organization) } }
       it { is_expected.to have_associated :apps, associated_instance: ->(route) { App.make(space: route.space) } }
+      it { is_expected.to have_associated :route_mappings, associated_instance: ->(route) { RouteMappingModel.make(app: AppModel.make(space: route.space), route: route) } }
+      it { is_expected.to have_associated :app_route_mappings, associated_instance: ->(route) { RouteMapping.make(app: App.make(space: route.space), route: route) } }
 
       context 'when bound to a service instance' do
         let(:route) { Route.make }
@@ -98,6 +100,51 @@ module VCAP::CloudController
           end
         end
       end
+
+      context 'deleting with route mappings' do
+        it 'removes the associated route mappings' do
+          route = Route.make
+          app = AppModel.make(space: route.space)
+          mapping1 = RouteMappingModel.make(route: route, app: app, process_type: 'thing')
+          mapping2 = RouteMappingModel.make(route: route, app: app, process_type: 'other')
+
+          route.destroy
+
+          expect(mapping1.exists?).to be_falsey
+          expect(mapping2.exists?).to be_falsey
+        end
+      end
+      context 'when mapping app to route' do
+        let(:route) { Route.make }
+
+        before do
+          route.add_app(app)
+        end
+
+        context 'when it is a diego app' do
+          let(:app) { AppFactory.make(space: route.space, diego: true) }
+
+          it 'uses the first port of the app as the app_port' do
+            route_mapping = RouteMapping.find(app: app, route: route)
+            expect(route_mapping.app_port).to eq(8080)
+          end
+
+          it "doesn't save the default port to the route mapping" do
+            route_mapping = RouteMapping.find(app: app, route: route)
+            expect(route_mapping.user_provided_app_port).to be_nil
+          end
+        end
+
+        context 'when it is dea app' do
+          let(:app) { AppFactory.make(space: route.space, diego: false) }
+
+          it 'sets the app_port as nil' do
+            route_mapping = RouteMapping.find(app: app, route: route)
+            expect(route_mapping.app_port).to be_nil
+            expect(route_mapping.user_provided_app_port).to be_nil
+          end
+        end
+      end
     end
 
     describe 'Validations' do
@@ -107,9 +154,77 @@ module VCAP::CloudController
       it { is_expected.to validate_presence :space }
       it { is_expected.to validate_presence :host }
 
-      context 'route ports' do
+      context 'when a route with the same hostname and domain already exists' do
         let(:domain) { SharedDomain.make }
-        let(:route) { Route.make(domain: domain, host: '', port: 1) }
+        let(:space) { Space.make }
+        let(:host) { 'example' }
+
+        context 'with a context path' do
+          let(:path) { '/foo' }
+
+          before do
+            Route.make(domain: domain, space: space, host: host)
+          end
+
+          it 'is valid' do
+            route_obj = Route.new(domain: domain, host: host, space: space, path: path)
+            expect(route_obj).to be_valid
+          end
+
+          context 'and a user attempts to create the route in another space' do
+            let(:another_space) { Space.make }
+
+            it 'is not valid' do
+              route_obj = Route.new(domain: domain, space: another_space, host: host, path: path)
+              expect(route_obj).not_to be_valid
+              expect(route_obj.errors.on([:domain_id, :host])).to include :host_and_domain_taken_different_space
+            end
+
+            context 'with a tcp route' do
+              before do
+                Route.make(domain: domain, host: '', space: space, port: 1119)
+              end
+              it 'is valid' do
+                route_obj = Route.new(domain: domain, host: '', space: another_space, port: 1111)
+                expect(route_obj).to be_valid
+              end
+            end
+          end
+
+          context 'and the domain is a private domain' do
+            let(:domain) { PrivateDomain.make }
+            let(:space) { Space.make(organization: domain.owning_organization) }
+
+            context 'and a user attempts to create the route in another space' do
+              let(:another_space) { Space.make(organization: domain.owning_organization) }
+
+              it 'is valid' do
+                route_obj = Route.new(domain: domain, space: another_space, host: host, path: path)
+                expect(route_obj).to be_valid
+              end
+            end
+          end
+        end
+
+        context 'without a context path' do
+          before do
+            Route.make(domain: domain, space: space, host: host, path: '/bar')
+          end
+
+          context 'and a user attempts to create the route in another space' do
+            let(:another_space) { Space.make }
+
+            it 'is not valid' do
+              route_obj = Route.new(domain: domain, space: another_space, host: host)
+              expect(route_obj).not_to be_valid
+              expect(route_obj.errors.on([:domain_id, :host])).to include :host_and_domain_taken_different_space
+            end
+          end
+        end
+      end
+
+      context 'route ports' do
+        let(:route) { Route.make }
 
         it 'validates that the port is greater than equal to 0' do
           route.port = -1
@@ -133,7 +248,17 @@ module VCAP::CloudController
           expect(route).not_to be_valid
         end
 
+        it 'defaults the port to 0' do
+          expect(route.port).to eq(0)
+        end
+
         context 'when port is specified' do
+          let(:domain) { SharedDomain.make }
+
+          before do
+            Route.make(domain: domain, host: '', port: 1)
+          end
+
           it 'does not validate uniqueness of host' do
             expect {
               Route.make(port: 10, host: '', domain: domain)
@@ -143,7 +268,7 @@ module VCAP::CloudController
           it 'validates the uniqueness of the port' do
             new_route = Route.new(port: 1, host: '', domain: domain)
             expect(new_route).not_to be_valid
-            expect(new_route.errors.on([:domain_id, :port])).to include :unique
+            expect(new_route.errors.on([:host, :domain_id, :port])).to include :unique
           end
         end
       end
@@ -305,15 +430,30 @@ module VCAP::CloudController
                      host: 'app-d-[index]')
         end
 
-        it 'should not allow route to match existing domain' do
-          SharedDomain.make name: 'bar.foo.com'
-          expect {
-            Route.make(
-              space: space,
-              domain: SharedDomain.make(name: 'foo.com'),
-              host: 'bar'
-            )
-          }.to raise_error(Sequel::ValidationFailed, /domain_conflict/)
+        context 'shared domains' do
+          it 'should not allow route to match existing domain' do
+            SharedDomain.make name: 'bar.foo.com'
+            expect {
+              Route.make(
+                space: space,
+                domain: SharedDomain.make(name: 'foo.com'),
+                host: 'bar'
+              )
+            }.to raise_error(Sequel::ValidationFailed, /domain_conflict/)
+          end
+
+          context 'when the host is missing' do
+            it 'raises an informative error' do
+              domain = SharedDomain.make name: 'bar.foo.com'
+              expect {
+                Route.make(
+                  space: space,
+                  domain: domain,
+                  host: nil
+                )
+              }.to raise_error(Sequel::ValidationFailed, /host is required for shared-domains/)
+            end
+          end
         end
       end
 
@@ -539,6 +679,7 @@ module VCAP::CloudController
             {
               guid: r.guid,
               host: r.host,
+              path: r.path,
               domain: {
                 guid: r.domain.guid,
                 name: r.domain.name
@@ -701,7 +842,7 @@ module VCAP::CloudController
     describe 'apps association' do
       let(:route) { Route.make }
       let!(:app) do
-        AppFactory.make({ space: route.space })
+        AppFactory.make({ space: route.space, diego: true, ports: [8080, 9090] })
       end
 
       describe 'when adding an app' do
@@ -710,6 +851,57 @@ module VCAP::CloudController
           expect {
             route.add_app(app)
           }.to change { Event.count }.by(1)
+        end
+
+        context 'when a app is bound to multiple ports' do
+          let!(:route_mapping1) { RouteMapping.make(app: app, route: route, app_port: 8080) }
+          let!(:route_mapping2) { RouteMapping.make(app: app, route: route, app_port: 9090) }
+
+          it 'returns a single app association' do
+            expect(route.apps.length).to eq(1)
+          end
+        end
+
+        context 'when the app has user provided ports' do
+          let(:app) { App.make(diego: true, ports: [8998]) }
+          let(:route) { Route.make(space: app.space) }
+
+          before do
+            route.add_app(app)
+          end
+
+          it 'should save app_port to the route mappings' do
+            route_mapping = RouteMapping.last
+            expect(route_mapping.user_provided_app_port).to eq 8998
+          end
+        end
+
+        context 'when the app does not have user provided ports' do
+          let(:app) { App.make(diego: true) }
+          let(:route) { Route.make(space: app.space) }
+
+          before do
+            route.add_app(app)
+          end
+
+          it 'should not save app_port to the route mappings' do
+            route_mapping = RouteMapping.last
+            expect(route_mapping.user_provided_app_port).to be_nil
+          end
+        end
+
+        context 'when the app is a dea' do
+          let(:app) { App.make(diego: false) }
+          let(:route) { Route.make(space: app.space) }
+
+          before do
+            route.add_app(app)
+          end
+
+          it 'should not have an app_port' do
+            route_mapping = RouteMapping.last
+            expect(route_mapping.app_port).to be_nil
+          end
         end
       end
 

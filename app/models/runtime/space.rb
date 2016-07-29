@@ -7,7 +7,7 @@ module VCAP::CloudController
     class UnauthorizedAccessToPrivateDomain < RuntimeError; end
     class OrganizationAlreadySet < RuntimeError; end
 
-    SPACE_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/.freeze
+    SPACE_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/
 
     define_user_group :developers, reciprocal: :spaces, before_add: :validate_developer
     define_user_group :managers, reciprocal: :managed_spaces, before_add: :validate_manager
@@ -21,6 +21,8 @@ module VCAP::CloudController
     one_to_many :managed_service_instances
     one_to_many :service_brokers
     one_to_many :routes
+    one_to_many :tasks,
+                dataset: -> { TaskModel.filter(app: app_models) }
     many_to_many :security_groups,
     dataset: -> {
       SecurityGroup.left_join(:security_groups_spaces, security_group_id: :id).
@@ -139,7 +141,7 @@ module VCAP::CloudController
     def self.user_visibility_filter(user)
       {
         id: Space.dataset.join_table(:inner, :spaces_developers, space_id: :id, user_id: user.id).select(:spaces__id).union(
-            Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)
+          Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)
           ).union(
             Space.dataset.join_table(:inner, :spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__id)
           ).union(
@@ -153,6 +155,26 @@ module VCAP::CloudController
       memory_remaining >= mem
     end
 
+    def instance_memory_limit
+      if space_quota_definition
+        space_quota_definition.instance_memory_limit
+      else
+        SpaceQuotaDefinition::UNLIMITED
+      end
+    end
+
+    def app_task_limit
+      if space_quota_definition
+        space_quota_definition.app_task_limit
+      else
+        SpaceQuotaDefinition::UNLIMITED
+      end
+    end
+
+    def meets_max_task_limit?
+      app_task_limit == running_and_pending_tasks_count
+    end
+
     def in_suspended_org?
       organization.suspended?
     end
@@ -160,8 +182,22 @@ module VCAP::CloudController
     private
 
     def memory_remaining
-      memory_used = apps_dataset.where(state: 'STARTED').sum(Sequel.*(:memory, :instances)) || 0
+      memory_used = started_app_memory + running_task_memory
       space_quota_definition.memory_limit - memory_used
+    end
+
+    def running_task_memory
+      TaskModel.join(:apps_v3, id: :app_id).
+        where(state: TaskModel::RUNNING_STATE, apps_v3__space_guid: guid).
+        sum(:memory_in_mb) || 0
+    end
+
+    def started_app_memory
+      apps_dataset.where(state: 'STARTED').sum(Sequel.*(:memory, :instances)) || 0
+    end
+
+    def running_and_pending_tasks_count
+      tasks_dataset.where(state: [TaskModel::PENDING_STATE, TaskModel::RUNNING_STATE]).count
     end
   end
 end

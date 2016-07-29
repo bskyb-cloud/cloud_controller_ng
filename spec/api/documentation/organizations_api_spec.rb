@@ -141,15 +141,18 @@ resource 'Organizations', type: [:api, :legacy_api] do
       let!(:associated_user) { VCAP::CloudController::User.make }
 
       context 'by user guid' do
-        parameter :user_guid, 'The guid of the user'
-
         let(:associated_user_guid) { associated_user.guid }
         let(:user) { VCAP::CloudController::User.make }
         let(:user_guid) { user.guid }
 
         standard_model_list :user, VCAP::CloudController::UsersController, outer_model: :organization
-        nested_model_associate :user, :organization
-        nested_model_remove :user, :organization
+
+        context 'has user guid param' do
+          parameter :user_guid, 'The guid of the user'
+
+          nested_model_associate :user, :organization
+          nested_model_remove :user, :organization
+        end
       end
 
       context 'by username' do
@@ -169,15 +172,13 @@ resource 'Organizations', type: [:api, :legacy_api] do
         end
 
         delete 'v2/organizations/:guid/users' do
-          example 'Disassociate User with the Organization by Username' do
+          example 'Remove User with the Organization by Username' do
             uaa_client = double(:uaa_client)
             allow(CloudController::DependencyLocator.instance).to receive(:username_lookup_uaa_client).and_return(uaa_client)
             allow(uaa_client).to receive(:id_for_username).and_return(associated_user.guid)
 
             client.delete "v2/organizations/#{organization.guid}/users", MultiJson.dump({ username: 'user@example.com' }, pretty: true), headers
-            expect(status).to eq(200)
-
-            standard_entity_response parsed_response, :organization
+            expect(status).to eq(204)
           end
         end
       end
@@ -194,14 +195,17 @@ resource 'Organizations', type: [:api, :legacy_api] do
       let(:associated_manager_guid) { associated_manager.guid }
 
       context 'by user guid' do
-        parameter :manager_guid, 'The guid of the user to associate as a manager'
-
         let(:manager) { VCAP::CloudController::User.make }
         let(:manager_guid) { manager.guid }
 
         standard_model_list :user, VCAP::CloudController::UsersController, outer_model: :organization, path: :managers
-        nested_model_associate :manager, :organization
-        nested_model_remove :manager, :organization
+
+        context 'has user guid param' do
+          parameter :manager_guid, 'The guid of the user to associate as a manager'
+
+          nested_model_associate :manager, :organization
+          nested_model_remove :manager, :organization
+        end
       end
 
       context 'by username' do
@@ -221,15 +225,13 @@ resource 'Organizations', type: [:api, :legacy_api] do
         end
 
         delete 'v2/organizations/:guid/managers' do
-          example 'Disassociate Manager with the Organization by Username' do
+          example 'Remove Manager with the Organization by Username' do
             uaa_client = double(:uaa_client)
             allow(CloudController::DependencyLocator.instance).to receive(:username_lookup_uaa_client).and_return(uaa_client)
             allow(uaa_client).to receive(:id_for_username).and_return(associated_manager_guid)
 
             client.delete "v2/organizations/#{organization.guid}/managers", MultiJson.dump({ username: 'manage@example.com' }, pretty: true), headers
-            expect(status).to eq(200)
-
-            standard_entity_response parsed_response, :organization
+            expect(status).to eq(204)
           end
         end
       end
@@ -245,14 +247,17 @@ resource 'Organizations', type: [:api, :legacy_api] do
       let(:associated_billing_manager_guid) { associated_billing_manager.guid }
 
       context 'by user guid' do
-        parameter :billing_manager_guid, 'The guid of the user'
-
         let(:billing_manager) { VCAP::CloudController::User.make }
         let(:billing_manager_guid) { billing_manager.guid }
 
         standard_model_list :user, VCAP::CloudController::UsersController, outer_model: :organization, path: :billing_managers
-        nested_model_associate :billing_manager, :organization
-        nested_model_remove :billing_manager, :organization
+
+        context 'has user guid param' do
+          parameter :billing_manager_guid, 'The guid of the user'
+
+          nested_model_associate :billing_manager, :organization
+          nested_model_remove :billing_manager, :organization
+        end
       end
 
       context 'by username' do
@@ -272,15 +277,13 @@ resource 'Organizations', type: [:api, :legacy_api] do
         end
 
         delete 'v2/organizations/:guid/billing_managers' do
-          example 'Disassociate Billing Manager with the Organization by Username' do
+          example 'Remove Billing Manager with the Organization by Username' do
             uaa_client = double(:uaa_client)
             allow(CloudController::DependencyLocator.instance).to receive(:username_lookup_uaa_client).and_return(uaa_client)
             allow(uaa_client).to receive(:id_for_username).and_return(associated_billing_manager_guid)
 
             client.delete "v2/organizations/#{organization.guid}/billing_managers", MultiJson.dump({ username: 'billing_manager@example.com' }, pretty: true), headers
-            expect(status).to eq(200)
-
-            standard_entity_response parsed_response, :organization
+            expect(status).to eq(204)
           end
         end
       end
@@ -296,14 +299,17 @@ resource 'Organizations', type: [:api, :legacy_api] do
       let(:associated_auditor_guid) { associated_auditor.guid }
 
       context 'by user guid' do
-        parameter :auditor_guid, 'The guid of the user'
-
         let(:auditor) { VCAP::CloudController::User.make }
         let(:auditor_guid) { auditor.guid }
 
         standard_model_list :user, VCAP::CloudController::UsersController, outer_model: :organization, path: :auditors
-        nested_model_associate :auditor, :organization
-        nested_model_remove :auditor, :organization
+
+        context 'has user guid param' do
+          parameter :auditor_guid, 'The guid of the user'
+
+          nested_model_associate :auditor, :organization
+          nested_model_remove :auditor, :organization
+        end
       end
 
       context 'by username' do
@@ -323,15 +329,13 @@ resource 'Organizations', type: [:api, :legacy_api] do
         end
 
         delete 'v2/organizations/:guid/auditors' do
-          example 'Disassociate Auditor with the Organization by Username' do
+          example 'Remove Auditor with the Organization by Username' do
             uaa_client = double(:uaa_client)
             allow(CloudController::DependencyLocator.instance).to receive(:username_lookup_uaa_client).and_return(uaa_client)
             allow(uaa_client).to receive(:id_for_username).and_return(associated_auditor_guid)
 
             client.delete "v2/organizations/#{organization.guid}/auditors", MultiJson.dump({ username: 'auditor@example.com' }, pretty: true), headers
-            expect(status).to eq(200)
-
-            standard_entity_response parsed_response, :organization
+            expect(status).to eq(204)
           end
         end
       end
@@ -345,7 +349,7 @@ resource 'Organizations', type: [:api, :legacy_api] do
         VCAP::CloudController::ServicePlanVisibility.make(service_plan: some_service.service_plans.first, organization: space.organization)
       end
 
-      standard_model_list :service, VCAP::CloudController::ServicesController, outer_model: :organization, path: :service
+      standard_model_list :service, VCAP::CloudController::ServicesController, outer_model: :organization, path: :service, exclude_parameters: ['provider']
     end
 
     describe 'Memory Usage (Experimental)' do

@@ -5,8 +5,19 @@ module VCAP::CloudController
   describe ProcessPresenter do
     describe '#present_json' do
       it 'presents the process as json' do
-        app_model          = AppModel.make
-        process            = AppFactory.make(created_at: Time.at(1), app_guid: app_model.guid)
+        app_model = AppModel.make
+
+        process = App.make(
+          app_guid:             app_model.guid,
+          instances:            3,
+          memory:               42,
+          disk_quota:           37,
+          command:              'rackup',
+          metadata:             {},
+          health_check_type:    'process',
+          health_check_timeout: 51,
+          created_at:           Time.at(1)
+        )
         process.updated_at = Time.at(2)
 
         json_result = ProcessPresenter.new.present_json(process)
@@ -20,12 +31,102 @@ module VCAP::CloudController
         }
 
         expect(result['guid']).to eq(process.guid)
-        expect(result['instances']).to eq(process.instances)
-        expect(result['memory_in_mb']).to eq(process.memory)
-        expect(result['disk_in_mb']).to eq(process.disk_quota)
+        expect(result['instances']).to eq(3)
+        expect(result['memory_in_mb']).to eq(42)
+        expect(result['disk_in_mb']).to eq(37)
+        expect(result['command']).to eq('rackup')
+        expect(result['health_check']['type']).to eq('process')
+        expect(result['health_check']['data']['timeout']).to eq(51)
         expect(result['created_at']).to eq('1970-01-01T00:00:01Z')
         expect(result['updated_at']).to eq('1970-01-01T00:00:02Z')
         expect(result['links']).to eq(links)
+      end
+    end
+
+    describe '#present_json_stats' do
+      let(:process) { AppFactory.make }
+      let(:process_presenter) { ProcessPresenter.new }
+      let(:process_usage) { process.type.usage }
+      let(:base_url) { '/v3/chimpanzee-driving-a-boat' }
+      let(:stats_for_app) do
+        {
+          0 => {
+            'state'   => 'RUNNING',
+            'details' => 'some-details',
+            'stats'   => {
+              'name'       => process.name,
+              'uris'       => process.uris,
+              'host'       => 'myhost',
+              'port'       => 8080,
+              'uptime'     => 12345,
+              'mem_quota'  => process[:memory] * 1024 * 1024,
+              'disk_quota' => process[:disk_quota] * 1024 * 1024,
+              'fds_quota'  => process.file_descriptors,
+              'usage'      => {
+                'time' => '2015-12-08 16:54:48 -0800',
+                'cpu'  => 80,
+                'mem'  => 128,
+                'disk' => 1024,
+              }
+            }
+          },
+          1 => {
+            'state' => 'CRASHED',
+            'stats' => {
+              'name'       => process.name,
+              'uris'       => process.uris,
+              'host'       => 'toast',
+              'port'       => 8081,
+              'uptime'     => 42,
+              'mem_quota'  => process[:memory] * 1024 * 1024,
+              'disk_quota' => process[:disk_quota] * 1024 * 1024,
+              'fds_quota'  => process.file_descriptors,
+              'usage'      => {
+                'time' => '2015-03-13 16:54:48 -0800',
+                'cpu'  => 70,
+                'mem'  => 128,
+                'disk' => 1024,
+              }
+            }
+          }
+        }
+      end
+
+      it 'presents the process stats as json' do
+        json_result = process_presenter.present_json_stats(process, stats_for_app, base_url)
+        result      = MultiJson.load(json_result)
+
+        stats = result['resources']
+        expect(stats[0]['type']).to eq(process.type)
+        expect(stats[0]['index']).to eq(0)
+        expect(stats[0]['state']).to eq('RUNNING')
+        expect(stats[0]['host']).to eq('myhost')
+        expect(stats[0]['port']).to eq(8080)
+        expect(stats[0]['uptime']).to eq(12345)
+        expect(stats[0]['mem_quota']).to eq(process[:memory] * 1024 * 1024)
+        expect(stats[0]['disk_quota']).to eq(process[:disk_quota] * 1024 * 1024)
+        expect(stats[0]['fds_quota']).to eq(process.file_descriptors)
+        expect(stats[0]['usage']).to eq({ 'time' => '2015-12-08 16:54:48 -0800',
+                                          'cpu'                                  => 80,
+                                          'mem'                                  => 128,
+                                          'disk'                                 => 1024 })
+        expect(stats[1]['type']).to eq(process.type)
+        expect(stats[1]['index']).to eq(1)
+        expect(stats[1]['state']).to eq('CRASHED')
+        expect(stats[1]['host']).to eq('toast')
+        expect(stats[1]['port']).to eq(8081)
+        expect(stats[1]['uptime']).to eq(42)
+        expect(stats[1]['usage']).to eq({ 'time' => '2015-03-13 16:54:48 -0800',
+                                          'cpu'                                  => 70,
+                                          'mem'                                  => 128,
+                                          'disk'                                 => 1024 })
+      end
+
+      it 'includes a pagination section' do
+        json_result = process_presenter.present_json_stats(process, stats_for_app, base_url)
+        result      = MultiJson.load(json_result)
+
+        expect(result).to have_key('pagination')
       end
     end
 

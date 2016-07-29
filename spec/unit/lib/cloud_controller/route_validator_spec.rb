@@ -4,7 +4,7 @@ module VCAP::CloudController
   describe RouteValidator do
     let(:validator) { RouteValidator.new(routing_api_client, domain_guid, route_attrs) }
     let(:routing_api_client) { double('routing_api', router_group: router_group) }
-    let(:router_group) { double(:router_group, type: router_group_type, guid: router_group_guid) }
+    let(:router_group) { double(:router_group, type: router_group_type, guid: router_group_guid, reservable_ports: [3, 4, 5, 8080]) }
     let(:router_group_type) { 'tcp' }
     let(:router_group_guid) { 'router-group-guid' }
     let(:domain_guid) { domain.guid }
@@ -19,7 +19,7 @@ module VCAP::CloudController
 
       it 'raises a DomainInvalid error' do
         expect { validator.validate }.
-            to raise_error(RouteValidator::DomainInvalid, 'Domain with guid non-existent-domain does not exist')
+          to raise_error(RouteValidator::DomainInvalid, 'Domain with guid non-existent-domain does not exist')
       end
     end
 
@@ -31,7 +31,7 @@ module VCAP::CloudController
 
         it 'raises a RouteInvalid error' do
           expect { validator.validate }.
-              to raise_error(RouteValidator::RouteInvalid, 'For TCP routes you must specify a port or request a random one.')
+            to raise_error(RouteValidator::RouteInvalid, 'For TCP routes you must specify a port or request a random one.')
         end
       end
     end
@@ -42,7 +42,7 @@ module VCAP::CloudController
 
         it 'raises a RouteInvalid error' do
           expect { validator.validate }.
-              to raise_error(RouteValidator::RouteInvalid, 'Port is supported for domains of TCP router groups only.')
+            to raise_error(RouteValidator::RouteInvalid, 'Port is supported for domains of TCP router groups only.')
         end
       end
 
@@ -51,12 +51,12 @@ module VCAP::CloudController
           expect { validator.validate }.not_to raise_error
         end
 
-        context 'with an invalid port' do
+        context 'with port that is not part of the reservable port range' do
           let(:port) { 1023 }
 
           it 'raises a RouteInvalid error' do
             expect { validator.validate }.
-                to raise_error(RouteValidator::RouteInvalid, 'Port must within the range 1024-65535.')
+              to raise_error(RouteValidator::RouteInvalid, 'Port must be one of the reservable ports.')
           end
         end
 
@@ -64,7 +64,14 @@ module VCAP::CloudController
           let(:host) { 'abc' }
           it 'raises a RouteInvalid error' do
             expect { validator.validate }.
-                to raise_error(RouteValidator::RouteInvalid, 'Host and path are not supported, as domain belongs to a TCP router group.')
+              to raise_error(RouteValidator::RouteInvalid, 'Host and path are not supported, as domain belongs to a TCP router group.')
+          end
+        end
+
+        context 'host is empty in request' do
+          let(:host) { '' }
+          it 'does not raise an error' do
+            expect { validator.validate }.not_to raise_error
           end
         end
 
@@ -72,7 +79,14 @@ module VCAP::CloudController
           let(:path) { '/fake/path' }
           it 'raises a RouteInvalid error' do
             expect { validator.validate }.
-                to raise_error(RouteValidator::RouteInvalid, 'Host and path are not supported, as domain belongs to a TCP router group.')
+              to raise_error(RouteValidator::RouteInvalid, 'Host and path are not supported, as domain belongs to a TCP router group.')
+          end
+        end
+
+        context 'path is empty in request' do
+          let(:path) { '' }
+          it 'does not raise an error' do
+            expect { validator.validate }.not_to raise_error
           end
         end
 
@@ -88,7 +102,7 @@ module VCAP::CloudController
                 'use a domain of a different router group.'
 
             expect { validator.validate }.
-                to raise_error(RouteValidator::RoutePortTaken, error_message)
+              to raise_error(RouteValidator::RoutePortTaken, error_message)
           end
         end
 
@@ -109,7 +123,7 @@ module VCAP::CloudController
 
         it 'rejects the request with a RouteInvalid error' do
           expect { validator.validate }.
-              to raise_error(RouteValidator::RouteInvalid, 'Port is supported for domains of TCP router groups only.')
+            to raise_error(RouteValidator::RouteInvalid, 'Port is supported for domains of TCP router groups only.')
         end
       end
 
@@ -118,32 +132,41 @@ module VCAP::CloudController
 
         it 'rejects the request with a RouteInvalid error' do
           expect { validator.validate }.
-              to raise_error(RouteValidator::RouteInvalid, 'Port is supported for domains of TCP router groups only.')
+            to raise_error(RouteValidator::RouteInvalid, 'Port is supported for domains of TCP router groups only.')
         end
+      end
+    end
+
+    context 'when the routing api is disabled' do
+      let(:validator) { RouteValidator.new(RoutingApi::DisabledClient.new, domain_guid, route_attrs) }
+
+      it 'raises a routing api disabled error' do
+        expect { validator.validate }.
+          to raise_error(RoutingApi::RoutingApiDisabled)
       end
     end
 
     context 'when the routing api client raises a UaaUnavailable error' do
       before do
         allow(routing_api_client).to receive(:router_group).
-                                         and_raise(RoutingApi::Client::UaaUnavailable)
+          and_raise(RoutingApi::UaaUnavailable)
       end
 
       it 'does not rescue the exception' do
         expect { validator.validate }.
-            to raise_error(RoutingApi::Client::UaaUnavailable)
+          to raise_error(RoutingApi::UaaUnavailable)
       end
     end
 
     context 'when the routing api client raises a RoutingApiUnavailable error' do
       before do
         allow(routing_api_client).to receive(:router_group).
-                                         and_raise(RoutingApi::Client::RoutingApiUnavailable)
+          and_raise(RoutingApi::RoutingApiUnavailable)
       end
 
       it 'does not rescue the exception' do
         expect { validator.validate }.
-            to raise_error(RoutingApi::Client::RoutingApiUnavailable)
+          to raise_error(RoutingApi::RoutingApiUnavailable)
       end
     end
   end

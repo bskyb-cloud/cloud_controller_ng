@@ -4,10 +4,12 @@ module VCAP::CloudController
       attribute :name,                       String
       attribute :non_basic_services_allowed, Message::Boolean
       attribute :total_services,             Integer
+      attribute :total_service_keys,         Integer, default: -1
       attribute :total_routes,               Integer
       attribute :memory_limit,               Integer
       attribute :instance_memory_limit,      Integer, default: nil
       attribute :app_instance_limit,         Integer, default: nil
+      attribute :app_task_limit,             Integer, default: 5
 
       to_one :organization
       to_many :spaces, exclude_in: [:create, :update]

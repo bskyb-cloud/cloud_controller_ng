@@ -5,7 +5,7 @@ module VCAP::CloudController
     describe Runner do
       let(:messenger) { instance_double(Messenger) }
       let(:app) { AppFactory.make(state: 'STARTED') }
-      let(:protocol) { instance_double(Diego::Traditional::Protocol, desire_app_message: {}) }
+      let(:protocol) { instance_double(Diego::Protocol, desire_app_message: {}) }
       let(:default_health_check_timeout) { 9999 }
 
       subject(:runner) { Runner.new(app, messenger, protocol, default_health_check_timeout) }
@@ -71,6 +71,18 @@ module VCAP::CloudController
           it 'desires an app, relying on its state to convey the change' do
             expect(messenger).to receive(:send_desire_request).with(app, default_health_check_timeout)
             runner.update_routes
+          end
+        end
+
+        context 'when an app is in staging status' do
+          let(:app) { AppFactory.make(state: 'STARTED', package_state: 'PENDING', staging_task_id: 'some-id') }
+
+          it 'should not update routes' do
+            allow(messenger).to receive(:send_desire_request)
+
+            runner.update_routes
+
+            expect(messenger).to_not have_received(:send_desire_request)
           end
         end
 

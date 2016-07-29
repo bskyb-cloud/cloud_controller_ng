@@ -1,4 +1,5 @@
 require 'spec_helper'
+require_relative '../../../../../lib/vcap/vars_builder'
 
 module VCAP::CloudController
   describe Dea::StartAppMessage do
@@ -9,8 +10,8 @@ module VCAP::CloudController
         num_service_instances.times do
           instance = ManagedServiceInstance.make(space: app.space)
           binding = ServiceBinding.make(
-              app: app,
-              service_instance: instance
+            app: app,
+            service_instance: instance
           )
           app.add_service_binding(binding)
           app.type = 'worker'
@@ -41,8 +42,9 @@ module VCAP::CloudController
         expect(res[:egress_network_rules]).to eq([])
         expect(res[:stack]).to eq(app.stack.name)
 
-        expect(app.vcap_application).to be
-        expect(res[:vcap_application]).to eql(app.vcap_application)
+        vars_builder = VCAP::VarsBuilder.new(app)
+        vcap_application = vars_builder.vcap_application
+        expect(res[:vcap_application]).to eql(vcap_application)
 
         expect(res[:index]).to eq(1)
       end
@@ -120,7 +122,7 @@ module VCAP::CloudController
 
       describe 'evironment variables' do
         before do
-          app.environment_json   = { 'KEY' => 'value' }
+          app.environment_json = { 'KEY' => 'value' }
         end
 
         it 'includes app environment variables' do

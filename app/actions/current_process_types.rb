@@ -12,7 +12,7 @@ module VCAP::CloudController
     end
 
     def process_current_droplet(app)
-      @logger.info('proccess_current_droplet', guid: app.guid)
+      @logger.info('process_current_droplet', guid: app.guid)
 
       if app.droplet && app.droplet.process_types
         @logger.debug('using the droplet process_types', guid: app.guid)
@@ -51,9 +51,17 @@ module VCAP::CloudController
           space: app.space,
           name: "v3-#{app.name}-#{type}",
           metadata: {},
-          instances: type == 'web' ? 1 : 0
+          instances: type == 'web' ? 1 : 0,
+          health_check_type: type == 'web' ? 'port' : 'process'
         }
-        app.add_process(message)
+
+        app.class.db.transaction do
+          process = app.add_process(message)
+
+          RouteMappingModel.where(app_guid: app.guid, process_type: type).select_map(:route_guid).each do |route_guid|
+            process.add_route_by_guid(route_guid)
+          end
+        end
       end
     end
 

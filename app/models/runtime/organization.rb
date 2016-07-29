@@ -1,7 +1,7 @@
 module VCAP::CloudController
   class Organization < Sequel::Model
-    ORG_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/.freeze
-    ORG_STATUS_VALUES = %w(active suspended)
+    ORG_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/
+    ORG_STATUS_VALUES = %w(active suspended).freeze
 
     one_to_many :spaces
 
@@ -14,6 +14,12 @@ module VCAP::CloudController
     one_to_many :apps,
                 dataset: -> { App.filter(space: spaces) }
 
+    one_to_many :app_models,
+                dataset: -> { AppModel.filter(space: spaces) }
+
+    one_to_many :tasks,
+                dataset: -> { TaskModel.filter(app: app_models) }
+
     one_to_many :app_events,
                 dataset: -> { VCAP::CloudController::AppEvent.filter(app: apps) }
 
@@ -21,7 +27,7 @@ module VCAP::CloudController
       :private_domains,
       class: 'VCAP::CloudController::PrivateDomain',
       right_key: :private_domain_id,
-      dataset: proc { | r |
+      dataset: proc { |r|
         VCAP::CloudController::Domain.dataset.where(owning_organization_id: self.id).
           or(id: db[r.join_table_source].select(r.qualified_right_key).where(r.predicate_key => self.id))
       },
@@ -103,7 +109,7 @@ module VCAP::CloudController
     def self.user_visibility_filter(user)
       {
         id: dataset.join_table(:inner, :organizations_managers, organization_id: :id, user_id: user.id).select(:organizations__id).union(
-            dataset.join_table(:inner, :organizations_users, organization_id: :id, user_id: user.id).select(:organizations__id)
+          dataset.join_table(:inner, :organizations_users, organization_id: :id, user_id: user.id).select(:organizations__id)
           ).union(
             dataset.join_table(:inner, :organizations_billing_managers, organization_id: :id, user_id: user.id).select(:organizations__id)
           ).union(
@@ -131,6 +137,18 @@ module VCAP::CloudController
 
     def has_remaining_memory(mem)
       memory_remaining >= mem
+    end
+
+    def instance_memory_limit
+      quota_definition ? quota_definition.instance_memory_limit : QuotaDefinition::UNLIMITED
+    end
+
+    def app_task_limit
+      quota_definition ? quota_definition.app_task_limit : QuotaDefinition::UNLIMITED
+    end
+
+    def meets_max_task_limit?
+      app_task_limit == running_and_pending_tasks_count
     end
 
     def active?
@@ -171,6 +189,10 @@ module VCAP::CloudController
     def memory_remaining
       memory_used = apps_dataset.where(state: 'STARTED').sum(Sequel.*(:memory, :instances)) || 0
       quota_definition.memory_limit - memory_used
+    end
+
+    def running_and_pending_tasks_count
+      tasks_dataset.where(state: [TaskModel::PENDING_STATE, TaskModel::RUNNING_STATE]).count
     end
   end
 end

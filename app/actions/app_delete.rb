@@ -1,8 +1,15 @@
 require 'jobs/runtime/blobstore_delete.rb'
 require 'jobs/v3/buildpack_cache_delete'
+require 'actions/package_delete'
+require 'actions/task_delete'
+require 'actions/droplet_delete'
+require 'actions/process_delete'
+require 'actions/route_mapping_delete'
 
 module VCAP::CloudController
   class AppDelete
+    class InvalidDelete < StandardError; end
+
     attr_reader :user_guid, :user_email
 
     def initialize(user_guid, user_email)
@@ -12,14 +19,12 @@ module VCAP::CloudController
     end
 
     def delete(apps)
-      apps = [apps] unless apps.is_a?(Array)
+      apps = Array(apps)
 
       apps.each do |app|
-        PackageDelete.new.delete(packages_to_delete(app))
-        DropletDelete.new.delete(droplets_to_delete(app))
-        ProcessDelete.new.delete(processes_to_delete(app))
-        delete_buildpack_cache(app)
-        app.remove_all_routes
+        raise_if_service_bindings_exist!(app)
+
+        delete_subresources(app)
 
         Repositories::Runtime::AppEventRepository.new.record_app_delete_request(
           app,
@@ -34,6 +39,19 @@ module VCAP::CloudController
 
     private
 
+    def delete_subresources(app)
+      PackageDelete.new.delete(packages_to_delete(app))
+      TaskDelete.new(user_guid, user_email).delete(tasks_to_delete(app))
+      DropletDelete.new.delete(droplets_to_delete(app))
+      ProcessDelete.new.delete(processes_to_delete(app))
+      RouteMappingDelete.new(user_guid, user_email).delete(route_mappings_to_delete(app))
+      delete_buildpack_cache(app)
+    end
+
+    def route_mappings_to_delete(app)
+      RouteMappingModel.where(app_guid: app.guid)
+    end
+
     def delete_buildpack_cache(app)
       delete_job = Jobs::V3::BuildpackCacheDelete.new(app.guid)
       Jobs::Enqueuer.new(delete_job, queue: 'cc-generic').enqueue
@@ -47,6 +65,10 @@ module VCAP::CloudController
       app_model.droplets_dataset.
         select(:"#{DropletModel.table_name}__guid",
         :"#{DropletModel.table_name}__id",
+        :"#{DropletModel.table_name}__state",
+        :"#{DropletModel.table_name}__memory_limit",
+        :"#{DropletModel.table_name}__app_guid",
+        :"#{DropletModel.table_name}__package_guid",
         :"#{DropletModel.table_name}__droplet_hash").all
     end
 
@@ -56,6 +78,16 @@ module VCAP::CloudController
         :"#{ProcessModel.table_name}__id",
         :"#{ProcessModel.table_name}__app_guid",
         :"#{ProcessModel.table_name}__name").all
+    end
+
+    def tasks_to_delete(app_model)
+      app_model.tasks_dataset
+    end
+
+    def raise_if_service_bindings_exist!(app)
+      unless app.service_bindings_dataset.empty?
+        raise InvalidDelete.new('Please delete the service_bindings associations for your apps.')
+      end
     end
   end
 end

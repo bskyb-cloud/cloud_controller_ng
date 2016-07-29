@@ -18,7 +18,7 @@ resource 'User Provided Service Instances', type: [:api, :legacy_api] do
       field :space_guid, 'The guid of the space in which the instance will be created', required: true
       field :syslog_drain_url, 'URL to which logs will be streamed for bound applications.', required: false, example_values: ['syslog://example.com']
       field :credentials, 'A hash exposed in the VCAP_SERVICES environment variable for bound applications.', required: false, example_values: [{ somekey: 'somevalue' }.to_s]
-      field :route_service_url, 'URL to which requests for bound routes will be forwarded.', required: false, example_values: ['https://logger.example.com'], experimental: true
+      field :route_service_url, 'URL to which requests for bound routes will be forwarded.', required: false, example_values: ['https://logger.example.com']
 
       example 'Creating a User Provided Service Instance' do
         space_guid = VCAP::CloudController::Space.make.guid
@@ -36,9 +36,10 @@ resource 'User Provided Service Instances', type: [:api, :legacy_api] do
     end
 
     put '/v2/user_provided_service_instances/:guid' do
-      field :name, 'A name for the service instance', required: true, example_values: ['my-user-provided-instance']
+      field :name, 'A name for the service instance', required: false, example_values: ['my-user-provided-instance']
       field :syslog_drain_url, 'The url for the syslog_drain to direct to', required: false, example_values: ['syslog://example.com']
       field :credentials, 'A hash that can be used to store credentials', required: false, example_values: [{ somekey: 'somevalue' }.to_s]
+      field :route_service_url, 'URL to which requests for bound routes will be forwarded.', required: false, example_values: ['https://logger.example.com']
 
       example 'Updating a User Provided Service Instance' do
         request_hash = {
@@ -60,7 +61,9 @@ resource 'User Provided Service Instances', type: [:api, :legacy_api] do
 
       field :guid, 'The guid of the Service Instance.', required: true
 
-      standard_model_list :service_binding, VCAP::CloudController::ServiceBindingsController, outer_model: :user_provided_service_instance
+      standard_model_list :service_binding, VCAP::CloudController::ServiceBindingsController,
+        outer_model: :user_provided_service_instance,
+        exclude_parameters: ['service_instance_guid']
     end
 
     describe 'Routes' do
@@ -77,14 +80,12 @@ resource 'User Provided Service Instances', type: [:api, :legacy_api] do
         associated_route.save
       end
 
-      field :route_guid, 'The guid of the route'
-
       standard_model_list :routes, VCAP::CloudController::RoutesController, outer_model: :user_provided_service_instance
-      nested_model_associate :route, :user_provided_service_instance, experimental: true
+      nested_model_associate :route, :user_provided_service_instance
 
       # Can't user nested_model_remove because it expects a 201
       delete '/v2/user_provided_service_instance/:guid/routes/:route_guid' do
-        example 'Remove Route from the User Provided Service Instance (experimental)' do
+        example 'Remove Route from the User Provided Service Instance' do
           path = "/v2/user_provided_service_instances/#{guid}/routes/#{associated_route_guid}"
           client.delete path, '', headers
           expect(status).to eq 204

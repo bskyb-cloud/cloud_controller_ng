@@ -1,6 +1,6 @@
 module VCAP::CloudController
   class FeatureFlag < Sequel::Model
-    FF_ERROR_MESSAGE_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/.freeze
+    FF_ERROR_MESSAGE_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/
 
     class UndefinedFeatureFlagError < StandardError
     end
@@ -15,6 +15,9 @@ module VCAP::CloudController
       diego_docker: false,
       set_roles_by_username: true,
       unset_roles_by_username: true,
+      task_creation: false,
+      space_scoped_private_broker_creation: true,
+      space_developer_env_var_visibility: true
     }.freeze
 
     export_attributes :name, :enabled, :error_message

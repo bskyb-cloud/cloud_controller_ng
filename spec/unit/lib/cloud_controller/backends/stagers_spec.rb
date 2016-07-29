@@ -6,8 +6,7 @@ module VCAP::CloudController
 
     let(:message_bus) { instance_double(CfMessageBus::MessageBus) }
     let(:dea_pool) { instance_double(Dea::Pool) }
-    let(:stager_pool) { instance_double(Dea::StagerPool) }
-    let(:runners) { Runners.new(config, message_bus, dea_pool, stager_pool) }
+    let(:runners) { Runners.new(config, message_bus, dea_pool) }
     let(:package_hash) { 'fake-package-hash' }
     let(:buildpack) { instance_double(AutoDetectionBuildpack, custom?: false) }
     let(:docker_image) { nil }
@@ -24,7 +23,7 @@ module VCAP::CloudController
     end
 
     subject(:stagers) do
-      Stagers.new(config, message_bus, dea_pool, stager_pool, runners)
+      Stagers.new(config, message_bus, dea_pool, runners)
     end
 
     describe '#validate_app' do
@@ -150,19 +149,6 @@ module VCAP::CloudController
           expect(stager).to be_a(Diego::Stager)
         end
 
-        context 'when the app is a traditional buildpack app' do
-          let(:docker_image) { nil }
-
-          before do
-            locator = CloudController::DependencyLocator.instance
-            expect(locator).to receive(:blobstore_url_generator).with(true).and_call_original
-          end
-
-          it 'uses a service dns name blobstore url generator' do
-            expect(stager).to_not be_nil
-          end
-        end
-
         context 'when the app has a docker image' do
           let(:docker_image) { 'foobar' }
 
@@ -187,11 +173,50 @@ module VCAP::CloudController
 
     describe '#stager_for_package' do
       let(:package) { double(:package, app: app) }
+      let(:lifecycle_type) { 'buildpack' }
 
-      context 'when staging with Diego' do
-        it 'finds a Diego backend' do
-          stager = stagers.stager_for_package(package)
-          expect(stager).to be_a(Diego::V3::Stager)
+      it 'finds a Diego backend' do
+        stager = stagers.stager_for_package(package, lifecycle_type)
+        expect(stager).to be_a(Diego::V3::Stager)
+      end
+
+      context 'buildpack lifecycle' do
+        let(:lifecycle_type) { 'buildpack' }
+
+        it 'uses the v3 buildpack lifecycle protocol' do
+          allow(Diego::Buildpack::V3::LifecycleProtocol).to receive(:new).and_call_original
+
+          stagers.stager_for_package(package, lifecycle_type)
+
+          expect(Diego::Buildpack::V3::LifecycleProtocol).to have_received(:new)
+        end
+
+        it 'uses the v3 buildpack staging completion handler' do
+          allow(Diego::Buildpack::V3::StagingCompletionHandler).to receive(:new).and_call_original
+
+          stagers.stager_for_package(package, lifecycle_type)
+
+          expect(Diego::Buildpack::V3::StagingCompletionHandler).to have_received(:new)
+        end
+      end
+
+      context 'docker lifecycle' do
+        let(:lifecycle_type) { 'docker' }
+
+        it 'uses the v3 docker lifecycle protocol' do
+          allow(Diego::Docker::V3::LifecycleProtocol).to receive(:new).and_call_original
+
+          stagers.stager_for_package(package, lifecycle_type)
+
+          expect(Diego::Docker::V3::LifecycleProtocol).to have_received(:new)
+        end
+
+        it 'uses the v3 buildpack staging completion handler' do
+          allow(Diego::Docker::V3::StagingCompletionHandler).to receive(:new).and_call_original
+
+          stagers.stager_for_package(package, lifecycle_type)
+
+          expect(Diego::Docker::V3::StagingCompletionHandler).to have_received(:new)
         end
       end
     end

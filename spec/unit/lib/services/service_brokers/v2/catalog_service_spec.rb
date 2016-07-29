@@ -140,6 +140,14 @@ module VCAP::Services::ServiceBrokers::V2
         expect(service.errors.messages).to include 'Service tags must be an array of strings, but has value [123]'
       end
 
+      it 'validates that @tags is 2048 characters or less' do
+        attrs = build_valid_service_attrs(name: 'dummy-service', tags: ['a' * 2049])
+        service = CatalogService.new(instance_double(VCAP::CloudController::ServiceBroker), attrs)
+        expect(service).not_to be_valid
+
+        expect(service.errors.messages).to include "Tags for the service #{service.name} must be 2048 characters or less."
+      end
+
       it 'validates that @requires is an array of strings' do
         attrs = build_valid_service_attrs(requires: 'a string')
         service = CatalogService.new(instance_double(VCAP::CloudController::ServiceBroker), attrs)
@@ -400,6 +408,26 @@ module VCAP::Services::ServiceBrokers::V2
 
         it 'is nil' do
           expect(catalog_service.cc_service).to be_nil
+        end
+      end
+    end
+
+    describe '#route_service?' do
+      let(:service_broker) { VCAP::CloudController::ServiceBroker.make }
+
+      context 'when requires include "route_forwarding"' do
+        let(:service) { CatalogService.new(service_broker, 'requires' => ['route_forwarding']) }
+
+        it 'returns true' do
+          expect(service.route_service?).to be_truthy
+        end
+      end
+
+      context 'when requires does not include "route_forwarding"' do
+        let(:service) { CatalogService.new(service_broker, 'requires' => []) }
+
+        it 'returns false' do
+          expect(service.route_service?).to be_falsey
         end
       end
     end

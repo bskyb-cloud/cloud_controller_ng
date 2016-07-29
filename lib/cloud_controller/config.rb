@@ -9,13 +9,12 @@ require 'repositories/services/event_repository'
 
 # Config template for cloud controller
 module VCAP::CloudController
-  # rubocop:disable ClassLength
   class Config < VCAP::Config
     define_schema do
       {
         :external_port => Integer,
         :external_protocol => String,
-        optional(:internal_service_hostname) => String,
+        :internal_service_hostname => String,
         :info => {
           name: String,
           build: String,
@@ -42,6 +41,9 @@ module VCAP::CloudController
         :failed_jobs => {
           cutoff_age_in_days: Fixnum
         },
+        :completed_tasks => {
+          cutoff_age_in_days: Fixnum
+        },
         :default_app_memory => Fixnum,
         :default_app_disk_in_mb => Fixnum,
         optional(:maximum_app_disk_in_mb) => Fixnum,
@@ -63,7 +65,7 @@ module VCAP::CloudController
         :uaa => {
           :url                => String,
           :resource_id        => String,
-          optional(:symmetric_secret)   => String,
+          optional(:symmetric_secret) => String,
         },
 
         :logging => {
@@ -240,6 +242,10 @@ module VCAP::CloudController
           routing_client_name: String,
           routing_client_secret: String,
         },
+
+        optional(:route_services_enabled) => bool,
+
+        optional(:reserved_private_domains) => String,
       }
     end
 
@@ -260,6 +266,8 @@ module VCAP::CloudController
 
         QuotaDefinition.configure(config)
         Stack.configure(config[:stacks_file])
+
+        PrivateDomain.configure(config[:reserved_private_domains])
 
         dependency_locator = CloudController::DependencyLocator.instance
         nsync_client = Diego::NsyncClient.new(@config)
@@ -283,17 +291,16 @@ module VCAP::CloudController
         dependency_locator.register(:app_event_repository, Repositories::Runtime::AppEventRepository.new)
 
         blobstore_url_generator = dependency_locator.blobstore_url_generator
-        stager_pool = Dea::StagerPool.new(@config, message_bus, blobstore_url_generator)
         dea_pool = Dea::Pool.new(@config, message_bus)
-        runners = Runners.new(@config, message_bus, dea_pool, stager_pool)
-        stagers = Stagers.new(@config, message_bus, dea_pool, stager_pool, runners)
+        runners = Runners.new(@config, message_bus, dea_pool)
+        stagers = Stagers.new(@config, message_bus, dea_pool, runners)
 
         dependency_locator.register(:stagers, stagers)
         dependency_locator.register(:runners, runners)
         dependency_locator.register(:instances_reporters, InstancesReporters.new(tps_client, hm_client))
         dependency_locator.register(:index_stopper, IndexStopper.new(runners))
 
-        Dea::Client.configure(@config, message_bus, dea_pool, stager_pool, blobstore_url_generator)
+        Dea::Client.configure(@config, message_bus, dea_pool, blobstore_url_generator)
 
         AppObserver.configure(stagers, runners)
 
@@ -316,11 +323,11 @@ module VCAP::CloudController
           # When Rails is present, NewRelic adds itself to the Rails initializers instead
           # of initializing immediately.
 
-          if Rails.env.test? && !ENV['NRCONFIG']
-            opts = { env: ENV['NEW_RELIC_ENV'] || 'production', monitor_mode: false }
-          else
-            opts = { env: ENV['NEW_RELIC_ENV'] || 'production' }
-          end
+          opts = if Rails.env.test? && !ENV['NRCONFIG']
+                   { env: ENV['NEW_RELIC_ENV'] || 'production', monitor_mode: false }
+                 else
+                   { env: ENV['NEW_RELIC_ENV'] || 'production' }
+                 end
 
           NewRelic::Agent.manual_start(opts)
           run_initializers_in_directory(config, '../../../config/newrelic/initializers/*.rb')
@@ -331,7 +338,7 @@ module VCAP::CloudController
       def run_initializers_in_directory(config, path)
         Dir.glob(File.expand_path(path, __FILE__)).each do |file|
           require file
-          method = File.basename(file).sub('.rb', '').gsub('-', '_')
+          method = File.basename(file).sub('.rb', '').tr('-', '_')
           CCInitializers.send(method, config)
         end
       end
@@ -381,7 +388,11 @@ module VCAP::CloudController
       def sanitize_staging_auth(config)
         auth = config[:staging][:auth]
         auth[:user] = escape_userinfo(auth[:user]) unless valid_in_userinfo?(auth[:user])
-        auth[:password] = escape_userinfo(auth[:password]) unless valid_in_userinfo?(auth[:password])
+        auth[:password] = escape_password(auth[:password]) unless valid_in_userinfo?(auth[:password])
+      end
+
+      def escape_password(value)
+        escape_userinfo(value).gsub(/\"/, '%22')
       end
 
       def escape_userinfo(value)

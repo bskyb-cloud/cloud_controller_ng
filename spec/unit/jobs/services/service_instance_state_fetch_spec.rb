@@ -30,16 +30,8 @@ module VCAP::CloudController
 
         let(:name) { 'fake-name' }
 
-        let(:service_event_repository) do
-          Repositories::Services::EventRepository.new(service_event_repository_opts)
-        end
-
-        let(:service_event_repository_opts) do
-          {
-            user_email: 'fake@mail.foo',
-            user: User.make,
-          }
-        end
+        let(:user) { User.make }
+        let(:user_email) { 'fake@mail.foo' }
 
         let(:status) { 200 }
         let(:state) { 'succeeded' }
@@ -63,14 +55,15 @@ module VCAP::CloudController
             name,
             client_attrs,
             service_instance.guid,
-            service_event_repository,
+            user.guid,
+            user_email,
             request_attrs,
           )
         end
 
         def run_job(job)
           Jobs::Enqueuer.new(job, { queue: 'cc-generic', run_at: Delayed::Job.db_time_now }).enqueue
-          expect(Delayed::Worker.new.work_off).to eq [1, 0]
+          execute_all_jobs(expected_successes: 1, expected_failures: 0)
         end
 
         describe '#initialize' do
@@ -96,21 +89,6 @@ module VCAP::CloudController
 
             it 'enqueues the job using the maximum polling interval' do
               expect(job.poll_interval).to eq 24.hours
-            end
-          end
-
-          context 'when the caller provides repository_opts instead of a repository' do
-            it 'uses the opts to construct a repository' do
-              job =  VCAP::CloudController::Jobs::Services::ServiceInstanceStateFetch.new(
-                  name,
-                  client_attrs,
-                  service_instance.guid,
-                  nil,
-                  request_attrs,
-                  nil,
-                  service_event_repository_opts
-              )
-              expect(job.services_event_repository).to be_a Repositories::Services::EventRepository
             end
           end
         end
@@ -231,10 +209,10 @@ module VCAP::CloudController
               end
             end
 
-            context 'when there is no repository' do
-              let(:service_event_repository) { nil }
-
+            context 'when the user has gone away' do
               it 'should not create an audit event' do
+                user.destroy
+
                 run_job(job)
 
                 expect(Event.find(type: 'audit.service_instance.create')).to be_nil
@@ -291,7 +269,7 @@ module VCAP::CloudController
 
               Timecop.freeze(Time.now + 1.hour) do
                 Delayed::Job.last.invoke_job
-                expect(Delayed::Worker.new.work_off).to eq([1, 0])
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
               end
             end
 
@@ -354,13 +332,13 @@ module VCAP::CloudController
             before do
               run_job(job)
               Timecop.travel(Time.now + max_duration.minutes + 1.minute) do
-                expect(Delayed::Worker.new.work_off).to eq([1, 0])
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
               end
             end
 
             it 'should not enqueue another fetch job' do
               Timecop.freeze(Time.now + max_duration.minutes + 1.minute) do
-                expect(Delayed::Worker.new.work_off).to eq([0, 0])
+                execute_all_jobs(expected_successes: 0, expected_failures: 0)
               end
             end
 
@@ -380,7 +358,7 @@ module VCAP::CloudController
               run_job(job)
 
               Timecop.freeze(Time.now + job.poll_interval * 2)
-              expect(Delayed::Worker.new.work_off).to eq([0, 0])
+              execute_all_jobs(expected_successes: 0, expected_failures: 0)
             end
           end
 
@@ -394,12 +372,12 @@ module VCAP::CloudController
 
               # should run enqueued job
               Timecop.travel(Time.now + max_duration.minutes - 1.minute) do
-                expect(Delayed::Worker.new.work_off).to eq([1, 0])
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
               end
 
               # should not run enqueued job
               Timecop.travel(Time.now + max_duration.minutes) do
-                expect(Delayed::Worker.new.work_off).to eq([0, 0])
+                execute_all_jobs(expected_successes: 0, expected_failures: 0)
               end
             end
 
@@ -431,18 +409,28 @@ module VCAP::CloudController
               first_run_time = Time.now
 
               Jobs::Enqueuer.new(job, { queue: 'cc-generic', run_at: first_run_time }).enqueue
-              expect(Delayed::Worker.new.work_off).to eq([1, 0])
+              execute_all_jobs(expected_successes: 1, expected_failures: 0)
               expect(Delayed::Job.count).to eq(1)
 
               old_next_run_time = first_run_time + default_polling_interval.seconds + 1.second
               Timecop.travel(old_next_run_time) do
-                expect(Delayed::Worker.new.work_off).to eq([0, 0])
+                execute_all_jobs(expected_successes: 0, expected_failures: 0)
               end
 
               new_next_run_time = first_run_time + new_polling_interval.seconds + 1.second
               Timecop.travel(new_next_run_time) do
-                expect(Delayed::Worker.new.work_off).to eq([1, 0])
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
               end
+            end
+          end
+
+          context 'when the service instance has been purged' do
+            it 'exits without exploding' do
+              service_instance.destroy
+
+              expect {
+                run_job(job)
+              }.not_to raise_error
             end
           end
         end

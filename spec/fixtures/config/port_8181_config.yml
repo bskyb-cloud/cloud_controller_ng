@@ -2,6 +2,7 @@
 local_route: 127.0.0.1
 external_port: 8181
 pid_filename: /tmp/cloud_controller.8181.pid
+internal_service_hostname: cc.internal.cf
 
 info:
   name: "vcap"
@@ -32,6 +33,9 @@ audit_events:
   cutoff_age_in_days: 31
 
 failed_jobs:
+  cutoff_age_in_days: 31
+
+completed_tasks:
   cutoff_age_in_days: 31
 
 default_app_memory: 1024 #mb

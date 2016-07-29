@@ -23,8 +23,8 @@ module VCAP::CloudController
 
       context '#error(job, exception)' do
         let(:job) { double('Job').as_null_object }
-        let(:error_presenter) { double('ErrorPresenter', error_hash: 'sanitized exception hash').as_null_object }
-        let(:background_logger) { double('Steno').as_null_object }
+        let(:error_presenter) { instance_double(ErrorPresenter, error_hash: 'sanitized exception hash').as_null_object }
+        let(:background_logger) { instance_double(Steno::Logger).as_null_object }
 
         before do
           allow(Steno).to receive(:logger).and_return(background_logger)
@@ -58,8 +58,8 @@ module VCAP::CloudController
 
         it 'saves the exception on the job as cf_api_error' do
           expect(YAML).to receive(:dump).with('sanitized exception hash').and_return('marshaled hash')
-          expect(job).to receive('cf_api_error=').with('marshaled hash')
-          expect(job).to receive('save')
+          expect(job).to receive(:cf_api_error=).with('marshaled hash')
+          expect(job).to receive(:save)
 
           exception_catching_job.error(job, 'exception')
         end
@@ -70,6 +70,34 @@ module VCAP::CloudController
           expect(Steno).to receive(:logger).with('cc.background').and_return(background_logger)
           expect(background_logger).to receive(:info).with('log message')
           exception_catching_job.error(job, 'exception')
+        end
+
+        describe 'job priority' do
+          context 'when the job priority starts at 0' do
+            before do
+              allow(job).to receive(:priority).and_return(0)
+            end
+
+            it 'deprioritizes the job to priority 1' do
+              exception_catching_job.error(job, 'exception')
+
+              expect(job).to have_received(:priority=).with(1).ordered
+              expect(job).to have_received(:save).ordered
+            end
+          end
+
+          context 'when the job priority is greater than 0' do
+            before do
+              allow(job).to receive(:priority).and_return(17)
+            end
+
+            it 'doubles the job priority' do
+              exception_catching_job.error(job, 'exception')
+
+              expect(job).to have_received(:priority=).with(34).ordered
+              expect(job).to have_received(:save).ordered
+            end
+          end
         end
       end
 

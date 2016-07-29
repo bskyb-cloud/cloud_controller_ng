@@ -236,7 +236,7 @@
 60015:
   name: ServiceInstanceTagsTooLong
   http_code: 400
-  message: "Combined length of tags must be 255 characters or less."
+  message: "Combined length of tags for service %s must be 2048 characters or less."
 
 60016:
   name: AsyncServiceInstanceOperationInProgress
@@ -256,12 +256,32 @@
 60019:
   name: ServiceInstanceRouteServiceURLInvalid
   http_code: 400
-  message: "The service instance cannot be created with the invalid route service url: %s"
+  message: "The route service URL is invalid: %s"
 
 60020:
   name: ServiceInstanceRouteServiceRequiresDiego
   http_code: 400
   message: "Route services are only supported for apps on Diego. Unbind the service instance from the route or enable Diego for the app."
+
+60021:
+  name: ServiceInstanceRouteServiceDisabled
+  http_code: 403
+  message: "Support for route services is disabled"
+
+60022:
+  name: AppPortMappingRequiresDiego
+  http_code: 400
+  message: "App ports are supported for Diego apps only."
+
+60023:
+  name: RoutePortNotEnabledOnApp
+  http_code: 400
+  message: "Routes can only be mapped to ports already enabled for the application."
+
+60024:
+  name: MultipleAppPortsMappedDiegoToDea
+  http_code: 400
+  message: "The app has routes mapped to multiple ports. Multiple ports are supported for Diego only. Please unmap routes from all but one app port. Multiple routes can be mapped to the same port if desired."
 
 70001:
   name: RuntimeInvalid
@@ -428,6 +448,11 @@
   http_code: 400
   message: A route may only be bound to a single service instance
 
+130008:
+  name: ServiceInstanceAlreadyBoundToSameRoute
+  http_code: 400
+  message: "The route and service instance are already bound."
+
 140001:
   name: LegacyApiWithoutDefaultSpace
   http_code: 400
@@ -457,6 +482,11 @@
   name: BlobstoreNotLocal
   http_code: 400
   message: "Downloading blobs can only be done directly to the blobstore."
+
+150006:
+  name: BlobstoreUnavailable
+  http_code: 502
+  message: "Failed to perform operation due to blobstore unavailability."
 
 160001:
   name: AppBitsUploadInvalid
@@ -543,10 +573,30 @@
   http_code: 500
   message: "Runner error: %s"
 
-180001:
-  name: SnapshotNotFound
-  http_code: 404
-  message: "Snapshot could not be found: %s"
+170017:
+  name: StagingInProgress
+  http_code: 422
+  message: "Only one package can be staged at a time per application."
+
+170018:
+  name: InvalidTaskAddress
+  http_code: 500
+  message: "Invalid config: %s"
+
+170019:
+  name: TaskError
+  http_code: 500
+  message: "task failed: %s"
+
+170020:
+  name: TaskWorkersUnavailable
+  http_code: 503
+  message: "Task workers are unavailable: %s"
+
+170021:
+  name: InvalidTaskRequest
+  http_code: 422
+  message: "The task request is invalid: %s"
 
 180002:
   name: ServiceGatewayError
@@ -607,6 +657,21 @@
   name: RoutePortTaken
   http_code: 400
   message: "The port is taken: %s"
+
+210006:
+  name: RouteMappingTaken
+  http_code: 400
+  message: "The route mapping is taken: %s"
+
+210007:
+  name: RouteMappingNotFound
+  http_code: 404
+  message: "The route mapping could not be found: %s"
+
+21008:
+  name: OutOfRouterGroupPorts
+  http_code: 403
+  message: "There are no more ports available for router group: %s. Please contact your administrator for more information."
 
 220001:
   name: InstancesError
@@ -701,7 +766,7 @@
 270010:
   name: ServiceBrokerNotRemovable
   http_code: 400
-  message: "Can not remove brokers that have associated service instances"
+  message: "Can not remove brokers that have associated service instances: %s"
 
 270011:
   name: ServiceBrokerUrlInvalid
@@ -777,6 +842,11 @@
   name: OrganizationDeletionFailed
   http_code: 502
   message: "Deletion of organization %s failed because one or more resources within could not be deleted.\n\n%s"
+
+290011:
+  name: NonrecursiveSpaceDeletionFailed
+  http_code: 400
+  message: "Resource inside space %s must first be deleted, or specify recursive delete."
 
 300001:
   name: SecurityGroupInvalid
@@ -898,6 +968,12 @@
   http_code: 400
   message: "Unable to perform delete action: %s"
 
+350003:
+  name: ProcessNotFound
+  http_code: 404
+  message: "The process could not be found: %s"
+
+
 360001:
   name: ServiceKeyNameTaken
   http_code: 400
@@ -923,7 +999,17 @@
   http_code: 503
   message: "The Routing API is currently unavailable"
 
-# nimbus2 special 
+370002:
+  name: TcpRoutingDisabled
+  http_code: 403
+  message: "Support for TCP routing is disabled"
+
+380001:
+  name: EnvironmentVariableGroupInvalid
+  http_code: 400
+  message: "The Environment Variable Group is invalid: %s"
+
+# nimbus2 special
 500006:
   name: SshError
   http_code: 400

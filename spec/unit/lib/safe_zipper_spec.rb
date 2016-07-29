@@ -31,7 +31,7 @@ describe SafeZipper do
         [
           "Archive:\n Filename\n ---\n 0  09-15-15 17:44 foo\n ---\n10000000001 1 file\n",
           nil,
-          double('status', :success? => true)]
+          double('status', success?: true)]
       )
       expect(SafeZipper.unzip(zip_path, zip_destination)).to eq 10_000_000_001
     end
@@ -111,15 +111,16 @@ describe SafeZipper do
     let(:root_path) { File.expand_path('../../fixtures/fake_package/', File.dirname(__FILE__)) }
     let(:tmp_zip) { File.join(@tmpdir, 'tmp.zip') }
 
-    it 'zips the file' do
+    it 'zips the file without directory listings' do
       SafeZipper.zip(root_path, tmp_zip)
 
       output = `zipinfo #{tmp_zip}`
       expect(output).not_to include './'
       expect(output).not_to include 'spec/fixtures/fake_package'
+      expect(output).not_to match %r{subdir/$}
       expect(output).to include 'subdir/there'
       expect(output).to match /^l.+coming_from_inside$/
-      expect(output).to include '4 files'
+      expect(output).to include '3 files'
     end
 
     context 'when the root path is empty' do

@@ -35,6 +35,11 @@ module VCAP::CloudController::RestController
     def to_hash(controller, obj, opts, depth, parents, orphans=nil)
       export_attrs = opts.delete(:export_attrs)
 
+      if obj.respond_to? :transient_attrs
+        export_attrs = obj.export_attrs if export_attrs.nil?
+        export_attrs += obj.transient_attrs
+      end
+
       rel_hash = relations_hash(controller, obj, opts, depth, parents, orphans)
       obj_hash = obj.to_hash(attrs: export_attrs)
 
@@ -62,14 +67,16 @@ module VCAP::CloudController::RestController
       {}.tap do |res|
         parents.push(controller)
 
-        res.merge!(serialize_relationships(
-          controller.to_one_relationships,
-          controller, depth, obj, opts, parents, orphans,
+        res.merge!(
+          serialize_relationships(
+            controller.to_one_relationships,
+            controller, depth, obj, opts, parents, orphans,
         ))
 
-        res.merge!(serialize_relationships(
-          controller.to_many_relationships,
-          controller, depth, obj, opts, parents, orphans,
+        res.merge!(
+          serialize_relationships(
+            controller.to_many_relationships,
+            controller, depth, obj, opts, parents, orphans,
         ))
 
         parents.pop

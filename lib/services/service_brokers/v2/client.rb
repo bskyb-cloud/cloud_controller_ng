@@ -46,11 +46,7 @@ module VCAP::Services::ServiceBrokers::V2
       }
 
       state = last_operation_hash['state']
-      if state
-        return_values[:last_operation][:state] = state
-      else
-        return_values[:last_operation][:state] = 'succeeded'
-      end
+      return_values[:last_operation][:state] = state || 'succeeded'
 
       return_values
     rescue Errors::ServiceBrokerApiTimeout, Errors::ServiceBrokerBadResponse => e
@@ -102,7 +98,7 @@ module VCAP::Services::ServiceBrokers::V2
       raise e
     end
 
-    def bind(binding, arbitrary_parameters: {})
+    def bind(binding, arbitrary_parameters)
       path = service_binding_resource_path(binding.guid, binding.service_instance.guid)
       body = {
         service_id:    binding.service.broker_provided_id,
@@ -157,7 +153,7 @@ module VCAP::Services::ServiceBrokers::V2
         service_id: instance.service.broker_provided_id,
         plan_id:    instance.service_plan.broker_provided_id,
       }
-      body.merge!(accepts_incomplete: true) if accepts_incomplete
+      body[:accepts_incomplete] = true if accepts_incomplete
       response = @http_client.delete(path, body)
 
       parsed_response = @response_parser.parse_deprovision(path, response) || {}
@@ -281,32 +277,32 @@ module VCAP::Services::ServiceBrokers::V2
 
       case code
 
-        when 204
-          return nil # no body
+      when 204
+        return nil # no body
 
-        when 200..299
-          begin
-            response_hash = MultiJson.load(response.body)
-          rescue MultiJson::ParseError
-          end
+      when 200..299
+        begin
+          response_hash = MultiJson.load(response.body)
+        rescue MultiJson::ParseError
+        end
 
-          unless response_hash.is_a?(Hash)
-            raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerResponseMalformed.new(uri.to_s, method, response, '')
-          end
+        unless response_hash.is_a?(Hash)
+          raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerResponseMalformed.new(uri.to_s, method, response, '')
+        end
 
-          return response_hash
+        return response_hash
 
-        when HTTP::Status::UNAUTHORIZED
-          raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerApiAuthenticationFailed.new(uri.to_s, method, response)
+      when HTTP::Status::UNAUTHORIZED
+        raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerApiAuthenticationFailed.new(uri.to_s, method, response)
 
-        when 409
-          raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict.new(uri.to_s, method, response)
+      when 409
+        raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerConflict.new(uri.to_s, method, response)
 
-        when 410
-          if method == :delete
-            logger.warn("Already deleted: #{uri}")
-            return nil
-          end
+      when 410
+        if method == :delete
+          logger.warn("Already deleted: #{uri}")
+          return nil
+        end
       end
 
       raise VCAP::Services::ServiceBrokers::V2::ServiceBrokerBadResponse.new(uri.to_s, method, response)

@@ -62,10 +62,19 @@ module VCAP::CloudController
       end
 
       describe 'Org Level Permissions' do
-        user_sees_empty_enumerate('OrgManager',     :@org_a_manager,         :@org_b_manager)
         user_sees_empty_enumerate('OrgUser',        :@org_a_member,          :@org_b_member)
         user_sees_empty_enumerate('BillingManager', :@org_a_billing_manager, :@org_b_billing_manager)
         user_sees_empty_enumerate('Auditor',        :@org_a_auditor,         :@org_b_auditor)
+
+        describe 'OrgManager' do
+          let(:member_a) { @org_a_manager }
+          let(:member_b) { @org_b_manager }
+
+          include_examples 'permission enumeration', 'OrgManager',
+            name: 'managed service instance',
+            path: '/v2/service_instances',
+            enumerate: 1
+        end
       end
 
       describe 'App Space Level Permissions' do
@@ -310,6 +319,59 @@ module VCAP::CloudController
           expect(event).to match_service_instance(instance)
         end
 
+        context 'when the catalog response includes services that require route forwarding' do
+          let(:service) { Service.make(:routing, service_broker: service_broker) }
+          let(:plan) { ServicePlan.make(:v2, service: service) }
+
+          context 'when route service is disabled' do
+            before do
+              TestConfig.config[:route_services_enabled] = false
+            end
+
+            it 'should succeed with a warning' do
+              instance = create_managed_service_instance(accepts_incomplete: 'false')
+
+              expect(last_response).to have_status_code(201)
+              expect(last_response.headers['Location']).to eq "/v2/service_instances/#{instance.guid}"
+
+              expect(instance.credentials).to eq({})
+              expect(instance.dashboard_url).to eq('the dashboard_url')
+              last_operation = decoded_response['entity']['last_operation']
+              expect(last_operation['state']).to eq 'succeeded'
+              expect(last_operation['description']).to eq ''
+              expect(last_operation['type']).to eq 'create'
+
+              escaped_warning = last_response.headers['X-Cf-Warnings']
+              expect(escaped_warning).to_not be_nil
+              warning = CGI.unescape(escaped_warning)
+              expect(warning).to match /Support for route services is disabled. This service instance cannot be bound to a route./
+            end
+          end
+
+          context 'when route service is enabled' do
+            before do
+              TestConfig.config['route_services_enabled'] = true
+            end
+
+            it 'should succeed without warnings' do
+              instance = create_managed_service_instance(accepts_incomplete: 'false')
+
+              expect(last_response).to have_status_code(201)
+              expect(last_response.headers['Location']).to eq "/v2/service_instances/#{instance.guid}"
+
+              expect(instance.credentials).to eq({})
+              expect(instance.dashboard_url).to eq('the dashboard_url')
+              last_operation = decoded_response['entity']['last_operation']
+              expect(last_operation['state']).to eq 'succeeded'
+              expect(last_operation['description']).to eq ''
+              expect(last_operation['type']).to eq 'create'
+
+              warning = last_response.headers['X-Cf-Warnings']
+              expect(warning).to be_nil
+            end
+          end
+        end
+
         describe 'instance tags' do
           context 'when service instance tags are sent with the create request' do
             it 'saves the service instance tags' do
@@ -360,7 +422,7 @@ module VCAP::CloudController
               expect(last_response).to have_status_code(201)
               expect(a_request(:put, service_broker_url_regex).
                      with(body: hash_including(parameters: parameters))).
-              to have_been_made.times(1)
+                to have_been_made.times(1)
             end
           end
 
@@ -371,7 +433,8 @@ module VCAP::CloudController
               expect(last_response).to have_status_code(400)
               expect(a_request(:put, service_broker_url_regex).
                      with(body: hash_including(parameters: parameters))).
-              to have_been_made.times(0)
+                to have_been_made.times(0)
+              expect(last_response.body).to include('Error: Expected instance of Hash')
             end
           end
         end
@@ -533,7 +596,7 @@ module VCAP::CloudController
           context 'and the worker never gets a success response during polling' do
             let!(:now) { Time.now }
             let(:max_poll_duration) { VCAP::CloudController::Config.config[:broker_client_max_async_poll_duration_minutes] }
-            let(:before_poll_timeout) { now + (max_poll_duration / 2).minutes  }
+            let(:before_poll_timeout) { now + (max_poll_duration / 2).minutes }
             let(:after_poll_timeout) { now + max_poll_duration.minutes + 1.minutes }
 
             before do
@@ -553,16 +616,12 @@ module VCAP::CloudController
               end
 
               Timecop.travel(before_poll_timeout) do
-                successes, failures = Delayed::Worker.new.work_off
-                expect(successes).to eq 1
-                expect(failures).to eq 0
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
                 expect(Delayed::Job.count).to eq 1
               end
 
               Timecop.travel(after_poll_timeout) do
-                successes, failures = Delayed::Worker.new.work_off
-                expect(successes).to eq 1
-                expect(failures).to eq 0
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
                 expect(Delayed::Job.count).to eq 0
               end
 
@@ -790,7 +849,7 @@ module VCAP::CloudController
               expect(orphan_mitigation_job).not_to be_nil
               expect(orphan_mitigation_job).to be_a_fully_wrapped_job_of Jobs::Services::DeleteOrphanedInstance
 
-              expect(Delayed::Worker.new.work_off).to eq([1, 0])
+              execute_all_jobs(expected_successes: 1, expected_failures: 0)
               expect(a_request(:delete, service_broker_url_regex)).to have_been_made.times(1)
             end
 
@@ -813,9 +872,9 @@ module VCAP::CloudController
                 expect(orphan_mitigation_job).not_to be_nil
                 expect(orphan_mitigation_job).to be_a_fully_wrapped_job_of Jobs::Services::DeleteOrphanedInstance
 
-                expect(Delayed::Worker.new.work_off).to eq([1, 0])
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
                 expect(a_request(:delete, service_broker_url_regex)).to have_been_made.times(1)
-                expect(a_request(:get, /#{service_broker_url_regex}\/last_operation/)).not_to have_been_made.times(1)
+                expect(a_request(:get, %r{#{service_broker_url_regex}/last_operation})).not_to have_been_made.times(1)
 
                 expect(Delayed::Job.count).to eq 0
               end
@@ -844,59 +903,130 @@ module VCAP::CloudController
           end
         end
       end
-
-      context 'with a v1 service' do
-        let(:space) { Space.make }
-        let(:developer) { make_developer_for_space(space) }
-        let(:plan) { ServicePlan.make(:v1, service: service) }
-        let(:service) { Service.make(:v1, description: 'blah blah foobar') }
-
-        before do
-          allow(service).to receive(:v2?) { false }
-        end
-
-        context 'when provisioning without a service-auth-token' do
-          it 'should throw a 500 and give you an error message' do
-            req = MultiJson.dump(
-              name: 'foo',
-              space_guid: space.guid,
-              service_plan_guid: plan.guid
-            )
-            headers = headers_for(developer)
-
-            expect(plan.service.service_auth_token).to eq(nil)
-
-            post '/v2/service_instances', req, headers
-
-            expect(last_response.status).to eq(500)
-          end
-        end
-      end
     end
 
     describe 'GET', '/v2/service_instances' do
-      let(:service_instance) { ManagedServiceInstance.make(gateway_name: Sham.name) }
-      let(:space) { service_instance.space }
-      let(:developer) { make_developer_for_space(space) }
+      context 'dashboard_url' do
+        let(:service_instance) { ManagedServiceInstance.make(gateway_name: Sham.name) }
+        let(:space) { service_instance.space }
+        let(:developer) { make_developer_for_space(space) }
 
-      it 'shows the dashboard_url if there is' do
-        service_instance.update(dashboard_url: 'http://dashboard.io')
-        get "v2/service_instances/#{service_instance.guid}", {}, headers_for(developer)
-        expect(decoded_response.fetch('entity').fetch('dashboard_url')).to eq('http://dashboard.io')
+        it 'shows the dashboard_url if there is' do
+          service_instance.update(dashboard_url: 'http://dashboard.io')
+          get "v2/service_instances/#{service_instance.guid}", {}, headers_for(developer)
+          expect(decoded_response.fetch('entity').fetch('dashboard_url')).to eq('http://dashboard.io')
+        end
       end
 
       context 'filtering' do
-        let(:first_found_instance) { decoded_response.fetch('resources').first }
+        context 'when filtering by org guid' do
+          let(:org1) { Organization.make(guid: '1') }
+          let(:org2) { Organization.make(guid: '2') }
+          let(:org3) { Organization.make(guid: '3') }
+          let(:space1) { Space.make(organization: org1) }
+          let(:space2) { Space.make(organization: org2) }
+          let(:space3) { Space.make(organization: org3) }
 
-        it 'allows filtering by organization_guid' do
-          ManagedServiceInstance.make(name: 'other')
-          org_guid = service_instance.space.organization.guid
+          context 'when the operator is ":"' do
+            it 'successfully filters' do
+              instance1 = ManagedServiceInstance.make(name: 'instance-1', space: space1)
+              ManagedServiceInstance.make(name: 'instance-2', space: space2)
 
-          get "v2/service_instances?q=organization_guid:#{org_guid}", {}, headers_for(developer)
+              get "v2/service_instances?q=organization_guid:#{org1.guid}", {}, json_headers(admin_headers)
 
-          expect(last_response.status).to eq(200)
-          expect(decoded_response['resources'].length).to eq(1)
-          expect(first_found_instance.fetch('entity').fetch('name')).to eq(service_instance.name)
+              expect(last_response.status).to eq(200)
+              expect(decoded_response['resources'].length).to eq(1)
+              expect(decoded_response['resources'][0].fetch('metadata').fetch('guid')).to eq(instance1.guid)
+            end
+
+            context 'when filtering by other parameters as well' do
+              it 'filters by both parameters' do
+                instance1 = ManagedServiceInstance.make(name: 'instance-1', space: space1)
+                ManagedServiceInstance.make(name: 'instance-2', space: space1)
+                ManagedServiceInstance.make(name: instance1.name, space: space2)
+
+                get "v2/service_instances?q=organization_guid:#{org1.guid}&q=name:#{instance1.name}", {}, json_headers(admin_headers)
+
+                expect(last_response.status).to eq(200)
+                resources = decoded_response['resources']
+                expect(resources.length).to eq(1)
+                expect(resources[0].fetch('metadata').fetch('guid')).to eq(instance1.guid)
+              end
+            end
+          end
+
+          context 'when the operator is "IN"' do
+            it 'successfully filters' do
+              instance1 = ManagedServiceInstance.make(name: 'inst1', space: space1)
+              instance2 = ManagedServiceInstance.make(name: 'inst2', space: space2)
+              ManagedServiceInstance.make(name: 'inst3', space: space3)
+
+              get "v2/service_instances?q=organization_guid%20IN%20#{org1.guid},#{org2.guid}", {}, json_headers(admin_headers)
+
+              expect(last_response.status).to eq(200)
+              services = decoded_response['resources'].map { |resource| resource.fetch('metadata').fetch('guid') }
+              expect(services.length).to eq(2)
+              expect(services).to include(instance1.guid)
+              expect(services).to include(instance2.guid)
+            end
+          end
+
+          context 'when the operator is a comparator' do
+            let!(:instance1) { ManagedServiceInstance.make(name: 'inst1', space: space1) }
+            let!(:instance2) { ManagedServiceInstance.make(name: 'inst2', space: space2) }
+            let!(:instance3) { ManagedServiceInstance.make(name: 'inst3', space: space3) }
+
+            it 'successfully filters on <' do
+              get "v2/service_instances?q=organization_guid<#{org2.guid}", {}, json_headers(admin_headers)
+
+              expect(last_response.status).to eq(200)
+              services = decoded_response['resources'].map { |resource| resource.fetch('metadata').fetch('guid') }
+              expect(services.length).to eq(1)
+              expect(services).to include(instance1.guid)
+            end
+
+            it 'successfully filters on >' do
+              get "v2/service_instances?q=organization_guid>#{org2.guid}", {}, json_headers(admin_headers)
+
+              expect(last_response.status).to eq(200)
+              services = decoded_response['resources'].map { |resource| resource.fetch('metadata').fetch('guid') }
+              expect(services.length).to eq(1)
+              expect(services).to include(instance3.guid)
+            end
+
+            it 'successfully filters on <=' do
+              get "v2/service_instances?q=organization_guid<=#{org2.guid}", {}, json_headers(admin_headers)
+
+              expect(last_response.status).to eq(200)
+              services = decoded_response['resources'].map { |resource| resource.fetch('metadata').fetch('guid') }
+              expect(services.length).to eq(2)
+              expect(services).to include(instance1.guid)
+              expect(services).to include(instance2.guid)
+            end
+
+            it 'successfully filters on >=' do
+              get "v2/service_instances?q=organization_guid>=#{org2.guid}", {}, json_headers(admin_headers)
+
+              expect(last_response.status).to eq(200)
+              services = decoded_response['resources'].map { |resource| resource.fetch('metadata').fetch('guid') }
+              expect(services.length).to eq(2)
+              expect(services).to include(instance2.guid)
+              expect(services).to include(instance3.guid)
+            end
+          end
+
+          context 'when the query is missing an operator or a value' do
+            it 'filters by org_guid = nil (to match behavior of filters other than org guid)' do
+              ManagedServiceInstance.make(name: 'instance-1', space: space1)
+              ManagedServiceInstance.make(name: 'instance-2', space: space2)
+
+              get 'v2/service_instances?q=organization_guid', {}, json_headers(admin_headers)
+
+              expect(last_response.status).to eq(200)
+              services = decoded_response['resources'].map { |resource| resource.fetch('metadata').fetch('guid') }
+              expect(services.length).to eq(0)
+            end
+          end
         end
       end
     end
@@ -1032,7 +1162,7 @@ module VCAP::CloudController
 
       context 'when the request is synchronous' do
         before do
-          stub_request(:patch, "#{service_broker_url}").
+          stub_request(:patch, service_broker_url).
             to_return(status: status, body: response_body)
         end
 
@@ -1105,7 +1235,7 @@ module VCAP::CloudController
               expect(last_response).to have_status_code(400)
               expect(a_request(:put, service_broker_url_regex).
                      with(body: hash_including(parameters: parameters))).
-              to have_been_made.times(0)
+                to have_been_made.times(0)
             end
           end
 
@@ -1219,8 +1349,6 @@ module VCAP::CloudController
             }.to_json
           end
 
-          let(:max_tags) { build_max_tags }
-
           let(:update_body) do
             {
               tags: max_tags
@@ -1256,8 +1384,6 @@ module VCAP::CloudController
           end
 
           context 'when the tags passed in are too long' do
-            let(:max_tags) { build_max_tags }
-
             it 'returns service instance tags too long message correctly' do
               body = {
                 tags: max_tags + ['z'],
@@ -1503,7 +1629,7 @@ module VCAP::CloudController
 
             it 'updates the service instance operation to indicate it has failed' do
               Timecop.freeze(Time.now + 5.minutes) do
-                expect(Delayed::Worker.new.work_off).to eq([1, 0])
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
               end
 
               service_instance.reload
@@ -1548,7 +1674,7 @@ module VCAP::CloudController
 
             it 'creates a service audit event for updating the service instance' do
               Timecop.freeze(Time.now + 5.minutes) do
-                expect(Delayed::Worker.new.work_off).to eq([1, 0])
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
               end
 
               event = VCAP::CloudController::Event.first(type: 'audit.service_instance.update')
@@ -1735,7 +1861,7 @@ module VCAP::CloudController
             let(:response_body) { '{"description": "error message"}' }
 
             before do
-              stub_request(:patch,  "#{service_broker_url}?accepts_incomplete=true").
+              stub_request(:patch, "#{service_broker_url}?accepts_incomplete=true").
                 with(headers: { 'Accept' => 'application/json' }).
                 to_return(status: 500, body: response_body, headers: { 'Content-Type' => 'application/json' })
             end
@@ -1799,75 +1925,6 @@ module VCAP::CloudController
           expect(a_request(:delete, service_broker_url)).to have_been_made.times(0)
           expect(last_response).to have_status_code(400)
         end
-      end
-    end
-
-    describe 'PUT', '/v2/service_plans/:service_plan_guid/services_instances' do
-      let(:first_service_plan)  { ServicePlan.make(:v2) }
-      let(:second_service_plan) { ServicePlan.make(:v2) }
-      let(:third_service_plan)  { ServicePlan.make(:v2) }
-      let(:space)               { Space.make }
-      let(:developer)           { make_developer_for_space(space) }
-      let(:new_plan_guid)       { third_service_plan.guid }
-      let(:body) do
-        MultiJson.dump(
-          service_plan_guid: new_plan_guid
-        )
-      end
-
-      before do
-        ManagedServiceInstance.make(service_plan: first_service_plan)
-        ManagedServiceInstance.make(service_plan: second_service_plan)
-        ManagedServiceInstance.make(service_plan: third_service_plan)
-      end
-
-      it 'updates all services instances for a given plan with the new plan id' do
-        put "/v2/service_plans/#{first_service_plan.guid}/service_instances", body, admin_headers
-
-        expect(last_response.status).to eql(200)
-        expect(first_service_plan.service_instances.count).to eql(0)
-        expect(second_service_plan.service_instances.count).to eql(1)
-        expect(third_service_plan.service_instances.count).to eql(2)
-      end
-
-      it 'returns the number of instances moved' do
-        ManagedServiceInstance.make(service_plan: first_service_plan)
-
-        put "/v2/service_plans/#{first_service_plan.guid}/service_instances", body, admin_headers
-
-        expect(decoded_response['changed_count']).to eql(2)
-      end
-
-      context 'when given an invalid new plan guid' do
-        let(:new_plan_guid) { 'a-plan-that-does-not-exist' }
-
-        it 'does not update any service instances' do
-          put "/v2/service_plans/#{first_service_plan.guid}/service_instances", body, admin_headers
-
-          expect(last_response.status).to eql(400)
-          expect(first_service_plan.service_instances.count).to eql(1)
-          expect(second_service_plan.service_instances.count).to eql(1)
-          expect(third_service_plan.service_instances.count).to eql(1)
-        end
-      end
-
-      context 'when given an invalid existing plan guid' do
-        it 'does not update any service instances' do
-          put '/v2/service_plans/some-non-existant-plan/service_instances', body, admin_headers
-
-          expect(last_response.status).to eql(400)
-          expect(first_service_plan.service_instances.count).to eql(1)
-          expect(second_service_plan.service_instances.count).to eql(1)
-          expect(third_service_plan.service_instances.count).to eql(1)
-        end
-      end
-
-      it 'requires admin permissions' do
-        put "/v2/service_plans/#{first_service_plan.guid}/service_instances", body, headers_for(developer)
-        expect(last_response.status).to eql(403)
-
-        put "/v2/service_plans/#{first_service_plan.guid}/service_instances", body, admin_headers
-        expect(last_response.status).to eql(200)
       end
     end
 
@@ -2121,7 +2178,7 @@ module VCAP::CloudController
 
               expect(last_response).to have_status_code 202
               Timecop.freeze Time.now + 30.minutes do
-                expect(Delayed::Worker.new.work_off).to eq [1, 0]
+                execute_all_jobs(expected_successes: 1, expected_failures: 0)
               end
             end
 
@@ -2255,9 +2312,7 @@ module VCAP::CloudController
             expect(decoded_response['entity']['guid']).to be
             expect(decoded_response['entity']['status']).to eq 'queued'
 
-            successes, failures = Delayed::Worker.new.work_off
-            expect(successes).to eq 1
-            expect(failures).to eq 0
+            execute_all_jobs(expected_successes: 1, expected_failures: 0)
             expect(ServiceInstance.find(guid: service_instance.guid)).to be_nil
           end
 
@@ -2268,7 +2323,7 @@ module VCAP::CloudController
             event = VCAP::CloudController::Event.first(type: 'audit.service_instance.delete')
             expect(event).to be_nil
 
-            expect(Delayed::Worker.new.work_off).to eq([1, 0])
+            execute_all_jobs(expected_successes: 1, expected_failures: 0)
 
             event = VCAP::CloudController::Event.first(type: 'audit.service_instance.delete')
             expect(event.type).to eq('audit.service_instance.delete')
@@ -2309,7 +2364,7 @@ module VCAP::CloudController
               expect(last_response).to have_status_code 204
               expect(service_instance.exists?).to be_falsey
 
-              expect(Delayed::Worker.new.work_off).to eq([1, 0])
+              execute_all_jobs(expected_successes: 1, expected_failures: 0)
             end
           end
 
@@ -2323,8 +2378,7 @@ module VCAP::CloudController
               expect(last_response).to have_status_code 202
               expect(decoded_response['entity']['status']).to eq 'queued'
 
-              successes, failures = Delayed::Worker.new.work_off
-              expect(successes + failures).to eq 1
+              execute_all_jobs(expected_successes: 0, expected_failures: 1)
 
               service_instance = ServiceInstance.find(guid: service_instance_guid)
               expect(service_instance).to_not be_nil
@@ -2433,33 +2487,6 @@ module VCAP::CloudController
               expect(last_response.status).to eq(204)
               expect(ManagedServiceInstance.find(guid: service_instance.guid)).to be_nil
             end
-          end
-        end
-      end
-
-      context 'with a v1 service instance' do
-        let(:service) { Service.make(:v1) }
-        let(:service_plan) { ServicePlan.make(:v1, service: service) }
-        let!(:service_instance) { ManagedServiceInstance.make(:v1, service_plan: service_plan) }
-        let(:developer) { make_developer_for_space(service_instance.space) }
-
-        context 'when the service gateway returns a 409' do
-          before do
-            # Stub 409
-            allow(VCAP::Services::ServiceBrokers::V1::HttpClient).to receive(:new).and_call_original
-
-            guid = service_instance.broker_provided_id
-            path = "/gateway/v1/configurations/#{guid}"
-            uri = URI(service.url + path)
-
-            stub_request(:delete, uri.to_s).to_return(body: '{"description": "service gateway error"}', status: 409)
-          end
-
-          it 'forwards the error message from the service gateway' do
-            delete "/v2/service_instances/#{service_instance.guid}", {}, headers_for(developer)
-
-            expect(last_response.status).to eq 409
-            expect(JSON.parse(last_response.body)['description']).to include 'service gateway error'
           end
         end
       end
@@ -2620,6 +2647,7 @@ module VCAP::CloudController
 
       before do
         stub_bind(service_instance, opts)
+        TestConfig.config['route_services_enabled'] = true
       end
 
       it 'associates the route and the service instance' do
@@ -2647,6 +2675,51 @@ module VCAP::CloudController
         expect(a_request(:put, service_binding_uri).with(body: expected_body)).to have_been_made
       end
 
+      context 'when the body is empty string' do
+        before do
+          put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", '', headers_for(developer)
+        end
+
+        it 'should ignore the body and do not raise error' do
+          expect(last_response).to have_status_code(201)
+        end
+      end
+
+      context 'when the client provides arbitrary parameters' do
+        before do
+          body = MultiJson.dump(parameters: parameters)
+          put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", body, headers_for(developer)
+        end
+
+        context 'and the parameter is a JSON object' do
+          let(:parameters) do
+            { foo: 'bar', bar: 'baz' }
+          end
+
+          it 'should pass along the parameters to the service broker' do
+            binding             = RouteBinding.last
+            service_binding_uri = service_binding_url(binding)
+
+            expect(last_response).to have_status_code(201)
+            expect(a_request(:put, service_binding_uri).
+                       with(body: hash_including(parameters: parameters))).
+              to have_been_made.times(1)
+          end
+        end
+
+        context 'and the parameter is not a JSON object' do
+          let(:parameters) { 'foo' }
+
+          it 'should reject the request' do
+            expect(last_response).to have_status_code(400)
+            expect(last_response.body).to include('Expected instance of Hash, given an instance of String')
+            expect(a_request(:put, service_broker_url_regex).
+                       with(body: hash_including(parameters: parameters))).
+              to have_been_made.times(0)
+          end
+        end
+      end
+
       context 'binding permissions' do
         context 'admin' do
           it 'allows an admin to bind a space' do
@@ -2668,11 +2741,24 @@ module VCAP::CloudController
       context 'when the service instance is not a route service' do
         let(:service_instance) { ManagedServiceInstance.make(space: space) }
 
-        it 'raises an error' do
+        it 'raises a 400 error' do
           put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
           expect(last_response.status).to eq(400)
           expect(JSON.parse(last_response.body)['description']).
             to include('does not support route binding')
+        end
+      end
+
+      context 'when route service is disabled' do
+        before do
+          TestConfig.config[:route_services_enabled] = false
+        end
+
+        it 'should raise a 403 error' do
+          put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
+
+          expect(last_response).to have_status_code(403)
+          expect(decoded_response['description']).to eq 'Support for route services is disabled'
         end
       end
 
@@ -2687,23 +2773,40 @@ module VCAP::CloudController
 
       context 'when the route has an associated service instance' do
         before do
-          service_instance = ManagedServiceInstance.make(:routing, space: space)
           RouteBinding.make service_instance: service_instance, route: route
         end
 
         it 'raises RouteAlreadyBoundToServiceInstance' do
-          get "/v2/service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+          new_service_instance = ManagedServiceInstance.make(:routing, space: space)
+          get "/v2/service_instances/#{new_service_instance.guid}/routes", {}, headers_for(developer)
           expect(last_response.status).to eq(200)
           expect(JSON.parse(last_response.body)['total_results']).to eql(0)
 
-          put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
+          put "/v2/service_instances/#{new_service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
           expect(last_response.status).to eq(400)
           expect(JSON.parse(last_response.body)['description']).
             to eq('A route may only be bound to a single service instance')
 
-          get "/v2/service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+          get "/v2/service_instances/#{new_service_instance.guid}/routes", {}, headers_for(developer)
           expect(last_response.status).to eq(200)
           expect(JSON.parse(last_response.body)['total_results']).to eql(0)
+        end
+
+        context 'and the associated is the same as the requested instance' do
+          it 'raises ServiceInstanceAlreadyBoundToSameRoute' do
+            get "/v2/service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+            expect(last_response).to have_status_code(200)
+            expect(JSON.parse(last_response.body)['total_results']).to eql(1)
+
+            put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
+            expect(last_response).to have_status_code(400)
+            expect(JSON.parse(last_response.body)['description']).
+              to eq('The route and service instance are already bound.')
+
+            get "/v2/service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+            expect(last_response).to have_status_code(200)
+            expect(JSON.parse(last_response.body)['total_results']).to eql(1)
+          end
         end
       end
 
@@ -3212,7 +3315,7 @@ module VCAP::CloudController
       it 'returns service instance tags too long message correctly' do
         service_instance_params = {
           name: 'sweet name',
-          tags: ['a' * 256],
+          tags: ['a' * 2049],
           space_guid: space.guid,
           service_plan_guid: free_plan.guid
         }
@@ -3397,13 +3500,8 @@ module VCAP::CloudController
       ServiceInstance.last
     end
 
-    # Construct an array of unique tags with 255 characters total
-    def build_max_tags
-      tags = []
-      (10..94).each do |i|
-        tags.push('a' + i.to_s)
-      end
-      tags
+    def max_tags
+      ['a' * 1024, 'b' * 1024] # 2048 characters
     end
   end
 end

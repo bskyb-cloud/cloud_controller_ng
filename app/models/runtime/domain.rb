@@ -2,7 +2,7 @@ module VCAP::CloudController
   class Domain < Sequel::Model
     class UnauthorizedAccessToPrivateDomain < RuntimeError; end
 
-    DOMAIN_REGEX = /^(([a-z0-9]|[a-z0-9][a-z0-9\-]{0,61}[a-z0-9])\.)+([a-z0-9]|[a-z0-9][a-z0-9\-]{0,61}[a-z0-9])$/ix.freeze
+    DOMAIN_REGEX = /^(([a-z0-9]|[a-z0-9][a-z0-9\-]{0,61}[a-z0-9])\.)+([a-z0-9]|[a-z0-9][a-z0-9\-]{0,61}[a-z0-9])$/ix
 
     dataset.row_proc = proc do |row|
       if row[:owning_organization_id]
@@ -12,7 +12,7 @@ module VCAP::CloudController
       end
     end
 
-    SHARED_DOMAIN_CONDITION =  { owning_organization_id: nil }.freeze
+    SHARED_DOMAIN_CONDITION = { owning_organization_id: nil }.freeze
 
     dataset_module do
       def shared_domains

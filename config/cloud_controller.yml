@@ -7,6 +7,7 @@ message_bus_servers:
 
 external_protocol: http
 external_domain: api2.vcap.me
+internal_service_hostname: api.internal.cf
 
 system_domain_organization: the-system_domain-org-name
 system_domain: vcap.me
@@ -24,10 +25,16 @@ app_events:
 app_usage_events:
   cutoff_age_in_days: 31
 
+service_usage_events:
+  cutoff_age_in_days: 31
+
 audit_events:
   cutoff_age_in_days: 31
 
 failed_jobs:
+  cutoff_age_in_days: 31
+
+completed_tasks:
   cutoff_age_in_days: 31
 
 default_app_memory: 1024 #mb
@@ -78,6 +85,8 @@ routing_api:
   url: "http://localhost:3000"
   routing_client_name: 'routing-client'
   routing_client_secret: 'routing-secret'
+
+route_services_enabled: true
 
 cc_partition: ng
 

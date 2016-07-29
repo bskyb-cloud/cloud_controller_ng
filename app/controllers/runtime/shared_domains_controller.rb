@@ -1,7 +1,9 @@
 module VCAP::CloudController
   class SharedDomainsController < RestController::ModelController
+    attr_reader :routing_api_client
+
     def self.dependencies
-      [:routing_api_client]
+      [:routing_api_client, :router_group_type_populating_collection_renderer]
     end
 
     define_attributes do
@@ -14,6 +16,7 @@ module VCAP::CloudController
     def inject_dependencies(dependencies)
       super
       @routing_api_client = dependencies.fetch(:routing_api_client)
+      @router_group_type_populating_collection_renderer = dependencies.fetch(:router_group_type_populating_collection_renderer)
     end
 
     def before_create
@@ -21,20 +24,67 @@ module VCAP::CloudController
       return if router_group_guid.nil?
 
       begin
-        router_groups = @routing_api_client.router_groups || []
-      rescue RoutingApi::Client::RoutingApiUnavailable
+        @router_group = routing_api_client.router_group(router_group_guid)
+      rescue RoutingApi::RoutingApiDisabled
+        raise Errors::ApiError.new_from_details('TcpRoutingDisabled')
+      rescue RoutingApi::RoutingApiUnavailable
         raise Errors::ApiError.new_from_details('RoutingApiUnavailable')
-      rescue RoutingApi::Client::UaaUnavailable
+      rescue RoutingApi::UaaUnavailable
         raise Errors::ApiError.new_from_details('UaaUnavailable')
       end
 
-      unless router_groups.map(&:guid).include? router_group_guid
+      unless @router_group
         raise Errors::ApiError.new_from_details('DomainInvalid', "router group guid '#{router_group_guid}' not found")
+      end
+    end
+
+    def after_create(domain)
+      super(domain)
+      unless domain.nil?
+        unless domain.router_group_guid.nil?
+          domain.router_group_type = @router_group.type unless @router_group.nil?
+        end
       end
     end
 
     def delete(guid)
       do_delete(find_guid_and_validate_access(:delete, guid))
+    end
+
+    get '/v2/shared_domains', :enumerate_shared_domains
+    def enumerate_shared_domains
+      validate_access(:index, model)
+      begin
+        @router_group_type_populating_collection_renderer.render_json(
+          self.class,
+            get_filtered_dataset_for_enumeration(model, SharedDomain.dataset, self.class.query_parameters, @opts),
+            self.class.path,
+            @opts,
+            {},
+        )
+      rescue RoutingApi::RoutingApiUnavailable
+        raise Errors::ApiError.new_from_details('RoutingApiUnavailable')
+      rescue RoutingApi::UaaUnavailable
+        raise Errors::ApiError.new_from_details('UaaUnavailable')
+      end
+    end
+
+    get '/v2/shared_domains/:guid', :get_shared_domain
+    def get_shared_domain(guid)
+      domain = find_guid_and_validate_access(:read, guid)
+      unless domain.router_group_guid.nil?
+        begin
+          rtr_grp = routing_api_client.router_group(domain.router_group_guid)
+        rescue RoutingApi::RoutingApiDisabled
+          raise Errors::ApiError.new_from_details('TcpRoutingDisabled')
+        rescue RoutingApi::RoutingApiUnavailable
+          raise Errors::ApiError.new_from_details('RoutingApiUnavailable')
+        rescue RoutingApi::UaaUnavailable
+          raise Errors::ApiError.new_from_details('UaaUnavailable')
+        end
+        domain.router_group_type = rtr_grp.type unless rtr_grp.nil?
+      end
+      object_renderer.render_json(self.class, domain, @opts)
     end
 
     define_messages

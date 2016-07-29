@@ -62,7 +62,7 @@ module VCAP::CloudController
             diego:                   { type: 'bool' },
             docker_image:            { type: 'string', required: false },
             docker_credentials_json: { type: 'hash', default: {} },
-            ports:                   { type: '[integer]' }
+            ports:                   { type: '[integer]', default: nil }
           })
       end
 
@@ -104,6 +104,7 @@ module VCAP::CloudController
             events:           [:get, :put, :delete],
             service_bindings: [:get, :put, :delete],
             routes:           [:get, :put, :delete],
+            route_mappings:   [:get],
           })
       end
 
@@ -250,6 +251,56 @@ module VCAP::CloudController
             expect(last_response.status).to eq(201)
           end
         end
+
+        context 'when diego is set to true' do
+          context 'when no custom ports are specified' do
+            it 'sets the ports to 8080' do
+              post '/v2/apps', MultiJson.dump(initial_hash.merge(diego: true)), json_headers(admin_headers)
+              expect(last_response.status).to eq(201)
+              expect(decoded_response['entity']['ports']).to match([8080])
+              expect(decoded_response['entity']['diego']).to be true
+            end
+          end
+
+          context 'when custom ports are specified' do
+            it 'sets the ports to as specified in the request' do
+              post '/v2/apps', MultiJson.dump(initial_hash.merge(diego: true, ports: [9090, 5222])), json_headers(admin_headers)
+              expect(last_response.status).to eq(201)
+              expect(decoded_response['entity']['ports']).to match([9090, 5222])
+              expect(decoded_response['entity']['diego']).to be true
+            end
+          end
+
+          context 'when the custom port is not in the valid range 1024-65535' do
+            it 'return an error' do
+              post '/v2/apps', MultiJson.dump(initial_hash.merge(diego: true, ports: [9090, 500])), json_headers(admin_headers)
+              expect(last_response.status).to eq(400)
+              expect(decoded_response['description']).to include('Ports must be in the 1024-65535.')
+            end
+          end
+        end
+
+        context 'when diego is set to false' do
+          context 'when no custom ports are specified' do
+            it 'sets the ports to nil' do
+              post '/v2/apps', MultiJson.dump(initial_hash.merge(diego: false)), json_headers(admin_headers)
+              expect(last_response.status).to eq(201)
+              expect(decoded_response['entity']['ports']).to be nil
+              expect(decoded_response['entity']['diego']).to be false
+
+              warning = last_response.headers['X-Cf-Warnings']
+              expect(warning).to be_nil
+            end
+          end
+
+          context 'when custom ports are specified' do
+            it 'returns an error' do
+              post '/v2/apps', MultiJson.dump(initial_hash.merge(diego: false, ports: [9090, 5222])), json_headers(admin_headers)
+              expect(last_response.status).to eq(400)
+              expect(decoded_response['description']).to include('Custom app ports supported for Diego only. Enable Diego for the app or remove custom app ports.')
+            end
+          end
+        end
       end
     end
 
@@ -285,20 +336,20 @@ module VCAP::CloudController
 
       def create_app
         post '/v2/apps', body, user_headers
-        expect(last_response.status).to eq(201)
+        expect(last_response).to have_status_code(201)
         decoded_response['metadata']['guid']
       end
 
       def read_app
         app_guid = create_app
         get "/v2/apps/#{app_guid}", '{}', user_headers
-        expect(last_response.status).to eq(200)
+        expect(last_response).to have_status_code(200)
       end
 
       def update_app
         app_guid = create_app
         put "/v2/apps/#{app_guid}", body, user_headers
-        expect(last_response.status).to eq(201)
+        expect(last_response).to have_status_code(201)
       end
 
       context 'create app' do
@@ -359,14 +410,13 @@ module VCAP::CloudController
       let(:update_hash) { {} }
 
       let(:app_obj) { AppFactory.make(instances: 1) }
+      let(:developer) { make_developer_for_space(app_obj.space) }
 
       def update_app
         put "/v2/apps/#{app_obj.guid}", MultiJson.dump(update_hash), json_headers(admin_headers)
       end
 
       describe 'app_scaling feature flag' do
-        let(:developer) { make_developer_for_space(app_obj.space) }
-
         context 'when the flag is enabled' do
           before { FeatureFlag.make(name: 'app_scaling', enabled: true) }
 
@@ -384,6 +434,156 @@ module VCAP::CloudController
             expect(last_response.status).to eq(403)
             expect(decoded_response['error_code']).to match(/FeatureDisabled/)
             expect(decoded_response['description']).to match(/app_scaling/)
+          end
+        end
+      end
+
+      context 'switch from dea to diego' do
+        let(:app_obj) { AppFactory.make(instances: 1, diego: false) }
+        let(:developer) { make_developer_for_space(app_obj.space) }
+        let(:route) { Route.make(space: app_obj.space) }
+        let(:route_mapping) { RouteMapping.make(app_id: app_obj.id, route_id: route.id) }
+
+        context 'when user does not specify any ports' do
+          it 'sets ports to 8080' do
+            expect(route_mapping.app_port).to be_nil
+            put "/v2/apps/#{app_obj.guid}", '{ "diego": true }', json_headers(headers_for(developer))
+            expect(last_response.status).to eq(201)
+            expect(decoded_response['entity']['ports']).to match([8080])
+            expect(decoded_response['entity']['diego']).to be true
+            expect(route_mapping.reload.app_port).to eq(8080)
+          end
+        end
+
+        context 'when user specifies ports' do
+          it 'sets ports to user specified values' do
+            expect(route_mapping.app_port).to be_nil
+            put "/v2/apps/#{app_obj.guid}", '{ "diego": true, "ports": [9090,5222] }', json_headers(headers_for(developer))
+            expect(last_response.status).to eq(201)
+            expect(decoded_response['entity']['ports']).to match([9090, 5222])
+            expect(decoded_response['entity']['diego']).to be true
+            expect(route_mapping.reload.app_port).to eq(9090)
+          end
+        end
+      end
+
+      context 'switch from diego to dea' do
+        let(:app_obj) { AppFactory.make(instances: 1, diego: true, ports: [8080, 5222]) }
+        it 'updates the backend of the app and returns 201 with warning' do
+          put "/v2/apps/#{app_obj.guid}", '{ "diego": false}', json_headers(headers_for(developer))
+          expect(last_response).to have_status_code(201)
+          expect(decoded_response['entity']['ports']).to be nil
+          expect(decoded_response['entity']['diego']).to be false
+          warning = CGI.unescape(last_response.headers['X-Cf-Warnings'])
+          expect(warning).to include('App ports have changed but are unknown. The app should now listen on the port specified by environment variable PORT')
+        end
+
+        context 'when custom ports are specified as part of update' do
+          it 'returns error indicating custom ports need to be removed' do
+            put "/v2/apps/#{app_obj.guid}", '{ "diego": false, "ports":[9090] }', json_headers(headers_for(developer))
+            expect(last_response.status).to eq(400)
+            expect(decoded_response['description']).to include('Custom app ports supported for Diego only. Enable Diego for the app or remove custom app ports.')
+          end
+        end
+
+        context 'when the app has existing custom ports' do
+          let(:app_obj) { AppFactory.make(instances: 1, diego: true, ports: [9090, 5222]) }
+          let(:route) { Route.make(space: app_obj.space) }
+          let(:route_mapping) { RouteMapping.make(app_id: app_obj.id, route_id: route.id) }
+
+          it 'removes the app ports from the route mapping' do
+            put "/v2/apps/#{app_obj.guid}", '{ "diego": false }', json_headers(headers_for(developer))
+            expect(last_response).to have_status_code(201)
+            expect(decoded_response['entity']['ports']).to be nil
+            expect(decoded_response['entity']['diego']).to be false
+          end
+        end
+
+        context 'when the app is mapped to multiple ports' do
+          let(:app_obj) { AppFactory.make(instances: 1, diego: true, ports: [9090, 5222]) }
+          let(:route) { Route.make(space: app_obj.space) }
+          let!(:route_mapping_1) { RouteMapping.make(app: app_obj, route: route, app_port: 9090) }
+          let!(:route_mapping_2) { RouteMapping.make(app: app_obj, route: route, app_port: 5222) }
+          let(:error_message) do
+            'The app has routes mapped to multiple ports. ' \
+            'Multiple ports are supported for Diego only. ' \
+            'Please unmap routes from all but one app port. ' \
+            'Multiple routes can be mapped to the same port if desired.'
+          end
+
+          it 'returns an error' do
+            put "/v2/apps/#{app_obj.guid}", '{ "diego": false }', json_headers(headers_for(developer))
+            expect(last_response).to have_status_code(400)
+            expect(decoded_response['description']).to include(error_message)
+          end
+        end
+      end
+
+      context 'when app is dea app' do
+        context 'when custom ports are specified' do
+          it 'returns error indicating custom ports need to be removed' do
+            put "/v2/apps/#{app_obj.guid}", '{ "ports": [9090] }', json_headers(headers_for(developer))
+            expect(last_response.status).to eq(400)
+            expect(decoded_response['description']).to include('Custom app ports supported for Diego only. Enable Diego for the app or remove custom app ports.')
+          end
+        end
+      end
+
+      context 'when app is diego app' do
+        let(:app_obj) { AppFactory.make(instances: 1, diego: true, ports: [9090, 5222]) }
+
+        it 'sets ports to user specified values' do
+          put "/v2/apps/#{app_obj.guid}", '{ "ports": [1883,5222] }', json_headers(headers_for(developer))
+          expect(last_response.status).to eq(201)
+          expect(decoded_response['entity']['ports']).to match([1883, 5222])
+          expect(decoded_response['entity']['diego']).to be true
+        end
+
+        context 'when not updating ports' do
+          it 'should keep previously specified custom ports' do
+            put "/v2/apps/#{app_obj.guid}", '{ "instances":2 }', json_headers(headers_for(developer))
+            expect(last_response.status).to eq(201)
+            expect(decoded_response['entity']['ports']).to match([9090, 5222])
+            expect(decoded_response['entity']['diego']).to be true
+          end
+        end
+
+        context 'when the user sets ports to an empty array' do
+          it 'should keep previously specified custom ports' do
+            put "/v2/apps/#{app_obj.guid}", '{ "ports":[] }', json_headers(headers_for(developer))
+            expect(last_response.status).to eq(201)
+            expect(decoded_response['entity']['ports']).to match([9090, 5222])
+            expect(decoded_response['entity']['diego']).to be true
+          end
+        end
+
+        context 'when updating an app with existing route mapping' do
+          let(:route) { Route.make(space: app_obj.space) }
+          let!(:route_mapping) { RouteMapping.make(id: 1, app_id: app_obj.id, route_id: route.id, app_port: 9090) }
+          let!(:route_mapping2) { RouteMapping.make(id: 2, app_id: app_obj.id, route_id: route.id, app_port: 5222) }
+
+          context 'when new app ports contains all existing route port mappings' do
+            it 'updates the ports' do
+              put "/v2/apps/#{app_obj.guid}", '{ "ports":[9090, 5222, 1234] }', json_headers(headers_for(developer))
+              expect(last_response.status).to eq(201)
+              expect(decoded_response['entity']['ports']).to match([9090, 5222, 1234])
+            end
+          end
+
+          context 'when new app ports partially contains existing route port mappings' do
+            it 'returns 400' do
+              put "/v2/apps/#{app_obj.guid}", '{ "ports":[5222, 1234] }', json_headers(headers_for(developer))
+              expect(last_response.status).to eq(400)
+              expect(decoded_response['description']).to include('App ports ports may not be removed while routes are mapped to them.')
+            end
+          end
+
+          context 'when new app ports do not contain existing route mapping port' do
+            it 'returns 400' do
+              put "/v2/apps/#{app_obj.guid}", '{ "ports":[1234] }', json_headers(headers_for(developer))
+              expect(last_response.status).to eq(400)
+              expect(decoded_response['description']).to include('App ports ports may not be removed while routes are mapped to them.')
+            end
           end
         end
       end
@@ -418,6 +618,30 @@ module VCAP::CloudController
 
             expect(app_event_repository).to_not have_received(:record_app_update)
             expect(last_response.status).to eq(500)
+          end
+        end
+      end
+
+      context 'when associating with route' do
+        let(:domain) { SharedDomain.make(name: 'tcp.com', router_group_guid: 'guid_1') }
+        let(:route) { Route.make(space: app_obj.space, domain: domain, port: 9090, host: '') }
+
+        it 'allows updating app' do
+          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil, json_headers(admin_headers)
+
+          expect(last_response).to have_status_code(201)
+          expect(app_obj.reload.routes.first).to eq(route)
+        end
+
+        context 'when routing api is not enabled' do
+          before do
+            TestConfig.override(routing_api: nil)
+          end
+
+          it 'returns 403' do
+            put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil, json_headers(admin_headers)
+            expect(last_response).to have_status_code(403)
+            expect(decoded_response['description']).to include('Support for TCP routing is disabled')
           end
         end
       end
@@ -479,7 +703,7 @@ module VCAP::CloudController
           expect(app_event_repository).to have_received(:record_app_delete_request).with(app_obj, app_obj.space, admin_user.guid, SecurityContext.current_user_email, false)
         end
 
-        it 'records the recursive query parameter when recursive'  do
+        it 'records the recursive query parameter when recursive' do
           allow(app_event_repository).to receive(:record_app_delete_request).and_call_original
 
           delete "/v2/apps/#{app_obj.guid}?recursive=true", {}, json_headers(admin_headers_for(admin_user))
@@ -493,6 +717,44 @@ module VCAP::CloudController
 
           delete_app
           expect(app_event_repository).not_to have_received(:record_app_delete_request)
+        end
+      end
+    end
+
+    describe 'route mapping' do
+      let!(:app_obj) { AppFactory.make(instances: 1, diego: true) }
+      let!(:developer) { make_developer_for_space(app_obj.space) }
+      let!(:route) { Route.make(space: app_obj.space) }
+      let!(:route_mapping) { RouteMapping.make(app_id: app_obj.id, route_id: route.id) }
+
+      context 'GET' do
+        it 'returns the route mapping' do
+          get "/v2/apps/#{app_obj.guid}/route_mappings", '{}', json_headers(headers_for(developer))
+          expect(last_response.status).to eql(200)
+          parsed_body = parse(last_response.body)
+          expect(parsed_body['resources'].first['entity']['route_guid']).to eq(route.guid)
+          expect(parsed_body['resources'].first['entity']['app_guid']).to eq(app_obj.guid)
+        end
+      end
+
+      context 'POST' do
+        it 'returns 404' do
+          post "/v2/apps/#{app_obj.guid}/route_mappings", '{}', json_headers(headers_for(developer))
+          expect(last_response.status).to eql(404)
+        end
+      end
+
+      context 'PUT' do
+        it 'returns 404' do
+          put "/v2/apps/#{app_obj.guid}/route_mappings/#{route_mapping.guid}", '{}', json_headers(headers_for(developer))
+          expect(last_response.status).to eql(404)
+        end
+      end
+
+      context 'DELETE' do
+        it 'returns 404' do
+          delete "/v2/apps/#{app_obj.guid}/route_mappings/#{route_mapping.guid}", '', json_headers(headers_for(developer))
+          expect(last_response.status).to eql(404)
         end
       end
     end
@@ -528,21 +790,74 @@ module VCAP::CloudController
           end
         end
 
-        it 'returns application environment with VCAP_APPLICATION' do
-          expected_vcap_application = MultiJson.load(MultiJson.dump(app_obj.vcap_application))
+        context 'environment variable' do
+          context 'when there is no v3 app associated' do
+            it 'returns v2 application environment with VCAP_APPLICATION' do
+              get "/v2/apps/#{app_obj.guid}/env", '{}', json_headers(headers_for(developer, { scopes: ['cloud_controller.read'] }))
+              expect(last_response.status).to eql(200)
 
-          get "/v2/apps/#{app_obj.guid}/env", '{}', json_headers(headers_for(developer, { scopes: ['cloud_controller.read'] }))
-          expect(last_response.status).to eql(200)
+              expect(decoded_response['application_env_json']).to have_key('VCAP_APPLICATION')
+              expect(decoded_response['application_env_json']).to match({
+                  'VCAP_APPLICATION' => {
+                    'limits' => {
+                      'mem'  => app_obj.memory,
+                      'disk' => app_obj.disk_quota,
+                      'fds'  => 16384
+                    },
+                    'application_id'      => app_obj.guid,
+                    'application_name'    => app_obj.name,
+                    'name'                => app_obj.name,
+                    'application_uris'    => [],
+                    'uris'                => [],
+                    'application_version' => /^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/,
+                    'version'             => /^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/,
+                    'space_name'          => app_obj.space.name,
+                    'space_id'            => app_obj.space.guid,
+                    'users'               => nil
+                  }
+              })
+            end
+          end
 
-          expect(decoded_response['application_env_json']).to have_key('VCAP_APPLICATION')
-          expect(decoded_response['application_env_json']['VCAP_APPLICATION']).to eql(expected_vcap_application)
+          context 'when a v3 app is associated' do
+            let!(:app_model) { AppModel.make(name: 'v3-parent-app') }
+            let!(:process) { AppFactory.make(memory: 259, disk_quota: 799, file_descriptors: 1234, name: 'process-name') }
+
+            it 'returns appenvironment with VCAP_APPLICATION with v3 app name' do
+              app_model.add_process(process)
+
+              get "/v2/apps/#{process.guid}/env", '{}', admin_headers
+              expect(last_response.status).to eql(200)
+
+              expect(decoded_response['application_env_json']).to have_key('VCAP_APPLICATION')
+              expect(decoded_response['application_env_json']).to match({
+                  'VCAP_APPLICATION' => {
+                  'limits' => {
+                    'mem' => 259,
+                    'disk' => 799,
+                    'fds' => 1234,
+                  },
+                  'application_id' => process.guid,
+                  'application_version' => process.version,
+                  'application_name' => app_model.name,
+                  'application_uris' => process.uris,
+                  'version' => process.version,
+                  'name' => process.name,
+                  'space_name' => process.space.name,
+                  'space_id' => process.space.guid,
+                  'uris' => process.uris,
+                  'users' => nil
+                }
+              })
+            end
+          end
         end
 
         context 'when the user is space dev and has service instance bound to application' do
           let!(:service_instance) { ManagedServiceInstance.make(space: app_obj.space) }
           let!(:service_binding) { ServiceBinding.make(app: app_obj, service_instance: service_instance) }
 
-          it 'returns system environment with VCAP_SERVICES'do
+          it 'returns system environment with VCAP_SERVICES' do
             get "/v2/apps/#{app_obj.guid}/env", '{}', json_headers(headers_for(developer, { scopes: ['cloud_controller.read'] }))
             expect(last_response.status).to eql(200)
 
@@ -553,10 +868,12 @@ module VCAP::CloudController
 
         context 'when the staging env variable group is set' do
           before do
-            EnvironmentVariableGroup.make name: :staging, environment_json: { POTATO: 'delicious' }
+            staging_group = EnvironmentVariableGroup.staging
+            staging_group.environment_json = { POTATO: 'delicious' }
+            staging_group.save
           end
 
-          it 'returns staging_env_json with those variables'do
+          it 'returns staging_env_json with those variables' do
             get "/v2/apps/#{app_obj.guid}/env", '{}', json_headers(headers_for(developer, { scopes: ['cloud_controller.read'] }))
             expect(last_response.status).to eql(200)
 
@@ -568,10 +885,12 @@ module VCAP::CloudController
 
         context 'when the running env variable group is set' do
           before do
-            EnvironmentVariableGroup.make name: :running, environment_json: { PIE: 'sweet' }
+            running_group = EnvironmentVariableGroup.running
+            running_group.environment_json = { PIE: 'sweet' }
+            running_group.save
           end
 
-          it 'returns staging_env_json with those variables'do
+          it 'returns staging_env_json with those variables' do
             get "/v2/apps/#{app_obj.guid}/env", '{}', json_headers(headers_for(developer, { scopes: ['cloud_controller.read'] }))
             expect(last_response.status).to eql(200)
 
@@ -648,6 +967,36 @@ module VCAP::CloudController
           expect(last_response.status).to eql 404
         end
       end
+
+      context 'when the space_developer_env_var_visibility feature flag is disabled' do
+        let(:app_obj) { AppFactory.make(detected_buildpack: 'buildpack-name', space: space) }
+
+        before do
+          VCAP::CloudController::FeatureFlag.make(name: 'space_developer_env_var_visibility', enabled: false, error_message: nil)
+        end
+
+        it 'raises 403 for non-admins' do
+          get "/v2/apps/#{app_obj.guid}/env", {}, json_headers(headers_for(developer))
+
+          expect(last_response.status).to eq(403)
+          expect(last_response.body).to include('FeatureDisabled')
+          expect(last_response.body).to include('space_developer_env_var_visibility')
+        end
+
+        it 'succeeds for admins' do
+          get "/v2/apps/#{app_obj.guid}/env", {}, admin_headers
+
+          expect(last_response.status).to eq(200)
+        end
+
+        context 'when the user is not a space developer' do
+          it 'indicates they do not have permission rather than that the feature flag is disabled' do
+            get "/v2/apps/#{app_obj.guid}/env", '{}', json_headers(headers_for(auditor, { scopes: ['cloud_controller.read'] }))
+            expect(last_response.status).to eql(403)
+            expect(JSON.parse(last_response.body)['description']).to eql('You are not authorized to perform the requested action')
+          end
+        end
+      end
     end
 
     describe 'staging' do
@@ -691,140 +1040,31 @@ module VCAP::CloudController
     end
 
     describe 'downloading the droplet' do
-      let(:blobstore) do
-        CloudController::DependencyLocator.instance.droplet_blobstore
-      end
-      let(:app_obj) { AppFactory.make droplet_hash: nil } # explicitly unstaged app
+      let(:app_obj) { AppFactory.make }
+      let(:blob) { instance_double(CloudController::Blobstore::FogBlob) }
 
       before do
-        Fog.unmock!
-        TestConfig.config
+        allow(blob).to receive(:public_download_url).and_return('http://example.com/somewhere/else')
+        allow_any_instance_of(CloudController::Blobstore::Client).to receive(:blob).and_return(blob)
       end
 
-      context 'with a local blobstore' do
-        context 'with a valid droplet' do
-          before do
-            app_obj.droplet_hash = 'abcdef'
-            app_obj.save
-          end
-
-          context 'with nginx' do
-            let(:droplets_config) do
-              { droplet_directory_key: 'cc-droplets',
-                fog_connection: {
-                provider: 'Local',
-                local_root: Dir.mktmpdir('droplets', workspace)
-              } }
-            end
-            let(:packages_config) do
-              { fog_connection: {
-                  provider: 'Local',
-                  local_root: Dir.mktmpdir('packages', workspace)
-                },
-                app_package_directory_key: 'cc-packages' }
-            end
-            let(:workspace) { Dir.mktmpdir }
-
-            before do
-              TestConfig.override(droplets: droplets_config, packages: packages_config)
-            end
-
-            it 'redirects nginx to serve staged droplet' do
-              droplet_file = Tempfile.new(app_obj.guid)
-              droplet_file.write('droplet contents')
-              droplet_file.close
-
-              droplet = CloudController::DropletUploader.new(app_obj, blobstore)
-              droplet.upload(droplet_file.path)
-
-              get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-              expect(last_response.status).to eq(200)
-              expect(last_response.headers['X-Accel-Redirect']).to match("/cc-droplets/.*/#{app_obj.guid}")
-            end
-
-            context 'with a valid app but no droplet' do
-              it 'raises an error' do
-                get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-                expect(last_response.status).to eq(404)
-                expect(decoded_response['description']).to eq("Droplet not found for app with guid #{app_obj.guid}")
-              end
-            end
-          end
-
-          context 'without nginx' do
-            let(:droplets_config) do
-              { droplet_directory_key: 'cc-droplets',
-                fog_connection: {
-                provider: 'Local',
-                local_root: Dir.mktmpdir('droplets', workspace)
-              } }
-            end
-            let(:packages_config) do
-              { fog_connection: {
-                provider: 'Local',
-                local_root: Dir.mktmpdir('packages', workspace)
-              },
-                app_package_directory_key: 'cc-packages' }
-            end
-            let(:workspace) { Dir.mktmpdir }
-
-            before do
-              TestConfig.override(droplets: droplets_config, packages: packages_config)
-              TestConfig.config[:nginx][:use_nginx] = false
-            end
-
-            it 'should return the droplet' do
-              Tempfile.create(app_obj.guid) do |f|
-                f.write('droplet contents')
-                f.close
-                CloudController::DropletUploader.new(app_obj, blobstore).upload(f.path)
-
-                get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-                expect(last_response.status).to eq(200)
-                expect(last_response.body).to eq('droplet contents')
-              end
-            end
-
-            context 'with a valid app but no droplet' do
-              it 'should return an error' do
-                get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-                expect(last_response.status).to eq(404)
-                expect(decoded_response['description']).to eq("Droplet not found for app with guid #{app_obj.guid}")
-              end
-            end
-          end
-        end
-
-        context 'with an invalid app' do
-          it 'should return an error' do
-            get '/v2/apps/bad/droplet/download', MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-            expect(last_response.status).to eq(404)
-          end
-        end
+      it 'should let the user download the droplet' do
+        get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers)
+        expect(last_response).to be_redirect
+        expect(last_response.header['Location']).to eq('http://example.com/somewhere/else')
       end
 
-      context 'when the blobstore is not local' do
-        before do
-          allow_any_instance_of(CloudController::Blobstore::Client).to receive(:local?).and_return(false)
-        end
+      it 'should return an error for non-existent apps' do
+        get '/v2/apps/bad/droplet/download', MultiJson.dump({}), json_headers(admin_headers)
+        expect(last_response.status).to eq(404)
+      end
 
-        it 'should redirect to the url provided by the blobstore_url_generator' do
-          allow_any_instance_of(CloudController::Blobstore::UrlGenerator).to receive(:droplet_download_url).and_return('http://example.com/somewhere/else')
-          get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-          expect(last_response).to be_redirect
-          expect(last_response.header['Location']).to eq('http://example.com/somewhere/else')
-        end
+      it 'should return an error for an app without a droplet' do
+        app_obj.droplet_hash = nil
+        app_obj.save
 
-        it 'should return an error for non-existent apps' do
-          get '/v2/apps/bad/droplet/download', MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-          expect(last_response.status).to eq(404)
-        end
-
-        it 'should return an error for an app without a droplet' do
-          allow_any_instance_of(CloudController::Blobstore::UrlGenerator).to receive(:droplet_download_url).and_return(nil)
-          get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers) # don't forget headers for developer / user
-          expect(last_response.status).to eq(404)
-        end
+        get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({}), json_headers(admin_headers)
+        expect(last_response.status).to eq(404)
       end
     end
 

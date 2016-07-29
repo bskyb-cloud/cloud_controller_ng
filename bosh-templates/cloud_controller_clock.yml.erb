@@ -21,7 +21,7 @@
 #Actually NGX host and port
 local_route: <%= discover_external_ip %>
 external_port: <%= p("cc.external_port") %>
-internal_service_hostname: cloud-controller-ng.service.cf.internal
+internal_service_hostname: <%= p("cc.internal_service_hostname") %>
 
 pid_filename: /var/vcap/sys/run/cloud_controller_clock/cloud_controller_ng.pid
 newrelic_enabled: false
@@ -38,6 +38,9 @@ external_domain: <%= p("cc.external_host") %>.<%= p("domain") %>
 system_domain_organization: <%= p("system_domain_organization") %>
 system_domain: <%= p("system_domain") %>
 app_domains: [ <%= p("app_domains").join(", ") %> ]
+<% if_p("cc.reserved_private_domains") do |reserved| %>
+reserved_private_domains: <%= reserved %>
+<% end %>
 
 jobs:
   global:
@@ -81,11 +84,17 @@ app_events:
 app_usage_events:
   cutoff_age_in_days: <%= p("cc.app_usage_events.cutoff_age_in_days") %>
 
+service_usage_events:
+  cutoff_age_in_days: <%= p("cc.service_usage_events.cutoff_age_in_days") %>
+
 audit_events:
   cutoff_age_in_days: <%= p("cc.audit_events.cutoff_age_in_days") %>
 
 failed_jobs:
   cutoff_age_in_days: <%= p("cc.failed_jobs.cutoff_age_in_days") %>
+
+completed_tasks:
+  cutoff_age_in_days: <%= p("cc.completed_tasks.cutoff_age_in_days") %>
 
 pending_packages:
   frequency_in_seconds: <%= p("cc.pending_packages.frequency_in_seconds") %>
@@ -117,11 +126,11 @@ index: <%= spec.index %>
 name: <%= name %>
 
 info:
-  name: <%= p("name") %>
+  name: "<%= p("name") %>"
   build: "<%= p("build") %>"
   version: <%= p("version") %>
-  support_address: <%= p("support_address") %>
-  description: <%= p("description") %>
+  support_address: "<%= p("support_address") %>"
+  description: "<%= p("description") %>"
 
 <% if_p("cc.directories") do %>
 directories:<% p("cc.directories").each do |key, value| %>
@@ -148,7 +157,7 @@ db: &db
   pool_timeout: <%= p("ccdb.pool_timeout") %>
   log_level: <%= p("cc.db_logging_level") %>
 
-<% scheme = p("uaa.no_ssl") ? "http" : "https"
+<% scheme = p("login.protocol")
    domain = p("domain") %>
 
 <% if p("login.enabled") %>
@@ -191,6 +200,15 @@ quota_definitions:
 default_quota_definition: <%= p("cc.default_quota_definition") %>
 
 resource_pool:
+  blobstore_type: <%= p("cc.resource_pool.blobstore_type") %>
+  webdav_config:
+    public_endpoint: <%= p("cc.resource_pool.webdav_config.public_endpoint") %>
+    private_endpoint: <%= p("cc.resource_pool.webdav_config.private_endpoint") %>
+    username: <%= p("cc.resource_pool.webdav_config.username") %>
+    password: <%= p("cc.resource_pool.webdav_config.password") %>
+    <% if p("cc.resource_pool.webdav_config.ca_cert") != "" && p("cc.resource_pool.webdav_config.ca_cert") != nil %>
+    ca_cert_path: "/var/vcap/jobs/cloud_controller_ng/config/certs/resource_pool_ca_cert.pem"
+    <% end %>
   minimum_size: <%= p("cc.resource_pool.minimum_size") %>
   maximum_size: <%= p("cc.resource_pool.maximum_size") %>
   resource_directory_key: <%= p("cc.resource_pool.resource_directory_key") %>
@@ -200,9 +218,18 @@ resource_pool:
     key_pair_id: <%= p("cc.resource_pool.cdn.key_pair_id") %>
     private_key: <%= p("cc.resource_pool.cdn.private_key").inspect %>
   <% end %>
-  fog_connection: <%= p(["cc.resource_pool.fog_connection", "cc.default_fog_connection"]).to_json %>
+  fog_connection: <%= p("cc.resource_pool.fog_connection", {}).to_json %>
 
 packages:
+  blobstore_type: <%= p("cc.packages.blobstore_type") %>
+  webdav_config:
+    public_endpoint: <%= p("cc.packages.webdav_config.public_endpoint") %>
+    private_endpoint: <%= p("cc.packages.webdav_config.private_endpoint") %>
+    username: <%= p("cc.packages.webdav_config.username") %>
+    password: <%= p("cc.packages.webdav_config.password") %>
+    <% if p("cc.packages.webdav_config.ca_cert") != "" && p("cc.packages.webdav_config.ca_cert") != nil %>
+    ca_cert_path: "/var/vcap/jobs/cloud_controller_ng/config/certs/packages_ca_cert.pem"
+    <% end %>
   app_package_directory_key: <%= p("cc.packages.app_package_directory_key") %>
   max_package_size: <%= p("cc.packages.max_package_size") %>
   <% if_p("cc.packages.cdn") do %>
@@ -211,9 +238,18 @@ packages:
     key_pair_id: <%= p("cc.packages.cdn.key_pair_id") %>
     private_key: <%= p("cc.packages.cdn.private_key").inspect %>
   <% end %>
-  fog_connection: <%= p(["cc.packages.fog_connection", "cc.default_fog_connection"]).to_json %>
+  fog_connection: <%= p("cc.packages.fog_connection", {}).to_json %>
 
 droplets:
+  blobstore_type: <%= p("cc.droplets.blobstore_type") %>
+  webdav_config:
+    public_endpoint: <%= p("cc.droplets.webdav_config.public_endpoint") %>
+    private_endpoint: <%= p("cc.droplets.webdav_config.private_endpoint") %>
+    username: <%= p("cc.droplets.webdav_config.username") %>
+    password: <%= p("cc.droplets.webdav_config.password") %>
+    <% if p("cc.droplets.webdav_config.ca_cert") != "" && p("cc.droplets.webdav_config.ca_cert") != nil %>
+    ca_cert_path: "/var/vcap/jobs/cloud_controller_ng/config/certs/droplets_ca_cert.pem"
+    <% end %>
   droplet_directory_key: <%= p("cc.droplets.droplet_directory_key") %>
   <% if_p("cc.droplets.cdn") do %>
   cdn:
@@ -221,9 +257,18 @@ droplets:
     key_pair_id: <%= p("cc.droplets.cdn.key_pair_id") %>
     private_key: <%= p("cc.droplets.cdn.private_key").inspect %>
   <% end %>
-  fog_connection: <%= p(["cc.droplets.fog_connection", "cc.default_fog_connection"]).to_json %>
+  fog_connection: <%= p("cc.droplets.fog_connection", {}).to_json %>
 
 buildpacks:
+  blobstore_type: <%= p("cc.buildpacks.blobstore_type") %>
+  webdav_config:
+    public_endpoint: <%= p("cc.buildpacks.webdav_config.public_endpoint") %>
+    private_endpoint: <%= p("cc.buildpacks.webdav_config.private_endpoint") %>
+    username: <%= p("cc.buildpacks.webdav_config.username") %>
+    password: <%= p("cc.buildpacks.webdav_config.password") %>
+    <% if p("cc.buildpacks.webdav_config.ca_cert") != "" && p("cc.buildpacks.webdav_config.ca_cert") != nil %>
+    ca_cert_path: "/var/vcap/jobs/cloud_controller_ng/config/certs/buildpacks_ca_cert.pem"
+    <% end %>
   buildpack_directory_key: <%= p("cc.buildpacks.buildpack_directory_key") %>
   <% if_p("cc.buildpacks.cdn") do %>
   cdn:
@@ -231,7 +276,7 @@ buildpacks:
     key_pair_id: <%= p("cc.buildpacks.cdn.key_pair_id") %>
     private_key: <%= p("cc.buildpacks.cdn.private_key").inspect %>
   <% end %>
-  fog_connection: <%= p(["cc.buildpacks.fog_connection", "cc.default_fog_connection"]).to_json %>
+  fog_connection: <%= p("cc.buildpacks.fog_connection", {}).to_json %>
 
 db_encryption_key: <%= p("cc.db_encryption_key") %>
 

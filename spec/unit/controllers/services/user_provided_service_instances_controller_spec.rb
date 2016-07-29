@@ -2,6 +2,12 @@ require 'spec_helper'
 
 module VCAP::CloudController
   describe UserProvidedServiceInstancesController, :services do
+    describe 'Query Parameters' do
+      it { expect(described_class).to be_queryable_by(:name) }
+      it { expect(described_class).to be_queryable_by(:space_guid) }
+      it { expect(described_class).to be_queryable_by(:organization_guid) }
+    end
+
     describe 'Attributes' do
       it do
         expect(described_class).to have_creatable_attributes({
@@ -49,10 +55,19 @@ module VCAP::CloudController
       end
 
       describe 'Org Level Permissions' do
-        user_sees_empty_enumerate('OrgManager', :@org_a_manager, :@org_b_manager)
         user_sees_empty_enumerate('OrgUser', :@org_a_member, :@org_b_member)
         user_sees_empty_enumerate('BillingManager', :@org_a_billing_manager, :@org_b_billing_manager)
         user_sees_empty_enumerate('Auditor', :@org_a_auditor, :@org_b_auditor)
+
+        describe 'OrgManager' do
+          let(:member_a) { @org_a_manager }
+          let(:member_b) { @org_b_manager }
+
+          include_examples 'permission enumeration', 'OrgManager',
+            name:      'user provided service instance',
+            path:      '/v2/user_provided_service_instances',
+            enumerate: 1
+        end
       end
 
       describe 'App Space Level Permissions' do
@@ -91,9 +106,52 @@ module VCAP::CloudController
     describe 'Associations' do
       it do
         expect(described_class).to have_nested_routes(
-            service_bindings: [:get, :put, :delete],
-            routes: [:get, :put, :delete]
-          )
+          service_bindings: [:get, :put, :delete],
+          routes: [:get, :put, :delete]
+        )
+      end
+    end
+
+    describe 'GET', '/v2/user_provided_service_instances/' do
+      let(:service_instance) { UserProvidedServiceInstance.make(gateway_name: Sham.name) }
+      let(:space) { service_instance.space }
+      let(:developer) { make_developer_for_space(space) }
+
+      it 'shows the syslog drain url when added' do
+        service_instance.update(syslog_drain_url: 'https://foo.example/url-98')
+        get "v2/user_provided_service_instances/#{service_instance.guid}", {}, headers_for(developer)
+        expect(decoded_response.fetch('entity').fetch('syslog_drain_url')).to eq('https://foo.example/url-98')
+      end
+
+      context 'filtering' do
+        let(:first_found_instance) { decoded_response.fetch('resources').first }
+        let(:service_instance) { UserProvidedServiceInstance.make(name: 'other') }
+
+        it 'allows filtering by service name' do
+          get "v2/user_provided_service_instances?q=name:#{service_instance.name}", {}, headers_for(developer)
+
+          expect(last_response.status).to eq(200)
+          expect(decoded_response['resources'].length).to eq(1)
+          expect(first_found_instance.fetch('entity').fetch('name')).to eq(service_instance.name)
+        end
+
+        it 'allows filtering by space_guid' do
+          space_guid = service_instance.space.guid
+          get "v2/user_provided_service_instances?q=space_guid:#{space_guid}", {}, headers_for(developer)
+
+          expect(last_response.status).to eq(200)
+          expect(decoded_response['resources'].length).to eq(1)
+          expect(first_found_instance.fetch('entity').fetch('name')).to eq(service_instance.name)
+        end
+
+        it 'allows filtering by organization_guid' do
+          org_guid = service_instance.space.organization.guid
+          get "v2/user_provided_service_instances?q=organization_guid:#{org_guid}", {}, headers_for(developer)
+
+          expect(last_response.status).to eq(200)
+          expect(decoded_response['resources'].length).to eq(1)
+          expect(first_found_instance.fetch('entity').fetch('name')).to eq(service_instance.name)
+        end
       end
     end
 
@@ -122,6 +180,26 @@ module VCAP::CloudController
         expect(service_instance.route_service_url).to eq 'https://route.url.com'
       end
 
+      context 'when the new service instance name is taken' do
+        let(:service_instance_attrs) { { name: 'foo', space: space } }
+        let(:service_instance) { UserProvidedServiceInstance.make(service_instance_attrs) }
+
+        let(:req_dup) do
+          {
+          'name'              => service_instance.name,
+          'space_guid'        => service_instance.space.guid
+          }
+        end
+
+        it 'fails and returns service instance name is taken' do
+          post '/v2/user_provided_service_instances', req_dup.to_json, headers_for(developer)
+
+          expect(last_response).to have_status_code(400)
+          expect(decoded_response['code']).to eq(60002)
+          expect(decoded_response['error_code']).to eq('CF-ServiceInstanceNameTaken')
+        end
+      end
+
       it 'records a create event' do
         post '/v2/user_provided_service_instances', req.to_json, headers_for(developer, email: email)
 
@@ -146,8 +224,8 @@ module VCAP::CloudController
             })
       end
 
-      context 'when the service instance is invalid' do
-        context 'because the route_service_url is invalid' do
+      context 'when the route_service_url is invalid' do
+        context 'when the route service url scheme is http' do
           let(:req) do
             {
               'name'              => 'my-upsi',
@@ -163,6 +241,97 @@ module VCAP::CloudController
             expect(last_response).to have_status_code(400)
             expect(decoded_response['error_code']).to eq('CF-ServiceInstanceRouteServiceURLInvalid')
             expect(decoded_response['description']).to include 'must be https'
+          end
+        end
+
+        context 'when the route service url format is missing a /' do
+          let(:req) do
+            {
+              'name'              => 'my-upsi',
+              'credentials'       => { 'uri' => 'https://user:password@service-location.com:port/db' },
+              'space_guid'        => space.guid,
+              'route_service_url' => 'https:/route.com'
+            }
+          end
+
+          it 'returns CF-ServiceInstanceInvalid' do
+            post '/v2/user_provided_service_instances', req.to_json, headers_for(developer)
+
+            expect(last_response).to have_status_code(400)
+            expect(decoded_response['error_code']).to eq('CF-ServiceInstanceRouteServiceURLInvalid')
+            expect(decoded_response['description']).to include 'route_service_url is invalid'
+          end
+        end
+
+        context 'when the route service url format is invalid' do
+          let(:req) do
+            {
+              'name'              => 'my-upsi',
+              'credentials'       => { 'uri' => 'https://user:password@service-location.com:port/db' },
+              'space_guid'        => space.guid,
+              'route_service_url' => 'https://.com'
+            }
+          end
+
+          it 'returns CF-ServiceInstanceInvalid' do
+            post '/v2/user_provided_service_instances', req.to_json, headers_for(developer)
+
+            expect(last_response).to have_status_code(400)
+            expect(decoded_response['error_code']).to eq('CF-ServiceInstanceRouteServiceURLInvalid')
+            expect(decoded_response['description']).to include 'route_service_url is invalid'
+          end
+        end
+      end
+
+      context 'route service warnings' do
+        context 'when route service is disabled' do
+          before do
+            TestConfig.config[:route_services_enabled] = false
+          end
+
+          it 'should succeed with a warning' do
+            post '/v2/user_provided_service_instances', req.to_json, headers_for(developer)
+
+            expect(last_response).to have_status_code 201
+
+            escaped_warning = last_response.headers['X-Cf-Warnings']
+            expect(escaped_warning).to_not be_nil
+            warning = CGI.unescape(escaped_warning)
+            expect(warning).to match /Support for route services is disabled. This service instance cannot be bound to a route./
+          end
+
+          context 'when the service is not a route service' do
+            let(:req) do
+              {
+                  'name'              => 'my-upsi',
+                  'credentials'       => { 'uri' => 'https://user:password@service-location.com:port/db' },
+                  'space_guid'        => space.guid
+              }
+            end
+
+            it 'should succeed without a warning' do
+              post '/v2/user_provided_service_instances', req.to_json, headers_for(developer)
+
+              expect(last_response).to have_status_code 201
+
+              escaped_warning = last_response.headers['X-Cf-Warnings']
+              expect(escaped_warning).to be_nil
+            end
+          end
+        end
+
+        context 'when route service is enabled' do
+          before do
+            TestConfig.config[:route_services_enabled] = true
+          end
+
+          it 'should succeed without warnings' do
+            post '/v2/user_provided_service_instances', req.to_json, headers_for(developer)
+
+            expect(last_response.status).to eq 201
+
+            warning = last_response.headers['X-Cf-Warnings']
+            expect(warning).to be_nil
           end
         end
       end
@@ -211,6 +380,22 @@ module VCAP::CloudController
                 'credentials' => '[REDACTED]'
               }
             })
+      end
+
+      context 'when the updated service instance name is taken' do
+        let(:service_instance_attrs_foo) { { name: 'foo', space: space } }
+        let(:service_instance_attrs_bar) { { name: 'bar', space: space } }
+        let(:service_instance_foo)  { UserProvidedServiceInstance.make(service_instance_attrs_foo) }
+        let(:service_instance_bar)  { UserProvidedServiceInstance.make(service_instance_attrs_bar) }
+
+        it 'fails and returns service instance name is taken' do
+          put "/v2/user_provided_service_instances/#{service_instance_foo.guid}",
+            MultiJson.dump(name: service_instance_bar.name), headers_for(developer)
+
+          expect(last_response).to have_status_code(400)
+          expect(decoded_response['code']).to eq(60002)
+          expect(decoded_response['error_code']).to eq('CF-ServiceInstanceNameTaken')
+        end
       end
 
       describe 'the space_guid parameter' do
@@ -294,13 +479,15 @@ module VCAP::CloudController
       let(:opts) { {} }
       let(:service_instance) { UserProvidedServiceInstance.make(:routing, space: space) }
 
+      before { TestConfig.config[:route_services_enabled] = true }
+
       it 'associates the route and the service instance' do
         get "/v2/user_provided_service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
         expect(last_response.status).to eq(200)
         expect(JSON.parse(last_response.body)['total_results']).to eql(0)
 
         put "/v2/user_provided_service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
-        expect(last_response.status).to eq(201)
+        expect(last_response).to have_status_code(201)
 
         get "/v2/user_provided_service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
         expect(last_response.status).to eq(200)
@@ -337,6 +524,20 @@ module VCAP::CloudController
           end
         end
       end
+
+      context 'when route service is disabled' do
+        before do
+          TestConfig.config[:route_services_enabled] = false
+        end
+
+        it 'should raise a 403 error' do
+          put "/v2/user_provided_service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
+
+          expect(last_response).to have_status_code(403)
+          expect(decoded_response['description']).to eq 'Support for route services is disabled'
+        end
+      end
+
       context 'binding permissions' do
         context 'admin' do
           it 'allows an admin to bind a space' do
@@ -374,23 +575,40 @@ module VCAP::CloudController
 
       context 'when the route has an associated service instance' do
         before do
-          service_instance = UserProvidedServiceInstance.make(:routing, space: space)
           RouteBinding.make service_instance: service_instance, route: route
         end
 
         it 'raises RouteAlreadyBoundToServiceInstance' do
-          get "/v2/user_provided_service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+          new_service_instance = UserProvidedServiceInstance.make(:routing, space: space)
+          get "/v2/user_provided_service_instances/#{new_service_instance.guid}/routes", {}, headers_for(developer)
           expect(last_response.status).to eq(200)
           expect(JSON.parse(last_response.body)['total_results']).to eql(0)
 
-          put "/v2/user_provided_service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
+          put "/v2/user_provided_service_instances/#{new_service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
           expect(last_response.status).to eq(400)
           expect(JSON.parse(last_response.body)['description']).
             to eq('A route may only be bound to a single service instance')
 
-          get "/v2/user_provided_service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+          get "/v2/user_provided_service_instances/#{new_service_instance.guid}/routes", {}, headers_for(developer)
           expect(last_response.status).to eq(200)
           expect(JSON.parse(last_response.body)['total_results']).to eql(0)
+        end
+
+        context 'and the associated is the same as the requested instance' do
+          it 'raises ServiceInstanceAlreadyBoundToSameRoute' do
+            get "/v2/user_provided_service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+            expect(last_response).to have_status_code(200)
+            expect(JSON.parse(last_response.body)['total_results']).to eql(1)
+
+            put "/v2/user_provided_service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers_for(developer)
+            expect(last_response).to have_status_code(400)
+            expect(JSON.parse(last_response.body)['description']).
+              to eq('The route and service instance are already bound.')
+
+            get "/v2/user_provided_service_instances/#{service_instance.guid}/routes", {}, headers_for(developer)
+            expect(last_response).to have_status_code(200)
+            expect(JSON.parse(last_response.body)['total_results']).to eql(1)
+          end
         end
       end
 

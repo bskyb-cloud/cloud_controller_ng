@@ -73,7 +73,7 @@ module VCAP::CloudController
 
       it 'returns a map of the given ids to the corresponding usernames from UAA' do
         response_body = {
-          'resources'    => [
+          'resources' => [
             { 'id' => '111', 'origin' => 'uaa', 'username' => 'user_1' },
             { 'id' => '222', 'origin' => 'uaa', 'username' => 'user_2' }
           ],
@@ -83,11 +83,11 @@ module VCAP::CloudController
           'totalresults' => 2 }
 
         WebMock::API.stub_request(:get, "#{url}/ids/Users").
-        with(query: { 'filter' => 'id eq "111" or id eq "222"' }).
-        to_return(
-          status: 200,
-          headers: { 'content-type' => 'application/json' },
-          body: response_body.to_json)
+          with(query: { 'filter' => 'id eq "111" or id eq "222"' }).
+          to_return(
+            status: 200,
+            headers: { 'content-type' => 'application/json' },
+            body: response_body.to_json)
 
         mapping = uaa_client.usernames_for_ids([userid_1, userid_2])
         expect(mapping[userid_1]).to eq('user_1')

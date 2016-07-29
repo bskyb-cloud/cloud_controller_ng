@@ -11,6 +11,16 @@ module VCAP::CloudController
         allow(repository).to receive(:logger).and_return(logger)
       end
 
+      describe 'attributes' do
+        it 'has user' do
+          expect(repository.user).to eq(user)
+        end
+
+        it 'has user_email' do
+          expect(repository.current_user_email).to eq(email)
+        end
+      end
+
       describe 'record_service_plan_visibility_event' do
         let(:service_plan_visibility) { VCAP::CloudController::ServicePlanVisibility.make }
 
@@ -613,14 +623,14 @@ module VCAP::CloudController
           service = VCAP::CloudController::Service.make(service_broker: broker)
 
           plan = VCAP::CloudController::ServicePlan.new(
-              service: service,
-              name: 'myPlan',
-              description: 'description',
-              free: true,
-              unique_id: 'broker-provided-id',
-              active: false,
-              public: false
-            )
+            service: service,
+            name: 'myPlan',
+            description: 'description',
+            free: true,
+            unique_id: 'broker-provided-id',
+            active: false,
+            public: false
+          )
           repository.with_service_plan_event(plan) { plan.save }
           expect(logger).to have_received(:error)
         end
@@ -628,14 +638,14 @@ module VCAP::CloudController
         specify 'with_service_plan_event logs an error but does not propagate errors' do
           broker = VCAP::CloudController::ServiceBroker.make
           service = VCAP::CloudController::Service.new(
-              service_broker: broker,
-              label: 'name',
-              description: 'some description',
-              bindable: true,
-              active: false,
-              plan_updateable: false,
-              unique_id: 'broker-provided-id',
-            )
+            service_broker:  broker,
+            label:           'name',
+            description:     'some description',
+            bindable:        true,
+            active:          false,
+            plan_updateable: false,
+            unique_id:       'broker-provided-id',
+          )
           repository.with_service_event(service) { service.save }
           expect(logger).to have_received(:error)
         end

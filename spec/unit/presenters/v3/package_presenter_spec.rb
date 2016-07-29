@@ -36,7 +36,7 @@ module VCAP::CloudController
         end
       end
 
-      context ' when the package type is docker' do
+      context 'when the package type is docker' do
         let(:package) do
           PackageModel.make(type: 'docker')
         end
@@ -44,11 +44,6 @@ module VCAP::CloudController
         let!(:data_model) do
           PackageDockerDataModel.create({
               image: 'registry/image:latest',
-              user: 'user',
-              password: 'password',
-              email: 'email',
-              login_server: 'login_server',
-              store_image: true,
               package: package
             })
         end
@@ -59,11 +54,14 @@ module VCAP::CloudController
           data        = result['data']
 
           expect(data['image']).to eq data_model.image
-          expect(data['credentials']['user']).to eq data_model.user
-          expect(data['credentials']['email']).to eq data_model.email
-          expect(data['credentials']['password']).to eq data_model.password
-          expect(data['credentials']['login_server']).to eq data_model.login_server
-          expect(data['store_image']).to eq data_model.store_image
+        end
+
+        it 'includes links to stage' do
+          json_result = PackagePresenter.new.present_json(package)
+          result      = MultiJson.load(json_result)
+
+          expect(result['links']['stage']['href']).to eq("/v3/packages/#{package.guid}/droplets")
+          expect(result['links']['stage']['method']).to eq('POST')
         end
       end
 

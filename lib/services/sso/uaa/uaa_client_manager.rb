@@ -2,8 +2,8 @@ require 'uaa'
 
 module VCAP::Services::SSO::UAA
   class UaaClientManager
-    ROUTER_404_KEY   = 'X-Cf-Routererror'
-    ROUTER_404_VALUE = 'unknown_route'
+    ROUTER_404_KEY   = 'X-Cf-Routererror'.freeze
+    ROUTER_404_VALUE = 'unknown_route'.freeze
 
     def initialize(opts={})
       @opts = opts
@@ -30,6 +30,8 @@ module VCAP::Services::SSO::UAA
       http.use_ssl = use_ssl
       if use_ssl
         http.verify_mode = verify_certs? ? OpenSSL::SSL::VERIFY_PEER : OpenSSL::SSL::VERIFY_NONE
+        http.cert_store = OpenSSL::X509::Store.new
+        http.cert_store.set_default_paths
       end
 
       logger.info("POST UAA transaction: #{uri} - #{scrub(request_body).to_json}")

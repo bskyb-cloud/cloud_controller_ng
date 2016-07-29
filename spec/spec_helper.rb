@@ -36,11 +36,15 @@ RSpec.configure do |rspec_config|
   rspec_config.expect_with(:rspec) { |config| config.syntax = :expect }
   rspec_config.include Rack::Test::Methods
   rspec_config.include ModelCreation
+  rspec_config.include TimeHelpers
+  rspec_config.include BackgroundJobHelpers
 
   rspec_config.include ServiceBrokerHelpers
   rspec_config.include ControllerHelpers, type: :v2_controller, file_path: EscapedPath.join(%w(spec unit controllers))
   rspec_config.include ControllerHelpers, type: :api
   rspec_config.include ControllerHelpers, file_path: EscapedPath.join(%w(spec acceptance))
+  rspec_config.include ControllerHelpers, file_path: EscapedPath.join(%w(spec request))
+  rspec_config.include RequestSpecHelper, file_path: EscapedPath.join(%w(spec request))
   rspec_config.include ApiDsl, type: :api
   rspec_config.include LegacyApiDsl, type: :legacy_api
 
@@ -70,7 +74,6 @@ RSpec.configure do |rspec_config|
 
     TestConfig.reset
 
-    stub_v1_broker
     VCAP::CloudController::SecurityContext.clear
   end
 

@@ -2,7 +2,7 @@ module VCAP::Services::ServiceBrokers::V2
   class CatalogService
     include CatalogValidationHelper
 
-    SUPPORTED_REQUIRES_VALUES = ['syslog_drain', 'route_forwarding']
+    SUPPORTED_REQUIRES_VALUES = ['syslog_drain', 'route_forwarding'].freeze
 
     attr_reader :service_broker, :broker_provided_id, :metadata, :name,
       :description, :bindable, :tags, :plans, :requires, :dashboard_client, :errors, :plan_updateable
@@ -40,6 +40,10 @@ module VCAP::Services::ServiceBrokers::V2
       service_broker.services_dataset.where(unique_id: broker_provided_id).first
     end
 
+    def route_service?
+      requires.include?('route_forwarding')
+    end
+
     private
 
     attr_reader :plans_data
@@ -51,7 +55,7 @@ module VCAP::Services::ServiceBrokers::V2
       validate_bool!(:bindable, bindable, required: true)
       validate_bool!(:plan_updateable, plan_updateable, required: true)
 
-      validate_array_of_strings!(:tags, tags)
+      validate_tags!(:tags, tags)
       validate_array_of_strings!(:requires, requires)
 
       validate_hash!(:metadata, metadata) if metadata
@@ -93,11 +97,11 @@ module VCAP::Services::ServiceBrokers::V2
     def build_plans
       return unless plans_data
 
-      if plans_data.is_a?(Array)
-        @plans = @plans_data.map { |attrs| CatalogPlan.new(self, attrs) }
-      else
-        @plans = @plans_data
-      end
+      @plans = if plans_data.is_a?(Array)
+                 @plans_data.map { |attrs| CatalogPlan.new(self, attrs) }
+               else
+                 @plans_data
+               end
     end
 
     def validate_at_least_one_plan_present!

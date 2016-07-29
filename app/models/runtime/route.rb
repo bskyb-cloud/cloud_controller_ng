@@ -2,7 +2,7 @@ require 'cloud_controller/dea/client'
 
 module VCAP::CloudController
   class Route < Sequel::Model
-    ROUTE_REGEX = /\A#{URI.regexp}\Z/.freeze
+    ROUTE_REGEX = /\A#{URI.regexp}\Z/
 
     class InvalidDomainRelation < VCAP::Errors::InvalidRelation; end
     class InvalidAppRelation < VCAP::Errors::InvalidRelation; end
@@ -12,17 +12,23 @@ module VCAP::CloudController
     many_to_one :domain
     many_to_one :space, after_set: :validate_changed_space
 
-    many_to_many :app_models, join_table: :apps_v3_routes
+    # This is a v3 relationship
+    one_to_many :route_mappings, class: 'VCAP::CloudController::RouteMappingModel', key: :route_guid, primary_key: :guid
+
+    # This is a v2 relationship for the /v2/route_mappings endpoints and associations
+    one_to_many :app_route_mappings, class: 'VCAP::CloudController::RouteMapping'
 
     many_to_many :apps,
-      before_add:   :validate_app,
-      after_add:    :handle_add_app,
-      after_remove: :handle_remove_app
+                 distinct: true,
+                 order: Sequel.asc(:id),
+                 before_add:   :validate_app,
+                 after_add:    :handle_add_app,
+                 after_remove: :handle_remove_app
 
     one_to_one :route_binding
     one_through_one :service_instance, join_table: :route_bindings
 
-    add_association_dependencies apps: :nullify
+    add_association_dependencies apps: :nullify, route_mappings: :destroy
 
     export_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :service_instance_guid, :port
     import_attributes :host, :path, :host_uniqueness, :host_uniqueness2, :domain_guid, :space_guid, :app_guids, :port
@@ -39,6 +45,7 @@ module VCAP::CloudController
       {
         guid:   guid,
         host:   host,
+        path:   path,
         domain: {
           guid: domain.guid,
           name: domain.name
@@ -72,7 +79,7 @@ module VCAP::CloudController
         uniqueness1.gsub!(/\d+/, '*')
         self.host_uniqueness = uniqueness1
       end
-      if  self.host =~ /\d+/
+      if self.host =~ /\d+/
         uniqueness2 = host.downcase
         uniqueness2.gsub!(/\[index\]/, '*')
         uniqueness2.gsub!(/\d+/, '*')
@@ -88,18 +95,18 @@ module VCAP::CloudController
 
       validates_format /^([\w\-\[\]]+|\*)$/, :host if host && !host.empty?
 
-      if path.empty? && port == 0
-        validates_unique [:host, :domain_id]  do |ds|
-          ds.where(path: '', port: 0)
+      if path.empty?
+        # This is only for routes controller translate_validation_exception method
+        # in order to distinguish between hostname being taken and path being
+        # taken
+        validates_unique [:host, :domain_id, :port] do |ds|
+          ds.where(path: '')
         end
-      elsif !path.empty? && port == 0
-        validates_unique [:host, :domain_id, :path]  do |ds|
-          ds.where(port: 0)
-        end
-      else # port > 0
-        validates_unique [:domain_id, :port]
+      else
+        validates_unique [:host, :domain_id, :path, :port]
       end
 
+      validate_host_and_domain_in_different_space
       validate_path
 
       validate_index_uniqueness
@@ -181,6 +188,12 @@ module VCAP::CloudController
       end
     end
 
+    # If you change this function, also change _add_route in app.rb
+    def _add_app(app, hash={})
+      app_port = app.user_provided_ports.first unless app.user_provided_ports.blank?
+      model.db[:apps_routes].insert(hash.merge(app_id: app.id, app_port: app_port, route_id: id, guid: SecureRandom.uuid))
+    end
+
     def validate_changed_space(new_space)
       apps.each { |app| validate_app(app) }
       raise InvalidOrganizationRelation if domain && !domain.usable_by_organization?(new_space.organization)
@@ -189,7 +202,7 @@ module VCAP::CloudController
     def self.user_visibility_filter(user)
       {
         space_id: Space.dataset.join_table(:inner, :spaces_developers, space_id: :id, user_id: user.id).select(:spaces__id).union(
-            Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)
+          Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)
           ).union(
             Space.dataset.join_table(:inner, :spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__id)
           ).union(
@@ -229,6 +242,14 @@ module VCAP::CloudController
       end
     end
 
+    def validate_host_and_domain_in_different_space
+      return unless space && domain && domain.shared?
+
+      validates_unique [:domain_id, :host], message: :host_and_domain_taken_different_space do |ds|
+        ds.where(port: 0).exclude(space: space)
+      end
+    end
+
     def handle_add_app(app)
       app.handle_add_route(self)
     end
@@ -239,6 +260,7 @@ module VCAP::CloudController
 
     def validate_domain
       errors.add(:domain, :invalid_relation) if !valid_domain
+      errors.add(:host, 'is required for shared-domains') if !valid_host_for_shared_domain
     end
 
     def valid_domain
@@ -247,11 +269,13 @@ module VCAP::CloudController
       domain_change = column_change(:domain_id)
       return false if !new? && domain_change && domain_change[0] != domain_change[1]
 
-      if (domain.shared? && (!host.present? && !old_port.present?)) ||
-          (space && !domain.usable_by_organization?(space.organization))
-        return false
-      end
+      return false if space && !domain.usable_by_organization?(space.organization) # domain is not usable by the org
 
+      true
+    end
+
+    def valid_host_for_shared_domain
+      return false if domain && domain.shared? && (!host.present? && !old_port.present?) # domain is shared and no host is present
       true
     end
 

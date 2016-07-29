@@ -5,6 +5,13 @@ module RspecApiDocumentation
     def has_body_parameters?
       respond_to?(:body_parameters) && body_parameters.present?
     end
+
+    def has_parameter_type?
+      body_parameters.each do |parameter|
+        return true unless parameter[:parameter_type].nil?
+      end
+      false
+    end
   end
 end
 

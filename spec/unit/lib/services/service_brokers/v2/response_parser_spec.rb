@@ -73,11 +73,7 @@ module VCAP::Services
             let(:call_method) do
               ->(response_parser, method_name, path, fake_response, service_param) do
                 if service_param
-                  if service_param == :syslog
-                    service = syslog_service
-                  else
-                    service = non_syslog_service
-                  end
+                  service = (service_param == :syslog) ? syslog_service : non_syslog_service
                   response_parser.send(method_name, path, fake_response, service_guid: service.guid)
                 else
                   response_parser.send(method_name, path, fake_response)
@@ -231,18 +227,18 @@ module VCAP::Services
         end
 
         def self.response_not_understood(expected_state, actual_state)
-          actual_state = (actual_state) ? "'#{actual_state}'" : 'null'
-          'The service broker returned an invalid response for the request to service-broker.com/v2/service_instances/GUID: ' + \
+          actual_state = actual_state ? "'#{actual_state}'" : 'null'
+          'The service broker returned an invalid response for the request to service-broker.com/v2/service_instances/GUID: ' \
           "expected state was '#{expected_state}', broker returned #{actual_state}."
         end
 
         def self.invalid_json_error(body, uri)
-          "The service broker returned an invalid response for the request to #{uri}: " + \
+          "The service broker returned an invalid response for the request to #{uri}: " \
           "expected valid JSON object in body, broker returned '#{body}'"
         end
 
         def self.broker_returned_an_error(status, body, uri)
-          "The service broker returned an invalid response for the request to #{uri}. " + \
+          "The service broker returned an invalid response for the request to #{uri}. " \
           "Status Code: #{status} message, Body: #{body}"
         end
 
@@ -285,10 +281,10 @@ module VCAP::Services
         test_case(:bind,      200, with_credentials.to_json,                         result: client_result_with_state('succeeded').merge(with_credentials))
         test_case(:bind,      200, with_syslog_drain_url.to_json, service: :syslog,  result: client_result_with_state('succeeded').merge('syslog_drain_url' => 'syslog.com/drain'))
         test_case(:bind,      200, with_nil_syslog_drain_url.to_json, service: :no_syslog, result: client_result_with_state('succeeded').merge('syslog_drain_url' => nil))
-        test_case(:bind,      200, with_syslog_drain_url.to_json, service: :no_syslog, error: Errors::ServiceBrokerInvalidSyslogDrainUrl)
-        test_case(:bind,      200, with_valid_route_service_url.to_json,             result: client_result_with_state('succeeded').merge(with_valid_route_service_url))
-        test_case(:bind,      200, with_invalid_route_service_url_with_space.to_json,           error: Errors::ServiceBrokerBadResponse)
-        test_case(:bind,      200, with_invalid_route_service_url_with_no_host.to_json,           error: Errors::ServiceBrokerBadResponse)
+        test_case(:bind,      200, with_syslog_drain_url.to_json, service: :no_syslog,     error: Errors::ServiceBrokerInvalidSyslogDrainUrl)
+        test_case(:bind,      200, with_valid_route_service_url.to_json,                   result: client_result_with_state('succeeded').merge(with_valid_route_service_url))
+        test_case(:bind,      200, with_invalid_route_service_url_with_space.to_json,      error: Errors::ServiceBrokerBadResponse)
+        test_case(:bind,      200, with_invalid_route_service_url_with_no_host.to_json,    error: Errors::ServiceBrokerBadResponse)
         test_case(:bind,      200, with_http_route_service_url.to_json,              error: Errors::ServiceBrokerBadResponse)
         test_pass_through(:bind, 200, with_credentials,                              expected_state: 'succeeded')
         test_case(:bind,      201, broker_partial_json,                              error: Errors::ServiceBrokerResponseMalformed, description: invalid_json_error(broker_partial_json, binding_uri))
@@ -298,9 +294,9 @@ module VCAP::Services
         test_case(:bind,      201, with_syslog_drain_url.to_json, service: :syslog,  result: client_result_with_state('succeeded').merge('syslog_drain_url' => 'syslog.com/drain'))
         test_case(:bind,      201, with_syslog_drain_url.to_json, service: :no_syslog, error: Errors::ServiceBrokerInvalidSyslogDrainUrl)
         test_case(:bind,      201, with_nil_syslog_drain_url.to_json, service: :no_syslog, result: client_result_with_state('succeeded').merge('syslog_drain_url' => nil))
-        test_case(:bind,      201, with_valid_route_service_url.to_json,             result: client_result_with_state('succeeded').merge(with_valid_route_service_url))
-        test_case(:bind,      201, with_invalid_route_service_url_with_space.to_json,           error: Errors::ServiceBrokerBadResponse)
-        test_case(:bind,      201, with_invalid_route_service_url_with_no_host.to_json,           error: Errors::ServiceBrokerBadResponse)
+        test_case(:bind,      201, with_valid_route_service_url.to_json, result: client_result_with_state('succeeded').merge(with_valid_route_service_url))
+        test_case(:bind,      201, with_invalid_route_service_url_with_space.to_json, error: Errors::ServiceBrokerBadResponse)
+        test_case(:bind,      201, with_invalid_route_service_url_with_no_host.to_json, error: Errors::ServiceBrokerBadResponse)
         test_case(:bind,      201, with_http_route_service_url.to_json,              error: Errors::ServiceBrokerBadResponse)
         test_pass_through(:bind, 201, with_credentials,                              expected_state: 'succeeded')
         test_case(:bind,      202, broker_empty_json,                                error: Errors::ServiceBrokerBadResponse)
@@ -325,7 +321,7 @@ module VCAP::Services
         test_case(:fetch_state, 200, broker_empty_json,                              error: Errors::ServiceBrokerResponseMalformed, description: response_not_understood('succeeded', ''))
         test_case(:fetch_state, 200, broker_body_with_state('unrecognized').to_json, error: Errors::ServiceBrokerResponseMalformed, description: response_not_understood('succeeded', 'unrecognized'))
         test_case(:fetch_state, 200, broker_body_with_state('succeeded').to_json,    result: client_result_with_state('succeeded'))
-        test_case(:fetch_state, 200, broker_body_with_state('succeeded').merge('description' => 'a description').to_json,    result: client_result_with_state('succeeded', description: 'a description'))
+        test_case(:fetch_state, 200, broker_body_with_state('succeeded').merge('description' => 'a description').to_json, result: client_result_with_state('succeeded', description: 'a description'))
         test_pass_through(:fetch_state, 200, broker_body_with_state('succeeded'),    expected_state: 'succeeded')
         test_case(:fetch_state, 201, broker_partial_json,                            error: Errors::ServiceBrokerResponseMalformed)
         test_case(:fetch_state, 201, broker_malformed_json,                          error: Errors::ServiceBrokerResponseMalformed)

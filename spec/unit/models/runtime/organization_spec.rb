@@ -29,10 +29,23 @@ module VCAP::CloudController
         expect(organization.apps).to include(app.reload)
       end
 
+      it 'has associated app models' do
+        app_model = AppModel.make
+        organization = app_model.space.organization
+        expect(organization.app_models).to include(app_model.reload)
+      end
+
       it 'has associated service_instances' do
         service_instance = ManagedServiceInstance.make
         organization = service_instance.space.organization
         expect(organization.service_instances).to include(service_instance.reload)
+      end
+
+      it 'has associated tasks' do
+        task = TaskModel.make
+        organization = task.space.organization
+
+        expect(organization.tasks).to include(task.reload)
       end
     end
 
@@ -215,6 +228,66 @@ module VCAP::CloudController
 
         expect(org.has_remaining_memory(50)).to eq(true)
         expect(org.has_remaining_memory(51)).to eq(false)
+      end
+    end
+
+    describe '#instance_memory_limit' do
+      let(:quota) { QuotaDefinition.make(instance_memory_limit: 50) }
+      let(:org) { Organization.make quota_definition: quota }
+
+      it 'returns the instance memory limit from the quota' do
+        expect(org.instance_memory_limit).to eq(50)
+      end
+
+      context 'when the space does not have a quota' do
+        let(:quota) { nil }
+
+        it 'returns unlimited' do
+          expect(org.instance_memory_limit).to eq(QuotaDefinition::UNLIMITED)
+        end
+      end
+    end
+
+    describe '#app_task_limit' do
+      let(:quota) { QuotaDefinition.make(app_task_limit: 2) }
+      let(:org) { Organization.make quota_definition: quota }
+
+      it 'returns the app task limit from the quota' do
+        expect(org.app_task_limit).to eq(2)
+      end
+
+      context 'when the space does not have a quota' do
+        let(:quota) { nil }
+
+        it 'returns unlimited' do
+          expect(org.app_task_limit).to eq(QuotaDefinition::UNLIMITED)
+        end
+      end
+    end
+
+    describe '#meets_max_task_limit?' do
+      let(:space) { Space.make }
+      let(:org) { space.organization }
+      let(:quota) { QuotaDefinition.make(app_task_limit: 2) }
+      let(:app_model) { AppModel.make(space_guid: space.guid) }
+
+      before do
+        org.quota_definition = quota
+      end
+
+      it 'returns false when the app task limit is not exceeded' do
+        expect(org.meets_max_task_limit?).to be false
+      end
+
+      context 'number of pending and running tasks equals the limit' do
+        before do
+          TaskModel.make(app: app_model, state: TaskModel::RUNNING_STATE)
+          TaskModel.make(app: app_model, state: TaskModel::PENDING_STATE)
+        end
+
+        it 'returns true' do
+          expect(org.meets_max_task_limit?).to be true
+        end
       end
     end
 

@@ -2,11 +2,13 @@ require 'cloud_controller/rest_controller/common_params'
 require 'cloud_controller/rest_controller/messages'
 require 'cloud_controller/rest_controller/routes'
 require 'cloud_controller/security/access_context'
+require 'cloud_controller/basic_auth/basic_auth_authenticator'
+require 'cloud_controller/basic_auth/dea_basic_auth_authenticator'
 
 module VCAP::CloudController::RestController
   # The base class for all api endpoints.
   class BaseController
-    V2_ROUTE_PREFIX = '/v2'
+    V2_ROUTE_PREFIX = '/v2'.freeze
 
     include VCAP::CloudController
     include VCAP::Errors
@@ -46,7 +48,7 @@ module VCAP::CloudController::RestController
       if v2_api? || unversioned_api?
         common_params = CommonParams.new(logger)
         query_string = sinatra.request.query_string if sinatra
-        @opts    = common_params.parse(params, query_string)
+        @opts = common_params.parse(params, query_string)
       end
       @sinatra = sinatra
       @access_context = Security::AccessContext.new
@@ -143,10 +145,10 @@ module VCAP::CloudController::RestController
     end
 
     def unversioned_api?
-      !(env['PATH_INFO'] =~ /^\/v\d/)
+      !(env['PATH_INFO'] =~ %r{^/v\d})
     end
 
-    def recursive?
+    def recursive_delete?
       params['recursive'] == 'true'
     end
 
@@ -274,10 +276,12 @@ module VCAP::CloudController::RestController
         end
       end
 
-      def authenticate_basic_auth(path, &block)
+      def authenticate_basic_auth(path)
         controller.before path do
-          auth = Rack::Auth::Basic::Request.new(env)
-          unless auth.provided? && auth.basic? && auth.credentials == block.call
+          credentials = yield
+
+          unless CloudController::BasicAuth::BasicAuthAuthenticator.valid?(env, credentials) ||
+                  CloudController::BasicAuth::DeaBasicAuthAuthenticator.valid?(env, credentials)
             raise Errors::ApiError.new_from_details('NotAuthenticated')
           end
         end

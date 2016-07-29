@@ -34,7 +34,8 @@ module VCAP::CloudController
         @service_manager,
         @services_event_repository,
         self,
-        self
+        self,
+        route_services_enabled?
       )
 
       broker = create_action.create(params)
@@ -56,7 +57,7 @@ module VCAP::CloudController
         @service_manager,
         @services_event_repository,
         self,
-
+        route_services_enabled?
       )
       params = UpdateMessage.decode(body).extract
       broker = update_action.update(guid, params)
@@ -66,16 +67,15 @@ module VCAP::CloudController
     end
 
     def delete(guid)
-      validate_access(:delete, ServiceBroker)
       broker = ServiceBroker.find(guid: guid)
       return HTTP::NOT_FOUND unless broker
 
-      VCAP::Services::ServiceBrokers::ServiceBrokerRemover.new(broker, @services_event_repository).execute!
-      @services_event_repository.record_broker_event(:delete, broker, {})
+      validate_access(:delete, broker)
+      VCAP::Services::ServiceBrokers::ServiceBrokerRemover.new(@services_event_repository).remove(broker)
 
       HTTP::NO_CONTENT
     rescue Sequel::ForeignKeyConstraintViolation
-      raise VCAP::Errors::ApiError.new_from_details('ServiceBrokerNotRemovable')
+      raise VCAP::Errors::ApiError.new_from_details('ServiceBrokerNotRemovable', broker.name)
     end
 
     def self.translate_validation_exception(e, _)
@@ -92,6 +92,10 @@ module VCAP::CloudController
     define_routes
 
     private
+
+    def route_services_enabled?
+      @config[:route_services_enabled]
+    end
 
     def url_of(broker)
       "#{self.class.path}/#{broker.guid}"

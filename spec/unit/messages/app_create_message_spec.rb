@@ -10,7 +10,7 @@ module VCAP::CloudController
           'environment_variables' => {
             'ENVVAR' => 'env-val'
           },
-          'relationships'         => {
+          'relationships' => {
             'space' => { 'guid' => 'some-guid' }
           },
           'lifecycle' => {
@@ -32,12 +32,12 @@ module VCAP::CloudController
         expect(message.environment_variables).to eq({ 'ENVVAR' => 'env-val' })
         expect(message.relationships).to eq({ 'space' => { 'guid' => 'some-guid' } })
         expect(message.lifecycle).to eq(
-            { 'type'  => 'buildpack',
-              'data'  => {
-                'buildpack' => 'some-buildpack',
-                'stack'     => 'some-stack'
-              }
-            })
+          { 'type' => 'buildpack',
+            'data' => {
+              'buildpack' => 'some-buildpack',
+              'stack' => 'some-stack'
+            }
+          })
       end
 
       it 'converts requested keys to symbols' do
@@ -114,7 +114,7 @@ module VCAP::CloudController
           message = AppCreateMessage.new(params)
 
           expect(message).not_to be_valid
-          expect(message.errors_on(:environment_variables)[0]).to include('must be a hash')
+          expect(message.errors_on(:environment_variables)).to include('must be a hash')
         end
       end
 
@@ -146,7 +146,6 @@ module VCAP::CloudController
           let(:params) do
             {
               name: 'name',
-              relationships: {},
               lifecycle: {
                 type: 'buildpack',
                 data: {
@@ -161,7 +160,7 @@ module VCAP::CloudController
             message = AppCreateMessage.new(params)
 
             expect(message).not_to be_valid
-            expect(message.errors_on(:relationships)).to include("can't be blank")
+            expect(message.errors_on(:relationships)).to include('must be a hash')
           end
         end
 
@@ -184,7 +183,7 @@ module VCAP::CloudController
             message = AppCreateMessage.new(params)
 
             expect(message).not_to be_valid
-            expect(message.errors_on(:relationships)).to include("can't be blank")
+            expect(message.errors_on(:relationships)).to include("Space can't be blank")
           end
         end
 
@@ -262,54 +261,30 @@ module VCAP::CloudController
       end
 
       describe 'lifecycle' do
-        context 'when lifecycle data is provided' do
-          context 'both a valid stack and buildpack are provided' do
-            let(:valid_stack) { Stack.make(name: 'some-other-valid-stack') }
+        describe 'lifecycle data validations' do
+          context 'when lifecycle data is not provided' do
             let(:params) do
-              {
-                name: 'some_name',
-                relationships: { space: { guid: 'some-guid' } },
-                lifecycle: {
-                  type: 'buildpack',
-                  data: {
-                    buildpack: 'java',
-                    stack: valid_stack.name
-                  }
-                }
-              }
+              { lifecycle: { type: 'buildpack' } }
             end
 
-            it 'uses the specified values' do
+            it 'is not valid' do
               message = AppCreateMessage.new(params)
-              expect(message).to be_valid
-              expect(message.buildpack).to eq('java')
-              expect(message.stack).to eq(valid_stack.name)
+
+              expect(message).not_to be_valid
+              expect(message.errors_on(:lifecycle_data)).to include('must be a hash')
             end
           end
 
-          context 'invalid stack and buildpack' do
+          context 'when lifecycle data is not a hash' do
             let(:params) do
-              {
-                lifecycle: {
-                  type: 'buildpack',
-                  data: {
-                    buildpack: 123,
-                    stack: 'fake-stack'
-                  }
-                }
-              }
+              { lifecycle: { type: 'buildpack', data: 'blah blah' } }
             end
 
-            it 'must provide a valid buildpack value' do
+            it 'is not valid' do
               message = AppCreateMessage.new(params)
-              expect(message).not_to be_valid
-              expect(message.errors_on(:lifecycle)).to include('Buildpack must be a string')
-            end
 
-            it 'must provide a valid stack name' do
-              message = AppCreateMessage.new(params)
               expect(message).not_to be_valid
-              expect(message.errors_on(:lifecycle)).to include('Stack is invalid')
+              expect(message.errors_on(:lifecycle_data)).to include('must be a hash')
             end
           end
         end
@@ -317,14 +292,27 @@ module VCAP::CloudController
         describe 'lifecycle type validations' do
           context 'when lifecycle type is not a valid type' do
             let(:params) do
-              { lifecycle: { data: {}, type: { subhash: 'woah!' } } }
+              { lifecycle: { data: {}, type: 'woah!' } }
             end
 
             it 'is not valid' do
               message = AppCreateMessage.new(params)
 
               expect(message).not_to be_valid
-              expect(message.errors_on(:lifecycle_type)).to include('is invalid')
+              expect(message.errors_on(:lifecycle_type)).to include('is not included in the list: buildpack, docker')
+            end
+          end
+
+          context 'when lifecycle type is not a string' do
+            let(:params) do
+              { lifecycle: { data: {}, type: { subhash: 'woah!' } } }
+            end
+
+            it 'is not valid' do
+              message = AppCreateMessage.new(params)
+
+              expect(message).to_not be_valid
+              expect(message.errors_on(:lifecycle_type)).to include('must be a string')
             end
           end
 
@@ -337,7 +325,7 @@ module VCAP::CloudController
               message = AppCreateMessage.new(params)
 
               expect(message).not_to be_valid
-              expect(message.errors_on(:lifecycle_type)).to include("can't be blank")
+              expect(message.errors_on(:lifecycle_type)).to include('must be a string')
             end
           end
         end

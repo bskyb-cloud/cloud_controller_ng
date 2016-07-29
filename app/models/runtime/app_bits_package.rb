@@ -7,15 +7,6 @@ class AppBitsPackage
   class ZipSizeExceeded < StandardError; end
   class InvalidZip < StandardError; end
 
-  attr_reader :package_blobstore, :global_app_bits_cache, :max_package_size, :tmp_dir
-
-  def initialize(package_blobstore, global_app_bits_cache, max_package_size, tmp_dir)
-    @package_blobstore = package_blobstore
-    @global_app_bits_cache = global_app_bits_cache
-    @max_package_size = max_package_size
-    @tmp_dir = tmp_dir
-  end
-
   def create(app, uploaded_tmp_compressed_path, fingerprints_in_app_cache)
     CloudController::Blobstore::LocalAppBits.from_compressed_bits(uploaded_tmp_compressed_path, tmp_dir) do |local_app_bits|
       validate_size!(fingerprints_in_app_cache, local_app_bits)
@@ -43,15 +34,20 @@ class AppBitsPackage
 
     begin
       raise InvalidZip.new('The zip provided was not valid') unless valid_zip?(package_path)
-      raise ZipSizeExceeded if @max_package_size && package_size(package_path) > @max_package_size
+      raise ZipSizeExceeded if max_package_size && package_size(package_path) > max_package_size
 
-      package_blobstore.cp_to_blobstore(package_path, package_guid)
+      # by unpacking and repacking, we remove unneeded directory listings, which
+      # may contain directory permissions that cause problems during staging
+      CloudController::Blobstore::LocalAppBits.from_compressed_bits(package_path, tmp_dir) do |local_app_bits|
+        rezipped_package = local_app_bits.create_package
+        package_blobstore.cp_to_blobstore(rezipped_package.path, package_guid)
 
-      package.db.transaction do
-        package.lock!
-        package.package_hash = Digester.new.digest_path(package_path)
-        package.state = VCAP::CloudController::PackageModel::READY_STATE
-        package.save
+        package.db.transaction do
+          package.lock!
+          package.package_hash = Digester.new.digest_path(rezipped_package)
+          package.state = VCAP::CloudController::PackageModel::READY_STATE
+          package.save
+        end
       end
 
       VCAP::CloudController::BitsExpiration.new.expire_packages!(package.app)
@@ -93,5 +89,21 @@ class AppBitsPackage
     if total_size > max_package_size
       raise VCAP::Errors::ApiError.new_from_details('AppPackageInvalid', "Package may not be larger than #{max_package_size} bytes")
     end
+  end
+
+  def tmp_dir
+    @tmp_dir ||= VCAP::CloudController::Config.config[:directories][:tmpdir]
+  end
+
+  def package_blobstore
+    @package_blobstore ||= CloudController::DependencyLocator.instance.package_blobstore
+  end
+
+  def global_app_bits_cache
+    @global_app_bits_cache ||= CloudController::DependencyLocator.instance.global_app_bits_cache
+  end
+
+  def max_package_size
+    @max_package_size ||= VCAP::CloudController::Config.config[:packages][:max_package_size] || 512 * 1024 * 1024
   end
 end

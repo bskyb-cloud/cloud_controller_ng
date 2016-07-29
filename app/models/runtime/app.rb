@@ -11,7 +11,6 @@ require 'presenters/v3/cache_key_presenter'
 require_relative 'buildpack'
 
 module VCAP::CloudController
-  # rubocop:disable ClassLength
   class App < Sequel::Model
     plugin :serialization
     plugin :after_initialize
@@ -21,11 +20,14 @@ module VCAP::CloudController
     def after_initialize
       default_instances = db_schema[:instances][:default].to_i
 
-      self.instances ||=  default_instances
+      self.instances ||= default_instances
       self.memory ||= VCAP::CloudController::Config.config[:default_app_memory]
     end
 
-    APP_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/.freeze
+    DEFAULT_HTTP_PORT = 8080
+    DEFAULT_PORTS = [DEFAULT_HTTP_PORT].freeze
+
+    APP_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/
 
     one_to_many :droplets
     one_to_many :service_bindings
@@ -34,13 +36,21 @@ module VCAP::CloudController
     many_to_one :admin_buildpack, class: VCAP::CloudController::Buildpack
     many_to_one :space, after_set: :validate_space
     many_to_one :stack
-    many_to_many :routes, before_add: :validate_route, after_add: :handle_add_route, after_remove: :handle_remove_route
     one_through_one :organization, join_table: :spaces, left_key: :id, left_primary_key: :space_id, right_key: :organization_id
+
+    many_to_many :routes,
+                 distinct: true,
+                 order: Sequel.asc(:id),
+                 before_add: :validate_route,
+                 after_add: :handle_add_route,
+                 after_remove: :handle_remove_route
 
     one_to_one :current_saved_droplet,
                class: '::VCAP::CloudController::Droplet',
                key: :droplet_hash,
                primary_key: :droplet_hash
+
+    one_to_many :route_mappings
 
     add_association_dependencies routes: :nullify, events: :delete, droplets: :destroy
 
@@ -70,7 +80,7 @@ module VCAP::CloudController
     PACKAGE_STATES = %w(PENDING STAGED FAILED).map(&:freeze).freeze
     STAGING_FAILED_REASONS = %w(StagingError StagingTimeExpired NoAppDetectedError BuildpackCompileFailed
                                 BuildpackReleaseFailed InsufficientResources NoCompatibleCell).map(&:freeze).freeze
-    HEALTH_CHECK_TYPES = %w(port none).map(&:freeze).freeze
+    HEALTH_CHECK_TYPES = %w(port none process).map(&:freeze).freeze
 
     # marked as true on changing the associated routes, and reset by
     # +Dea::Client.start+
@@ -97,17 +107,18 @@ module VCAP::CloudController
         MinDiskQuotaPolicy.new(self),
         MetadataPolicy.new(self, metadata_deserialized),
         MinMemoryPolicy.new(self),
-        MaxMemoryPolicy.new(self, space, :space_quota_exceeded),
-        MaxMemoryPolicy.new(self, organization, :quota_exceeded),
-        MaxInstanceMemoryPolicy.new(self, organization && organization.quota_definition, :instance_memory_limit_exceeded),
-        MaxInstanceMemoryPolicy.new(self, space && space.space_quota_definition, :space_instance_memory_limit_exceeded),
+        AppMaxMemoryPolicy.new(self, space, :space_quota_exceeded),
+        AppMaxMemoryPolicy.new(self, organization, :quota_exceeded),
+        AppMaxInstanceMemoryPolicy.new(self, organization, :instance_memory_limit_exceeded),
+        AppMaxInstanceMemoryPolicy.new(self, space, :space_instance_memory_limit_exceeded),
         InstancesPolicy.new(self),
         MaxAppInstancesPolicy.new(self, organization, organization && organization.quota_definition, :app_instance_limit_exceeded),
         MaxAppInstancesPolicy.new(self, space, space && space.space_quota_definition, :space_app_instance_limit_exceeded),
         HealthCheckPolicy.new(self, health_check_timeout),
         CustomBuildpackPolicy.new(self, custom_buildpacks_enabled?),
         DockerPolicy.new(self),
-        PortsPolicy.new(self)
+        PortsPolicy.new(self),
+        DiegoToDeaPolicy.new(self, changed_from_diego_to_dea)
       ]
     end
 
@@ -142,6 +153,18 @@ module VCAP::CloudController
       create_app_usage_event
     end
 
+    def before_validation
+      # This is in before_validation because we need to validate ports based on diego flag
+      if diego.nil?
+        self.diego = Config.config[:default_to_diego_backend]
+      end
+
+      # column_changed?(:ports) reports false here for reasons unknown
+      @ports_changed_by_user = changed_columns.include?(:ports)
+      update_ports(nil) if changed_from_diego_to_dea && !changed_columns.include?(:ports)
+      super
+    end
+
     def before_save
       if needs_package_in_current_state? && !package_hash
         raise VCAP::Errors::ApiError.new_from_details('AppPackageInvalid', 'bits have not been uploaded')
@@ -152,15 +175,13 @@ module VCAP::CloudController
       self.disk_quota ||= Config.config[:default_app_disk_in_mb]
       self.enable_ssh = Config.config[:allow_app_ssh_access] && space.allow_ssh if enable_ssh.nil?
 
+      update_route_mappings_ports
+
       if Config.config[:instance_file_descriptor_limit]
         self.file_descriptors ||= Config.config[:instance_file_descriptor_limit]
       end
 
       set_new_version if version_needs_to_be_updated?
-
-      if diego.nil?
-        self.diego = Config.config[:default_to_diego_backend]
-      end
 
       super
     end
@@ -172,13 +193,17 @@ module VCAP::CloudController
       # * memory is changed
       # * health check type is changed
       # * enable_ssh is changed
+      # * ports were changed by the user
       #
       # this is to indicate that the running state of an application has changed,
       # and that the system should converge on this new version.
+
       (column_changed?(:state) ||
        column_changed?(:memory) ||
        column_changed?(:health_check_type) ||
-       column_changed?(:enable_ssh)) && started?
+       column_changed?(:enable_ssh) ||
+       @ports_changed_by_user
+      ) && started?
     end
 
     def set_new_version
@@ -203,7 +228,6 @@ module VCAP::CloudController
 
     def needs_package_in_current_state?
       started?
-      # started? && ((column_changed?(:state)) || (!new? && footprint_changed?))
     end
 
     def in_suspended_org?
@@ -272,7 +296,11 @@ module VCAP::CloudController
     alias_method_chain :command, :fallback
 
     def execution_metadata
-      (current_droplet && current_droplet.execution_metadata) || ''
+      if is_v2?
+        (current_droplet && current_droplet.execution_metadata) || ''
+      else
+        app.droplet.try(:execution_metadata)
+      end
     end
 
     def detected_start_command
@@ -324,31 +352,6 @@ module VCAP::CloudController
     end
     alias_method_chain :docker_credentials_json, 'serialization'
 
-    def system_env_json
-      vcap_services
-    end
-
-    def vcap_application
-      app_name = app.nil? ? name : app.name
-      {
-        limits: {
-          mem: memory,
-          disk: disk_quota,
-          fds: file_descriptors
-        },
-        application_id: guid,
-        application_version: version,
-        application_name: app_name,
-        application_uris: uris,
-        version: version,
-        name: name,
-        space_name: space.name,
-        space_id: space_guid,
-        uris: uris,
-        users: nil
-      }
-    end
-
     def database_uri
       service_uris = service_bindings.map { |binding| binding.credentials['uri'] }.compact
       DatabaseUriGenerator.new(service_uris).database_uri
@@ -399,11 +402,11 @@ module VCAP::CloudController
     def self.user_visibility_filter(user)
       {
         space_id: Space.dataset.join_table(:inner, :spaces_developers, space_id: :id, user_id: user.id).select(:spaces__id).union(
-            Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)
+          Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)
           ).union(
-              Space.dataset.join_table(:inner, :spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__id)
+            Space.dataset.join_table(:inner, :spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__id)
           ).union(
-                Space.dataset.join_table(:inner, :organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__id)
+            Space.dataset.join_table(:inner, :organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__id)
           ).select(:id)
       }
     end
@@ -422,6 +425,10 @@ module VCAP::CloudController
 
     def pending?
       package_state == 'PENDING'
+    end
+
+    def staging?
+      pending? && staging_task_id.present?
     end
 
     def started?
@@ -444,12 +451,29 @@ module VCAP::CloudController
     end
 
     def routing_info
-      info = routes.map do |r|
-        info = { 'hostname' => r.uri }
-        info['route_service_url'] = r.route_binding.route_service_url if r.route_binding && r.route_binding.route_service_url
-        info
+      route_app_port_map = route_id_app_ports_map
+
+      http_info = []
+      tcp_info = []
+      routes.each do |r|
+        route_app_port_map[r.id].each do |app_port|
+          if r.domain.router_group_guid.nil?
+            info = { 'hostname' => r.uri }
+            info['route_service_url'] = r.route_binding.route_service_url if r.route_binding && r.route_binding.route_service_url
+            info['port'] = app_port
+            http_info.push(info)
+          elsif !route_app_port_map[r.id].blank?
+            info = { 'router_group_guid' => r.domain.router_group_guid }
+            info['external_port'] = r.port
+            info['container_port'] = app_port
+            tcp_info.push(info)
+          end
+        end
       end
-      { 'http_routes' => info }
+      route_info = {}
+      route_info['http_routes'] = http_info unless http_info.blank?
+      route_info['tcp_routes'] = tcp_info unless tcp_info.blank?
+      route_info
     end
 
     def mark_as_staged
@@ -579,11 +603,11 @@ module VCAP::CloudController
     end
 
     def to_hash(opts={})
-      if VCAP::CloudController::SecurityContext.admin? || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
-        opts.merge!(redact: %w(docker_credentials_json))
-      else
-        opts.merge!(redact: %w(environment_json system_env_json docker_credentials_json))
-      end
+      opts[:redact] = if VCAP::CloudController::SecurityContext.admin? || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
+                        %w(docker_credentials_json)
+                      else
+                        %w(environment_json system_env_json docker_credentials_json)
+                      end
       super(opts)
     end
 
@@ -596,26 +620,115 @@ module VCAP::CloudController
     end
 
     def handle_add_route(route)
-      mark_routes_changed(route)
+      mark_routes_changed
       if is_v2?
         Repositories::Runtime::AppEventRepository.new.record_map_route(self, route, SecurityContext.current_user.try(:guid), SecurityContext.current_user_email)
       end
     end
 
+    # If you change this function, also change _add_app in route.rb
+    def _add_route(route, hash={})
+      port = self.user_provided_ports.first unless self.user_provided_ports.blank?
+      model.db[:apps_routes].insert(hash.merge(app_id: id, route_id: route.id, app_port: port, guid: SecureRandom.uuid))
+    end
+
     def handle_remove_route(route)
-      mark_routes_changed(route)
+      mark_routes_changed
       if is_v2?
         Repositories::Runtime::AppEventRepository.new.record_unmap_route(self, route, SecurityContext.current_user.try(:guid), SecurityContext.current_user_email)
       end
     end
 
     def handle_update_route(route)
-      mark_routes_changed(route)
+      mark_routes_changed
+    end
+
+    # user_provided_ports method should be called to
+    # get the value of ports stored in the database
+    alias_method(:user_provided_ports, :ports)
+    def ports
+      ports = super
+      return ports unless ports.nil?
+
+      if diego?
+        ports = docker_ports if self.docker_image.present?
+        ports = DEFAULT_PORTS if ports.blank?
+      end
+
+      ports
+    end
+
+    def all_service_bindings
+      service_bindings + (app ? app.service_bindings : [])
     end
 
     private
 
-    def mark_routes_changed(_=nil)
+    def route_id_app_ports_map
+      route_app_port_map = {}
+      self.route_mappings(true).each do |route_map|
+        route_app_port_map[route_map.route_id] = [] if route_app_port_map[route_map.route_id].nil?
+        unless route_map.app_port.nil?
+          route_app_port_map[route_map.route_id].push(route_map.app_port)
+        end
+      end
+
+      route_app_port_map
+    end
+
+    def changed_from_diego_to_dea
+      column_changed?(:diego) && initial_value(:diego).present? && !diego
+    end
+
+    def changed_from_dea_to_diego
+      column_changed?(:diego) && (initial_value(:diego) == false) && diego
+    end
+
+    def changed_from_default_ports
+      @ports_changed_by_user && initial_value(:ports) == [DEFAULT_HTTP_PORT]
+    end
+
+    # HACK: We manually call the Serializer here because the plugin uses the
+    # _before_validation method to serialize ports. This is called before
+    # validations and we want to set the default ports after validations.
+    #
+    # See:
+    # https://github.com/jeremyevans/sequel/blob/7d6753da53196884e218a59a7dcd9a7803881b68/lib/sequel/model/base.rb#L1772-L1779
+    def update_ports(new_ports)
+      self.ports = new_ports
+      self[:ports] = IntegerArraySerializer.serializer.call(self.ports)
+    end
+
+    def docker_ports
+      exposed_ports = []
+      if !self.needs_staging? && !self.current_saved_droplet.nil? && self.execution_metadata.present?
+        begin
+          metadata = JSON.parse(self.execution_metadata)
+          unless metadata['ports'].nil?
+            metadata['ports'].each { |port|
+              if port['Protocol'] == 'tcp'
+                exposed_ports << port['Port']
+              end
+            }
+          end
+        rescue JSON::ParserError
+        end
+      end
+      exposed_ports
+    end
+
+    def update_route_mappings_ports
+      if changed_from_diego_to_dea
+        self.route_mappings_dataset.update(app_port: nil) unless self.route_mappings.nil?
+      elsif changed_from_dea_to_diego
+        port = self.user_provided_ports.first if self.user_provided_ports.present?
+        self.route_mappings_dataset.update(app_port: port) if port.present?
+      elsif changed_from_default_ports && self.route_mappings.present? && self.docker_image.blank?
+        self.route_mappings_dataset.update(app_port: DEFAULT_HTTP_PORT)
+      end
+    end
+
+    def mark_routes_changed
       routes_already_changed = @routes_changed
       @routes_changed = true
 
@@ -646,27 +759,6 @@ module VCAP::CloudController
 
     def metadata_deserialized
       deserialized_values[:metadata]
-    end
-
-    WHITELIST_SERVICE_KEYS = %w(name label tags plan credentials syslog_drain_url).freeze
-
-    def service_binding_json(binding)
-      vcap_service = {}
-      WHITELIST_SERVICE_KEYS.each do |key|
-        vcap_service[key] = binding[key.to_sym] if binding[key.to_sym]
-      end
-      vcap_service
-    end
-
-    def vcap_services
-      services_hash = {}
-      service_bindings.each do |sb|
-        binding = ServiceBindingPresenter.new(sb).to_hash
-        service = service_binding_json(binding)
-        services_hash[binding[:label]] ||= []
-        services_hash[binding[:label]] << service
-      end
-      { 'VCAP_SERVICES' => services_hash }
     end
 
     def app_usage_event_repository

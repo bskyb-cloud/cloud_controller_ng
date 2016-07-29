@@ -9,6 +9,7 @@ module VCAP::CloudController
     attr_accessor :requested_keys, :extra_keys
 
     def initialize(params={})
+      params ||= {}
       @requested_keys   = params.keys
       disallowed_params = params.slice!(*allowed_keys)
       @extra_keys       = disallowed_params.keys
@@ -19,9 +20,10 @@ module VCAP::CloudController
       requested_keys.include?(key)
     end
 
-    def audit_hash
+    def audit_hash(exclude: [])
       request = {}
       requested_keys.each do |key|
+        next if exclude.include?(key)
         request[key.to_s] = self.try(key)
       end
       request
@@ -31,11 +33,7 @@ module VCAP::CloudController
       params = {}
       (requested_keys - opts[:exclude]).each do |key|
         val = self.try(key)
-        if val.is_a?(Array)
-          params[key] = val.map { |v| CGI.escape(v) }.join(',')
-        else
-          params[key] = val
-        end
+        params[key] = val.is_a?(Array) ? val.map { |v| v.gsub(',', CGI.escape(',')) }.join(',') : val
       end
       params
     end

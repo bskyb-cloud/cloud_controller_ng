@@ -8,9 +8,9 @@ module VCAP::CloudController
     PAGE_DEFAULT      = 1
     PER_PAGE_DEFAULT  = 50
     PER_PAGE_MAX      = 5000
-    ORDER_DEFAULT     = 'id'
-    DIRECTION_DEFAULT = 'asc'
-    VALID_DIRECTIONS  = %w(asc desc)
+    ORDER_DEFAULT     = 'id'.freeze
+    DIRECTION_DEFAULT = 'asc'.freeze
+    VALID_DIRECTIONS  = %w(asc desc).freeze
 
     attr_accessor :page, :per_page, :order_by, :order_direction
 
@@ -32,9 +32,9 @@ module VCAP::CloudController
     def initialize(params)
       super(params)
 
-      @page            ||= PAGE_DEFAULT
-      @per_page        ||= PER_PAGE_DEFAULT
-      @order_by        ||= ORDER_DEFAULT
+      @page ||= PAGE_DEFAULT
+      @per_page ||= PER_PAGE_DEFAULT
+      @order_by ||= ORDER_DEFAULT
       @order_direction ||= DIRECTION_DEFAULT
     end
 

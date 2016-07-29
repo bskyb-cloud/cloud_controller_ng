@@ -55,10 +55,9 @@ resource 'Blobstores', type: :api do
 
       client.delete '/v2/blobstores/buildpack_cache', {}, request_headers
 
-      expect(status).to eq 201
+      expect(status).to eq 202
 
-      successes, failures = Delayed::Worker.new.work_off
-      expect([successes, failures]).to eq [1, 0]
+      execute_all_jobs(expected_successes: 1, expected_failures: 0)
 
       expect(blobstore.exists?(key)).to be_falsey
     end

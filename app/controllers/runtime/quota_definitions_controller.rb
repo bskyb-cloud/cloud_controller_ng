@@ -4,11 +4,13 @@ module VCAP::CloudController
       attribute :name,                       String
       attribute :non_basic_services_allowed, Message::Boolean
       attribute :total_services,             Integer
+      attribute :total_service_keys,         Integer, optional_in: :create, default: -1
       attribute :total_routes,               Integer
       attribute :total_private_domains,      Integer, optional_in: :create, default: -1
       attribute :memory_limit,               Integer
       attribute :instance_memory_limit,      Integer, optional_in: :create, default: -1
       attribute :app_instance_limit,         Integer, optional_in: :create, default: -1
+      attribute :app_task_limit,             Integer, optional_in: :create, default: -1
     end
 
     query_parameters :name

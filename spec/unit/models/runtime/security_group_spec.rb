@@ -67,7 +67,7 @@ module VCAP::CloudController
           end
 
           context 'when log is not present' do
-            let(:rule) { build_transport_rule('protocol' => protocol)  }
+            let(:rule) { build_transport_rule('protocol' => protocol) }
 
             it 'is valid' do
               expect(subject).to be_valid
@@ -592,7 +592,7 @@ module VCAP::CloudController
                 end
 
                 context 'when log is not present' do
-                  let(:rule) { build_all_rule  }
+                  let(:rule) { build_all_rule }
 
                   it 'is valid' do
                     expect(subject).to be_valid
@@ -680,6 +680,19 @@ module VCAP::CloudController
             expect(subject).not_to be_valid
             expect(subject.errors[:rules].length).to eq 1
             expect(subject.errors[:rules][0]).to start_with 'value must be an array of hashes'
+          end
+        end
+
+        context 'when rules exceeds max number of characters' do
+          before do
+            stub_const('VCAP::CloudController::SecurityGroup::MAX_RULES_CHAR_LENGTH', 20)
+            subject.rules = [build_all_rule] * SecurityGroup::MAX_RULES_CHAR_LENGTH
+          end
+
+          it 'is not valid' do
+            expect(subject).not_to be_valid
+            expect(subject.errors[:rules].length).to eq 1
+            expect(subject.errors.on(:rules)).to include "length must not exceed #{SecurityGroup::MAX_RULES_CHAR_LENGTH} characters"
           end
         end
       end

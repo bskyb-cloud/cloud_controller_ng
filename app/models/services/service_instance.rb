@@ -4,6 +4,8 @@ module VCAP::CloudController
   class ServiceInstance < Sequel::Model
     class InvalidServiceBinding < StandardError; end
 
+    ROUTE_SERVICE_WARNING = 'Support for route services is disabled. This service instance cannot be bound to a route.'.freeze
+
     plugin :serialization
     plugin :single_table_inheritance, :is_gateway_service,
            model_map: lambda { |is_gateway_service|
@@ -51,6 +53,7 @@ module VCAP::CloudController
 
     def self.user_visibility_filter(user)
       Sequel.or([
+        [:space, managed_organizations_spaces_dataset(user.managed_organizations_dataset)],
         [:space, user.spaces_dataset],
         [:space, user.audited_spaces_dataset],
         [:space, user.managed_spaces_dataset],
@@ -99,7 +102,7 @@ module VCAP::CloudController
 
     def to_hash(opts={})
       if !VCAP::CloudController::SecurityContext.admin? && !space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
-        opts.merge!({ redact: ['credentials'] })
+        opts[:redact] = ['credentials']
       end
       hash = super(opts)
       hash
@@ -148,6 +151,10 @@ module VCAP::CloudController
 
     def route_service?
       false
+    end
+
+    def self.managed_organizations_spaces_dataset(managed_organizations_dataset)
+      VCAP::CloudController::Space.dataset.filter({ organization_id: managed_organizations_dataset.select(:organization_id) })
     end
 
     private

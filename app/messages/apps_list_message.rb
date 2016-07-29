@@ -2,7 +2,7 @@ require 'messages/base_message'
 
 module VCAP::CloudController
   class AppsListMessage < BaseMessage
-    ALLOWED_KEYS = [:names, :guids, :organization_guids, :space_guids, :page, :per_page, :order_by]
+    ALLOWED_KEYS = [:names, :guids, :organization_guids, :space_guids, :page, :per_page, :order_by].freeze
 
     attr_accessor(*ALLOWED_KEYS)
 
@@ -26,11 +26,9 @@ module VCAP::CloudController
 
     def self.from_params(params)
       opts = params.dup
-      to_array!(opts, 'names')
-      to_array!(opts, 'guids')
-      to_array!(opts, 'organization_guids')
-      to_array!(opts, 'space_guids')
-
+      ['names', 'guids', 'organization_guids', 'space_guids'].each do |attribute|
+        to_array! opts, attribute
+      end
       new(opts.symbolize_keys)
     end
 

@@ -14,6 +14,8 @@ module VCAP::CloudController
       to_many :routes, route_for: [:get, :put, :delete]
     end
 
+    query_parameters :name, :space_guid, :organization_guid
+
     def self.dependencies
       [:services_event_repository]
     end
@@ -36,6 +38,9 @@ module VCAP::CloudController
       elsif service_instance_errors.include?(:route_service_url_not_https)
         raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceRouteServiceURLInvalid',
                                                       'Scheme for route_service_url must be https.')
+      elsif service_instance_errors.include?(:route_service_url_invalid)
+        raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceRouteServiceURLInvalid',
+                                                      'route_service_url is invalid.')
       else
         Errors::ApiError.new_from_details('ServiceInstanceInvalid', e.errors.full_messages)
       end
@@ -47,6 +52,7 @@ module VCAP::CloudController
       logger.debug 'cc.create', model: self.class.model_class_name, attributes: request_attrs
       service_instance = create_instance(request_attrs)
       @services_event_repository.record_user_provided_service_instance_event(:create, service_instance, request_attrs)
+      route_service_warning(service_instance) unless route_services_enabled?
 
       [
         HTTP::CREATED,
@@ -56,7 +62,7 @@ module VCAP::CloudController
     end
 
     def update(guid)
-      request_attrs = decode_update_request_attrs
+      @request_attrs = decode_update_request_attrs
 
       logger.debug 'cc.update', guid: guid, attributes: request_attrs
       raise Errors::ApiError.new_from_details('InvalidRequest') unless request_attrs
@@ -76,7 +82,7 @@ module VCAP::CloudController
 
     def delete(guid)
       service_instance = UserProvidedServiceInstance.find(guid: guid)
-      raise_if_has_associations!(service_instance) if v2_api? && !recursive?
+      raise_if_has_dependent_associations!(service_instance) if v2_api? && !recursive_delete?
 
       deletion_job = Jobs::Runtime::ModelDeletion.new(ServiceInstance, guid)
       delete_and_audit_job = Jobs::AuditEventJob.new(
@@ -92,14 +98,25 @@ module VCAP::CloudController
       enqueue_deletion_job(delete_and_audit_job)
     end
 
+    def get_filtered_dataset_for_enumeration(model, ds, qp, opts)
+      single_filter = opts[:q][0] if opts[:q]
+
+      if single_filter && single_filter.start_with?('organization_guid')
+        org_guid = single_filter.split(':')[1]
+
+        Query.
+          filtered_dataset_from_query_params(model, ds, qp, { q: '' }).
+          select_all(:service_instances).
+          left_join(:spaces, id: :service_instances__space_id).
+          left_join(:organizations, id: :spaces__organization_id).
+          where(organizations__guid: org_guid)
+      else
+        super(model, ds, qp, opts)
+      end
+    end
+
     define_messages
     define_routes
-
-    def add_related(guid, name, other_guid)
-      return super(guid, name, other_guid) if name != :routes
-
-      bind_route(other_guid, guid)
-    end
 
     def add_related(guid, name, other_guid)
       return super(guid, name, other_guid) if name != :routes
@@ -115,21 +132,35 @@ module VCAP::CloudController
 
     private
 
+    def route_services_enabled?
+      @config[:route_services_enabled]
+    end
+
+    def route_service_warning(service_instance)
+      if service_instance.route_service?
+        add_warning(ServiceInstance::ROUTE_SERVICE_WARNING)
+      end
+    end
+
     def bind_route(route_guid, instance_guid)
       logger.debug 'cc.association.add', model: self.class.model_class_name, guid: instance_guid, assocation: :routes, other_guid: route_guid
 
       binding_manager = ServiceInstanceBindingManager.new(@services_event_repository, self, logger)
-      route_binding = binding_manager.create_route_service_instance_binding(route_guid, instance_guid)
+      route_binding = binding_manager.create_route_service_instance_binding(route_guid, instance_guid, {}, route_services_enabled?)
 
       [HTTP::CREATED, object_renderer.render_json(self.class, route_binding.service_instance, @opts)]
     rescue ServiceInstanceBindingManager::RouteNotFound
       raise VCAP::Errors::ApiError.new_from_details('RouteNotFound', route_guid)
+    rescue ServiceInstanceBindingManager::ServiceInstanceAlreadyBoundToSameRoute
+      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceAlreadyBoundToSameRoute')
     rescue ServiceInstanceBindingManager::RouteAlreadyBoundToServiceInstance
       raise VCAP::Errors::ApiError.new_from_details('RouteAlreadyBoundToServiceInstance')
     rescue ServiceInstanceBindingManager::ServiceInstanceNotFound
       raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceNotFound', instance_guid)
     rescue ServiceInstanceBindingManager::RouteServiceRequiresDiego
       raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceRouteServiceRequiresDiego')
+    rescue ServiceInstanceBindingManager::RouteServiceDisabled
+      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceRouteServiceDisabled')
     end
 
     def unbind_route(route_guid, instance_guid)

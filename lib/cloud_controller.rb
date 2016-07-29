@@ -67,8 +67,6 @@ require 'cloud_controller/organization_instance_usage_calculator'
 
 require 'cloud_controller/legacy_api/legacy_api_base'
 require 'cloud_controller/legacy_api/legacy_info'
-require 'cloud_controller/legacy_api/legacy_services'
-require 'cloud_controller/legacy_api/legacy_service_gateway'
 require 'cloud_controller/legacy_api/legacy_bulk'
 
 require 'cloud_controller/resource_pool'
@@ -80,8 +78,6 @@ require 'cloud_controller/dea/respondent'
 require 'cloud_controller/diego/nsync_client'
 require 'cloud_controller/diego/stager_client'
 require 'cloud_controller/diego/tps_client'
-
-require 'cloud_controller/dea/stager_pool'
 
 require 'cloud_controller/dea/hm9000/client'
 require 'cloud_controller/dea/hm9000/legacy_client'
@@ -102,11 +98,15 @@ require 'cloud_controller/uaa/uaa_client'
 require 'cloud_controller/bits_expiration'
 
 require 'cloud_controller/routing_api/routing_api_client'
+require 'cloud_controller/routing_api/disabled_routing_api_client'
 require 'cloud_controller/routing_api/router_group'
 
 require 'cloud_controller/route_validator'
+require 'cloud_controller/route_mapping_validator'
 
 require 'cloud_controller/integer_array_serializer'
 require 'cloud_controller/port_generator'
+
+require 'cloud_controller/route_binding_message'
 
 require 'services'
