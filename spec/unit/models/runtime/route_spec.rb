@@ -452,11 +452,6 @@ module VCAP::CloudController
           }.to raise_error(Sequel::ValidationFailed)
         end
 
-        it 'should allow [index] in the hostname' do
-          route.host = 'a-[index]'
-          expect(route).to be_valid
-        end
-
         it 'should allow an empty host' do
           Route.make(
             space: space,

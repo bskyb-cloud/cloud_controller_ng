@@ -71,17 +71,13 @@ module VCAP::CloudController
       route_binding && route_binding.route_service_url
     end
 
-    def before_create
-      super
-    end
-
     def validate
       validates_presence :domain
       validates_presence :space
 
       errors.add(:host, :presence) if host.nil?
 
-      validates_format /^([\w\-\[\]]+|\*)$/, :host if host && !host.empty?
+      validates_format /^([\w\-]+|\*)$/, :host if host && !host.empty?
 
       validate_uniqueness_on_host_and_domain if path.empty? && port.nil?
       validate_uniqueness_on_host_domain_and_port if path.empty?
@@ -92,7 +88,6 @@ module VCAP::CloudController
       validate_host
       validate_fqdn
       validate_path
-
       validate_domain
       validate_total_routes
       validate_ports
