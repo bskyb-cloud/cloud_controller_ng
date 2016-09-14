@@ -1,7 +1,7 @@
 require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 
-resource 'Apps', type: [:api, :legacy_api] do
+RSpec.resource 'Apps', type: [:api, :legacy_api] do
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let(:admin_buildpack) { VCAP::CloudController::Buildpack.make }
   let!(:apps) { 3.times { VCAP::CloudController::AppFactory.make } }
@@ -12,6 +12,10 @@ resource 'Apps', type: [:api, :legacy_api] do
 
   shared_context 'guid_parameter' do
     parameter :guid, 'The guid of the App'
+  end
+
+  def self.request_fields(required)
+    fields_info(required).reject { |f| [:detected_start_command].include?(f[:name]) }
   end
 
   # rubocop:disable Metrics/MethodLength
@@ -30,7 +34,6 @@ resource 'Apps', type: [:api, :legacy_api] do
       { name: :space_guid, description: 'The guid of the associated space.', custom_params: { required: required, example_values: [Sham.guid] } },
       { name: :stack_guid, description: 'The guid of the associated stack.', custom_params: { default: 'Uses the default system stack.', example_values: [Sham.guid] } },
       { name: :state, description: 'The current desired state of the app. One of STOPPED or STARTED.', custom_params: { default: 'STOPPED', valid_values: %w(STOPPED STARTED) } },
-      { name: :detected_start_command, description: 'The command detected by the buildpack during staging.', custom_params: { read_only: true } },
       { name: :command, description: "The command to start an app after it is staged, maximum length: 4096 (e.g. 'rails s -p $PORT' or 'java com.org.Server $PORT')." },
 
       {
@@ -53,11 +56,16 @@ resource 'Apps', type: [:api, :legacy_api] do
         description: 'Enable SSHing into the app. Supported for Diego only.',
         custom_params: { default: 'false if SSH is disabled globally or on the space, true if enabled for both', valid_values: [true, false] }
       },
+      {
+        name: :detected_start_command,
+        description: 'The command detected by the buildpack during staging.',
+        custom_params: { default: '', example_values: ['rails s'] }
+      },
 
       {
         name: :docker_image,
-        description: 'Name of the Docker image containing the app',
-        custom_params: { default: nil, example_values: ['cloudfoundry/helloworld', 'registry.example.com:5000/user/repository/tag'] }
+        description: 'Name of the Docker image containing the app. The "diego_docker" feature flag must be enabled in order to create Docker image apps.',
+        custom_params: { default: nil, example_values: ['cloudfoundry/diego-docker-app', 'registry.example.com:5000/user/repository/tag'] }
       },
 
       {
@@ -104,7 +112,7 @@ resource 'Apps', type: [:api, :legacy_api] do
   end
 
   shared_context 'fields' do |opts|
-    fields_info(opts[:required]).each do |f|
+    request_fields(opts[:required]).each do |f|
       field f[:name], f[:description], f[:custom_params] || {}
     end
   end
@@ -141,15 +149,15 @@ resource 'Apps', type: [:api, :legacy_api] do
         audited_event VCAP::CloudController::Event.find(type: 'audit.app.create', actee: app_guid)
       end
 
-      example 'Creating a Docker App (experimental)' do
+      example 'Creating a Docker App' do
         space_guid = VCAP::CloudController::Space.make.guid
 
-        data = required_fields.merge(space_guid: space_guid, name: 'docker_app', docker_image: 'cloudfoundry/hello', diego: true)
+        data = required_fields.merge(space_guid: space_guid, name: 'docker_app', docker_image: 'cloudfoundry/diego-docker-app', diego: true)
         client.post '/v2/apps', MultiJson.dump(data, pretty: true), headers
         expect(status).to eq(201)
 
         standard_entity_response parsed_response, :app
-        expect(parsed_response['entity']['docker_image']).to eq('cloudfoundry/hello:latest')
+        expect(parsed_response['entity']['docker_image']).to eq('cloudfoundry/diego-docker-app:latest')
         expect(parsed_response['entity']['diego']).to be_truthy
 
         app_guid = parsed_response['metadata']['guid']

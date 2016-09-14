@@ -2,7 +2,7 @@ require 'spec_helper'
 require 'cloud_controller/diego/process_guid'
 
 module VCAP::CloudController
-  describe BulkAppsController do
+  RSpec.describe BulkAppsController do
     def make_diego_app(options={})
       AppFactory.make(options).tap do |app|
         app.package_state = 'STAGED'
@@ -130,7 +130,7 @@ module VCAP::CloudController
             last_response_app = decoded_response['apps'].last
             last_app = app_table_entry(6)
 
-            expect(last_response_app).to eq(runners.runner_for_app(last_app).desire_app_message)
+            expect(last_response_app).to eq(runners.runner_for_app(last_app).desire_app_message.as_json)
           end
         end
 
@@ -149,7 +149,7 @@ module VCAP::CloudController
 
             message = decoded_response['fingerprints'][0]
             expect(message).to match_object({
-              'process_guid' => Diego::ProcessGuid.from_app(app),
+              'process_guid' => Diego::ProcessGuid.from_process(app),
               'etag' => app.updated_at.to_f.to_s
             })
           end
@@ -351,14 +351,14 @@ module VCAP::CloudController
             it 'returns a list of desire app messages that match the process guids' do
               diego_apps = runners.diego_apps(100, 0)
 
-              guids = diego_apps.map { |app| Diego::ProcessGuid.from_app(app) }
+              guids = diego_apps.map { |app| Diego::ProcessGuid.from_process(app) }
               post '/internal/bulk/apps', guids.to_json
 
               expect(last_response.status).to eq(200)
               expect(decoded_response.length).to eq(5)
 
               diego_apps.each do |app|
-                expect(decoded_response).to include(runners.runner_for_app(app).desire_app_message)
+                expect(decoded_response).to include(runners.runner_for_app(app).desire_app_message.as_json)
               end
             end
 
@@ -370,7 +370,7 @@ module VCAP::CloudController
               it 'only returns the diego apps' do
                 diego_apps = runners.diego_apps(100, 0)
 
-                guids = App.all.map { |app| Diego::ProcessGuid.from_app(app) }
+                guids = App.all.map { |app| Diego::ProcessGuid.from_process(app) }
                 post '/internal/bulk/apps', guids.to_json
 
                 expect(last_response.status).to eq(200)

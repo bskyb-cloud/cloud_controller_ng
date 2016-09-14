@@ -7,6 +7,7 @@ module VCAP::CloudController
 
     export_attributes :app_guid, :service_instance_guid, :credentials,
                       :binding_options, :gateway_data, :gateway_name, :syslog_drain_url
+    export_attributes_from_methods volume_mounts: :censor_volume_mounts
 
     import_attributes :app_guid, :service_instance_guid, :credentials,
                       :binding_options, :gateway_data, :syslog_drain_url
@@ -19,11 +20,13 @@ module VCAP::CloudController
     plugin :after_initialize
 
     encrypt :credentials, salt: :salt
+    encrypt :volume_mounts, salt: :volume_mounts_salt
 
     def validate
       validates_presence :app
       validates_presence :service_instance
       validates_unique [:app_id, :service_instance_id]
+      validates_max_length 65_535, :volume_mounts if !volume_mounts.nil?
 
       validate_app_and_service_instance(app, service_instance)
       validate_cannot_change_binding
@@ -84,6 +87,18 @@ module VCAP::CloudController
     end
     alias_method_chain :credentials, 'serialization'
 
+    def volume_mounts_with_serialization=(val)
+      self.volume_mounts_without_serialization = MultiJson.dump(val)
+    end
+    alias_method_chain :volume_mounts=, 'serialization'
+
+    def volume_mounts_with_serialization
+      string = volume_mounts_without_serialization
+      return if string.blank?
+      MultiJson.load string
+    end
+    alias_method_chain :volume_mounts, 'serialization'
+
     def gateway_data=(val)
       val = MultiJson.dump(val)
       super(val)
@@ -111,6 +126,10 @@ module VCAP::CloudController
 
     def binding_options=(values)
       super(MultiJson.dump(values))
+    end
+
+    def censor_volume_mounts
+      ServiceBindingPresenter.censor_volume_mounts(volume_mounts)
     end
 
     private

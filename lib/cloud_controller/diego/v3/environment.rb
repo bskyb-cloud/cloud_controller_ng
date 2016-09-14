@@ -16,12 +16,12 @@ module VCAP::CloudController
           vars_builder = VCAP::VarsBuilder.new(
             @app,
             memory_limit: @task.memory_in_mb,
-            disk_limit: default_disk_limit,
+            staging_disk_in_mb: default_disk_limit,
             space: @space,
             file_descriptors: Config.config[:instance_file_descriptor_limit] || 16384,
             version: SecureRandom.uuid
           )
-          vcap_application = vars_builder.vcap_application
+          vcap_application = vars_builder.to_hash
 
           @initial_env.
             merge(app_env).

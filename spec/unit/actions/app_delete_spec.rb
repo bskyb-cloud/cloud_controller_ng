@@ -2,7 +2,7 @@ require 'spec_helper'
 require 'actions/app_delete'
 
 module VCAP::CloudController
-  describe AppDelete do
+  RSpec.describe AppDelete do
     subject(:app_delete) { AppDelete.new(user.guid, user_email) }
 
     describe '#delete' do
@@ -19,7 +19,7 @@ module VCAP::CloudController
       end
 
       it 'creates an audit event' do
-        expect_any_instance_of(Repositories::Runtime::AppEventRepository).to receive(:record_app_delete_request).with(
+        expect_any_instance_of(Repositories::AppEventRepository).to receive(:record_app_delete_request).with(
           app,
           app.space,
           user.guid,
@@ -51,7 +51,7 @@ module VCAP::CloudController
         end
 
         it 'deletes associated processes' do
-          process = App.make(app_guid: app.guid)
+          process = App.make(app: app, space: app.space)
 
           expect {
             app_delete.delete(app_dataset)

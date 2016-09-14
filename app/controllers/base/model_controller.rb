@@ -5,7 +5,7 @@ module VCAP::CloudController::RestController
   class ModelController < BaseController
     include Routes
 
-    CENSORED_MESSAGE = 'PRIVATE DATA HIDDEN'.freeze
+    CENSORED_MESSAGE ||= 'PRIVATE DATA HIDDEN'.freeze
 
     attr_reader :object_renderer, :collection_renderer
 
@@ -94,6 +94,10 @@ module VCAP::CloudController::RestController
     def enumerate
       validate_access(:index, model)
 
+      if params.key?('order-by') && self.class.sortable_parameters.exclude?(params['order-by'].to_sym)
+        raise CloudController::Errors::ApiError.new_from_details('OrderByParameterInvalid', params['order-by'])
+      end
+
       collection_renderer.render_json(
         self.class,
         enumerate_dataset,
@@ -125,12 +129,13 @@ module VCAP::CloudController::RestController
 
       validate_access(:index, associated_model, { related_obj: obj, related_model: model })
 
+      admin_override = SecurityContext.admin? || SecurityContext.admin_read_only?
       filtered_dataset =
         Query.filtered_dataset_from_query_params(
           associated_model,
           obj.user_visible_relationship_dataset(name,
                                                 VCAP::CloudController::SecurityContext.current_user,
-                                                SecurityContext.admin?),
+                                                admin_override),
           associated_controller.query_parameters,
           @opts
         )
@@ -154,8 +159,8 @@ module VCAP::CloudController::RestController
     # @param [Symbol] name The name of the relation.
     #
     # @param [String] other_guid The GUID of the object to add to the relation
-    def add_related(guid, name, other_guid)
-      do_related('add', guid, name, other_guid)
+    def add_related(guid, name, other_guid, find_model=model)
+      do_related('add', guid, name, other_guid, find_model)
     end
 
     # Remove a related object.
@@ -167,8 +172,8 @@ module VCAP::CloudController::RestController
     #
     # @param [String] other_guid The GUID of the object to delete from the
     # relation.
-    def remove_related(guid, name, other_guid)
-      do_related('remove', guid, name, other_guid)
+    def remove_related(guid, name, other_guid, find_model=model)
+      do_related('remove', guid, name, other_guid, find_model)
     end
 
     # Add or Remove a related object.
@@ -182,21 +187,21 @@ module VCAP::CloudController::RestController
     #
     # @param [String] other_guid The GUID of the object to be "verb"ed to the
     # relation.
-    def do_related(verb, guid, name, other_guid)
+    def do_related(verb, guid, name, other_guid, parent_model=model)
       logger.debug "cc.association.#{verb}", guid: guid, assocation: name, other_guid: other_guid
 
       singular_name = name.to_s.singularize
 
-      @request_attrs = { singular_name => other_guid }
+      @request_attrs = { singular_name => other_guid, verb: verb, relation: name, related_guid: other_guid }
 
-      obj = find_guid(guid)
+      obj = find_guid(guid, parent_model)
 
       before_update(obj)
 
-      model.db.transaction do
-        validate_access(:read_for_update, obj, request_attrs)
+      parent_model.db.transaction do
+        read_validation = verb == 'remove' ? :can_remove_related_object : :read_related_object_for_update
+        validate_access(read_validation, obj, request_attrs)
         obj.send("#{verb}_#{singular_name}_by_guid", other_guid)
-        validate_access(:update, obj, request_attrs)
       end
 
       after_update(obj)
@@ -223,7 +228,7 @@ module VCAP::CloudController::RestController
           obj = obj.to_s
         end
         logger.info('allowy.access-denied.insufficient-scope', op: "#{op}_with_token", obj: obj, user: user, roles: roles)
-        raise VCAP::Errors::ApiError.new_from_details('InsufficientScope')
+        raise CloudController::Errors::ApiError.new_from_details('InsufficientScope')
       end
 
       if @access_context.cannot?(op, obj, *args)
@@ -231,7 +236,7 @@ module VCAP::CloudController::RestController
           obj = obj.to_s
         end
         logger.info('allowy.access-denied.not-authorized', op: op, obj: obj, user: user, roles: roles)
-        raise VCAP::Errors::ApiError.new_from_details('NotAuthorized')
+        raise CloudController::Errors::ApiError.new_from_details('NotAuthorized')
       end
     end
 
@@ -244,7 +249,7 @@ module VCAP::CloudController::RestController
 
     def redact_attributes(op, request_attributes)
       request_attributes.dup.tap do |changes|
-        changes.keys.each do |key|
+        changes.each_key do |key|
           attrib = self.class.attributes[key.to_sym]
           changes[key] = CENSORED_MESSAGE if attrib && attrib.redact_in?(op)
         end
@@ -255,7 +260,8 @@ module VCAP::CloudController::RestController
 
     def enumerate_dataset
       qp = self.class.query_parameters
-      visible_objects = model.user_visible(VCAP::CloudController::SecurityContext.current_user, SecurityContext.admin?)
+      admin_override = SecurityContext.admin? || SecurityContext.admin_read_only?
+      visible_objects = model.user_visible(VCAP::CloudController::SecurityContext.current_user, admin_override)
       filtered_objects = filter_dataset(visible_objects)
       get_filtered_dataset_for_enumeration(model, filtered_objects, qp, @opts)
     end
@@ -274,7 +280,7 @@ module VCAP::CloudController::RestController
       end
 
       if associations.any?
-        raise VCAP::Errors::ApiError.new_from_details('AssociationNotEmpty', associations.join(', '), obj.class.table_name)
+        raise CloudController::Errors::ApiError.new_from_details('AssociationNotEmpty', associations.join(', '), obj.class.table_name)
       end
     end
 
@@ -298,7 +304,7 @@ module VCAP::CloudController::RestController
 
     def find_guid(guid, find_model=model)
       obj = find_model.find(guid: guid)
-      raise self.class.not_found_exception(guid) if obj.nil?
+      raise self.class.not_found_exception(guid, find_model) if obj.nil?
       obj
     end
 
@@ -352,16 +358,16 @@ module VCAP::CloudController::RestController
       # Model class name associated with this rest/api endpoint.
       #
       # @return [String] The class name of the model associated with
-      def not_found_exception_name
-        "#{model_class_name}NotFound"
+      def not_found_exception_name(model_class)
+        "#{model_class.name.demodulize}NotFound"
       end
 
       # Lookup the not-found exception for this rest/api endpoint.
       #
       # @return [Exception] The vcap not-found exception for this
       # rest/api endpoint.
-      def not_found_exception(guid)
-        Errors::ApiError.new_from_details(not_found_exception_name, guid)
+      def not_found_exception(guid, find_model)
+        CloudController::Errors::ApiError.new_from_details(not_found_exception_name(find_model), guid)
       end
 
       # Start the DSL for defining attributes.  This is used inside
@@ -372,6 +378,12 @@ module VCAP::CloudController::RestController
         end
 
         k.new(self).instance_eval(&blk)
+      end
+
+      def sortable_parameters(*keys)
+        @sortable_keys ||= []
+        @sortable_keys = keys unless keys.empty?
+        @sortable_keys
       end
     end
   end

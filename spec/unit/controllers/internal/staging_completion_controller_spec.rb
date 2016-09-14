@@ -3,7 +3,7 @@ require 'membrane'
 require 'cloud_controller/diego/staging_guid'
 
 module VCAP::CloudController
-  describe StagingCompletionController do
+  RSpec.describe StagingCompletionController do
     let(:buildpack) { Buildpack.make }
     let(:buildpack_key) { buildpack.key }
     let(:detected_buildpack) { 'detected_buildpack' }
@@ -45,7 +45,7 @@ module VCAP::CloudController
       let(:staged_app) { make_diego_app }
       let(:app_id) { staged_app.guid }
       let(:task_id) { staged_app.staging_task_id }
-      let(:staging_guid) { Diego::StagingGuid.from_app(staged_app) }
+      let(:staging_guid) { Diego::StagingGuid.from_process(staged_app) }
       let(:url) { "/internal/staging/#{staging_guid}/completed" }
 
       before do
@@ -94,14 +94,16 @@ module VCAP::CloudController
         end
 
         context 'with an invalid staging guid' do
-          let(:task_id) { 'bogus-taskid' }
+          let(:staging_guid) { 'bogus-guid' }
 
           before do
             allow_any_instance_of(Diego::Runner).to receive(:start)
           end
 
-          it 'fails with a 400' do
+          it 'fails with a 404' do
             post url, MultiJson.dump(staging_response)
+
+            expect(last_response.status).to eq(404)
           end
         end
       end
@@ -115,7 +117,7 @@ module VCAP::CloudController
         end
 
         it 'propagates api errors from staging_response' do
-          expect_any_instance_of(Diego::Stager).to receive(:staging_complete).and_raise(Errors::ApiError.new_from_details('JobTimeout'))
+          expect_any_instance_of(Diego::Stager).to receive(:staging_complete).and_raise(CloudController::Errors::ApiError.new_from_details('JobTimeout'))
 
           post url, MultiJson.dump(staging_response)
           expect(last_response.status).to eq(524)
@@ -166,7 +168,7 @@ module VCAP::CloudController
       end
 
       it 'propagates api errors from staging_response' do
-        expect_any_instance_of(Diego::V3::Stager).to receive(:staging_complete).and_raise(Errors::ApiError.new_from_details('JobTimeout'))
+        expect_any_instance_of(Diego::V3::Stager).to receive(:staging_complete).and_raise(CloudController::Errors::ApiError.new_from_details('JobTimeout'))
 
         post url, MultiJson.dump(staging_response)
         expect(last_response.status).to eq(524)
@@ -229,17 +231,6 @@ module VCAP::CloudController
 
             expect(last_response.status).to eq(400)
             expect(last_response.body).to match /MessageParseError/
-          end
-        end
-
-        context 'with an invalid staging guid' do
-          let(:task_id) { 'bogus-taskid' }
-
-          it 'fails with a 400' do
-            post url, MultiJson.dump(staging_response)
-
-            expect(last_response.status).to eq(400)
-            expect(last_response.body).to match /InvalidRequest/
           end
         end
 

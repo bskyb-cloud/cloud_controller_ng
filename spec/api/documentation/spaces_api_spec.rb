@@ -1,7 +1,7 @@
 require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 
-resource 'Spaces', type: [:api, :legacy_api] do
+RSpec.resource 'Spaces', type: [:api, :legacy_api] do
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let!(:space) { VCAP::CloudController::Space.make }
   let(:guid) { space.guid }
@@ -36,7 +36,9 @@ resource 'Spaces', type: [:api, :legacy_api] do
       field :allow_ssh, 'Whether or not Space Developers can enable ssh on apps in the space'
     end
 
-    standard_model_list :space, VCAP::CloudController::SpacesController
+    standard_model_list :space, VCAP::CloudController::SpacesController do
+      request_parameter :'order-by', 'Parameter to order results by', valid_values: ['name', 'id']
+    end
     standard_model_get :space, nested_associations: [:organization]
     standard_model_delete :space do
       parameter :recursive, 'Will delete all apps, services, routes, and service brokers associated with the space', valid_values: [true, false]
@@ -321,7 +323,7 @@ resource 'Spaces', type: [:api, :legacy_api] do
     describe 'Events' do
       before do
         user                   = VCAP::CloudController::User.make
-        space_event_repository = VCAP::CloudController::Repositories::Runtime::SpaceEventRepository.new
+        space_event_repository = VCAP::CloudController::Repositories::SpaceEventRepository.new
         space_event_repository.record_space_update(space, user, 'user@example.com', { 'name' => 'new_name' })
       end
 

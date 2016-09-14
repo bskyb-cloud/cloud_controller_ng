@@ -5,12 +5,12 @@ require 'cloud_controller/diego/docker/staging_completion_handler'
 module VCAP::CloudController
   module Diego
     module Docker
-      describe StagingCompletionHandler do
+      RSpec.describe StagingCompletionHandler do
         let(:logger) { instance_double(Steno::Logger, info: nil, error: nil, warn: nil) }
         let(:runner) { instance_double(Diego::Runner, start: nil) }
         let(:runners) { instance_double(Runners, runner_for_app: runner) }
         let(:app) { AppFactory.make(staging_task_id: 'fake-staging-task-id') }
-        let(:staging_guid) { Diego::StagingGuid.from_app(app) }
+        let(:staging_guid) { Diego::StagingGuid.from_process(app) }
         let(:payload) { {} }
 
         subject(:handler) { StagingCompletionHandler.new(runners) }
@@ -133,7 +133,7 @@ module VCAP::CloudController
             it 'raises ApiError and marks the app as failed to stage' do
               expect {
                 handler.staging_complete(staging_guid, payload)
-              }.to raise_error(VCAP::Errors::ApiError).and change {
+              }.to raise_error(CloudController::Errors::ApiError).and change {
                 app.reload.package_state
               }.from('PENDING').to('FAILED')
             end
@@ -141,7 +141,7 @@ module VCAP::CloudController
             it 'logs an error for the CF operator' do
               expect {
                 handler.staging_complete(staging_guid, payload)
-              }.to raise_error(VCAP::Errors::ApiError)
+              }.to raise_error(CloudController::Errors::ApiError)
 
               expect(logger).to have_received(:error).with(
                 'diego.staging.success.invalid-message',
@@ -154,7 +154,7 @@ module VCAP::CloudController
             it 'logs an error for the CF user' do
               expect {
                 handler.staging_complete(staging_guid, payload)
-              }.to raise_error(VCAP::Errors::ApiError)
+              }.to raise_error(CloudController::Errors::ApiError)
 
               expect(Loggregator).to have_received(:emit_error).with(app.guid, /Malformed message from Diego stager/)
             end
@@ -162,7 +162,7 @@ module VCAP::CloudController
             it 'should not start anything' do
               expect {
                 handler.staging_complete(staging_guid, payload)
-              }.to raise_error(VCAP::Errors::ApiError)
+              }.to raise_error(CloudController::Errors::ApiError)
 
               expect(runners).not_to have_received(:runner_for_app)
               expect(runner).not_to have_received(:start)

@@ -1,7 +1,7 @@
 require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 
-resource 'Space Quota Definitions', type: [:api, :legacy_api] do
+RSpec.resource 'Space Quota Definitions', type: [:api, :legacy_api] do
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let(:space_quota_definition) { VCAP::CloudController::SpaceQuotaDefinition.make }
   let!(:guid) { space_quota_definition.guid }
@@ -18,6 +18,10 @@ resource 'Space Quota Definitions', type: [:api, :legacy_api] do
     field :total_services, 'How many services a space can have. (-1 represents an unlimited amount)', required: opts[:required], example_values: [-1, 5, 201]
 
     field :total_routes, 'How many routes a space can have. (-1 represents an unlimited amount)', required: opts[:required], example_values: [-1, 10, 23]
+    field :total_reserved_route_ports,
+      'How many routes a space can have that use a reserved port. These routes count toward total_routes. (-1 represents an unlimited amount; subject to org quota)',
+      default: -1,
+      example_values: [-1, 10, 20]
     field :memory_limit, 'How much memory in megabytes a space can have.', required: opts[:required], example_values: [5_120, 10_024]
 
     field :total_service_keys, 'How many service keys an organization can have. (-1 represents an unlimited amount)', default: -1, example_values: [-1, 5, 201]
@@ -43,9 +47,14 @@ resource 'Space Quota Definitions', type: [:api, :legacy_api] do
     include_context 'updatable_fields', required: true
     example 'Creating a Space Quota Definition' do
       organization_guid = VCAP::CloudController::Organization.make.guid
-      client.post '/v2/space_quota_definitions', MultiJson.dump(required_fields.merge(organization_guid: organization_guid), pretty: true), headers
+      client.post '/v2/space_quota_definitions', MultiJson.dump(
+        required_fields.merge(organization_guid: organization_guid,
+                              total_reserved_route_ports: 5,
+                              total_routes: 10), pretty: true), headers
 
       expect(status).to eq(201)
+      expect(parsed_response['entity']).to include('total_reserved_route_ports')
+      expect(parsed_response['entity']).to include('total_routes')
       standard_entity_response parsed_response, :space_quota_definition
     end
   end
@@ -55,9 +64,11 @@ resource 'Space Quota Definitions', type: [:api, :legacy_api] do
     include_context 'updatable_fields', required: false
     example 'Updating a Space Quota Definition' do
       new_attributes = { name: 'new_name' }
-      client.put "/v2/space_quota_definitions/#{guid}", MultiJson.dump(new_attributes, pretty: true), headers
+      client.put "/v2/space_quota_definitions/#{guid}", MultiJson.dump(new_attributes, pretty: true, total_reserved_route_ports: 5, total_routes: 10), headers
 
       expect(status).to eq(201)
+      expect(parsed_response['entity']).to include('total_reserved_route_ports')
+      expect(parsed_response['entity']).to include('total_routes')
       standard_entity_response parsed_response, :space_quota_definition, name: 'new_name'
     end
   end

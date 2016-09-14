@@ -3,6 +3,12 @@ require 'presenters/error_presenter'
 module VCAP::CloudController
   module Jobs
     class ExceptionCatchingJob < WrappingJob
+      def perform
+        super
+      rescue CloudController::Blobstore::BlobstoreError => e
+        raise CloudController::Errors::ApiError.new_from_details('BlobstoreError', e.message)
+      end
+
       def error(job, e)
         error_presenter = ErrorPresenter.new(e)
         log_error(error_presenter)
@@ -13,7 +19,7 @@ module VCAP::CloudController
       private
 
       def save_error(error_presenter, job)
-        job.cf_api_error = YAML.dump(error_presenter.error_hash)
+        job.cf_api_error = YAML.dump(error_presenter.to_hash)
         deprioritize_job(job)
         job.save
       end

@@ -2,12 +2,12 @@ require 'spec_helper'
 require 'cloud_controller/diego/staging_guid'
 
 module VCAP::CloudController
-  describe Diego::Buildpack::StagingCompletionHandler do
+  RSpec.describe Diego::Buildpack::StagingCompletionHandler do
     let(:diego) { false }
     let(:staged_app) { App.make(instances: 3, staging_task_id: 'the-staging-task-id', diego: diego) }
     let(:logger) { instance_double(Steno::Logger, info: nil, error: nil, warn: nil) }
     let(:app_id) { staged_app.guid }
-    let(:staging_guid) { Diego::StagingGuid.from_app(staged_app) }
+    let(:staging_guid) { Diego::StagingGuid.from_process(staged_app) }
     let(:buildpack) { Buildpack.make }
 
     let(:success_response) do
@@ -185,7 +185,7 @@ module VCAP::CloudController
         before do
           expect {
             handle_staging_result(malformed_success_response)
-          }.to raise_error(VCAP::Errors::ApiError)
+          }.to raise_error(CloudController::Errors::ApiError)
         end
 
         it 'should not start anything' do

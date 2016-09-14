@@ -24,26 +24,30 @@ module VCAP::CloudController
       apps.each do |app|
         raise_if_service_bindings_exist!(app)
 
-        delete_subresources(app)
+        app.db.transaction do
+          app.lock!
 
-        Repositories::Runtime::AppEventRepository.new.record_app_delete_request(
-          app,
-          app.space,
-          @user_guid,
-          @user_email
-        )
+          delete_subresources(app)
 
-        app.destroy
+          Repositories::AppEventRepository.new.record_app_delete_request(
+            app,
+            app.space,
+            @user_guid,
+            @user_email
+          )
+
+          app.destroy
+        end
       end
     end
 
     private
 
     def delete_subresources(app)
-      PackageDelete.new.delete(packages_to_delete(app))
+      PackageDelete.new(user_guid, user_email).delete(packages_to_delete(app))
       TaskDelete.new(user_guid, user_email).delete(tasks_to_delete(app))
-      DropletDelete.new.delete(droplets_to_delete(app))
-      ProcessDelete.new.delete(processes_to_delete(app))
+      DropletDelete.new(user_guid, user_email).delete(droplets_to_delete(app))
+      ProcessDelete.new(user_guid, user_email).delete(processes_to_delete(app))
       RouteMappingDelete.new(user_guid, user_email).delete(route_mappings_to_delete(app))
       delete_buildpack_cache(app)
     end
@@ -58,7 +62,7 @@ module VCAP::CloudController
     end
 
     def packages_to_delete(app_model)
-      app_model.packages_dataset.select(:"#{PackageModel.table_name}__guid", :"#{PackageModel.table_name}__id").all
+      app_model.packages_dataset
     end
 
     def droplets_to_delete(app_model)
@@ -66,7 +70,7 @@ module VCAP::CloudController
         select(:"#{DropletModel.table_name}__guid",
         :"#{DropletModel.table_name}__id",
         :"#{DropletModel.table_name}__state",
-        :"#{DropletModel.table_name}__memory_limit",
+        :"#{DropletModel.table_name}__staging_memory_in_mb",
         :"#{DropletModel.table_name}__app_guid",
         :"#{DropletModel.table_name}__package_guid",
         :"#{DropletModel.table_name}__droplet_hash").all
@@ -77,7 +81,8 @@ module VCAP::CloudController
         select(:"#{ProcessModel.table_name}__guid",
         :"#{ProcessModel.table_name}__id",
         :"#{ProcessModel.table_name}__app_guid",
-        :"#{ProcessModel.table_name}__name").all
+        :"#{ProcessModel.table_name}__name",
+        :"#{ProcessModel.table_name}__space_id").all
     end
 
     def tasks_to_delete(app_model)

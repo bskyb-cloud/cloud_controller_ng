@@ -42,6 +42,7 @@ module VCAP::Services::ServiceBrokers::V2
         last_operation: {
           type: 'create',
           description: last_operation_hash['description'] || '',
+          broker_provided_operation: parsed_response['operation']
         }
       }
 
@@ -113,7 +114,7 @@ module VCAP::Services::ServiceBrokers::V2
       parsed_response = @response_parser.parse_bind(path, response, service_guid: binding.service.guid)
 
       attributes = {
-        credentials: parsed_response['credentials']
+        credentials: parsed_response['credentials'],
       }
 
       if parsed_response.key?('syslog_drain_url')
@@ -124,9 +125,14 @@ module VCAP::Services::ServiceBrokers::V2
         attributes[:route_service_url] = parsed_response['route_service_url']
       end
 
+      if parsed_response.key?('volume_mounts')
+        attributes[:volume_mounts] = parsed_response['volume_mounts']
+      end
+
       attributes
     rescue Errors::ServiceBrokerApiTimeout,
            Errors::ServiceBrokerBadResponse,
+           Errors::ServiceBrokerInvalidVolumeMounts,
            Errors::ServiceBrokerInvalidSyslogDrainUrl => e
       @orphan_mitigator.cleanup_failed_bind(@attrs, binding)
       raise e
@@ -164,11 +170,12 @@ module VCAP::Services::ServiceBrokers::V2
         last_operation: {
           type: 'delete',
           description: last_operation_hash['description'] || '',
-          state: state || 'succeeded'
-        }
+          state: state || 'succeeded',
+          broker_provided_operation: parsed_response['operation']
+        }.compact
       }
     rescue VCAP::Services::ServiceBrokers::V2::Errors::ServiceBrokerConflict => e
-      raise VCAP::Errors::ApiError.new_from_details('ServiceInstanceDeprovisionFailed', e.message)
+      raise CloudController::Errors::ApiError.new_from_details('ServiceInstanceDeprovisionFailed', e.message)
     rescue => e
       raise e.exception("Service instance #{instance.name}: #{e.message}")
     end
@@ -217,6 +224,7 @@ module VCAP::Services::ServiceBrokers::V2
           type: 'update',
           state: state,
           description: last_operation_hash['description'] || '',
+          broker_provided_operation: parsed_response['operation']
         },
       }
 
@@ -256,7 +264,13 @@ module VCAP::Services::ServiceBrokers::V2
     end
 
     def service_instance_last_operation_path(instance)
-      "#{service_instance_resource_path(instance)}/last_operation"
+      query_params = {}.tap do |q|
+        q['plan_id'] = instance.service_plan.broker_provided_id
+        q['service_id'] = instance.service.broker_provided_id
+        q['operation'] = instance.last_operation.broker_provided_operation if instance.last_operation.broker_provided_operation
+      end
+
+      "#{service_instance_resource_path(instance)}/last_operation?#{query_params.to_query}"
     end
 
     def service_binding_resource_path(binding_guid, service_instance_guid)

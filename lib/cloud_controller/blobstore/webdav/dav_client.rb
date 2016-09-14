@@ -2,37 +2,49 @@ require 'cloud_controller/blobstore/base_client'
 require 'cloud_controller/blobstore/errors'
 require 'cloud_controller/blobstore/webdav/dav_blob'
 require 'cloud_controller/blobstore/webdav/nginx_secure_link_signer'
+require 'cloud_controller/blobstore/webdav/http_client_provider'
 
 module CloudController
   module Blobstore
     class DavClient < BaseClient
-      def initialize(options, directory_key, root_dir=nil, min_size=nil, max_size=nil)
-        @options       = options
+      def initialize(
+        directory_key:,
+        httpclient:,
+        signer:,
+        endpoint:,
+        user: nil,
+        password: nil,
+        root_dir: nil,
+        min_size: nil,
+        max_size: nil)
+
         @directory_key = directory_key
         @min_size      = min_size || 0
         @max_size      = max_size
         @root_dir      = root_dir
+        @client        = httpclient
+        @endpoint      = endpoint
+        @headers       = {}
 
-        @client = HTTPClient.new
-        configure_ssl(@client, @options[:ca_cert_path])
-
-        @endpoint = @options[:private_endpoint]
-        @headers  = {}
-
-        user     = @options[:username]
-        password = @options[:password]
         if user && password
           @headers['Authorization'] = 'Basic ' +
             Base64.strict_encode64("#{user}:#{password}").strip
         end
 
-        @signer = NginxSecureLinkSigner.new(
-          internal_endpoint:    @options[:private_endpoint],
-          internal_path_prefix: @directory_key,
-          public_endpoint:      @options[:public_endpoint],
-          public_path_prefix:   @directory_key,
-          basic_auth_user:      user,
-          basic_auth_password:  password
+        @signer = signer
+      end
+
+      def self.build(options, directory_key, root_dir=nil, min_size=nil, max_size=nil)
+        new(
+          directory_key: directory_key,
+          httpclient:    HTTPClientProvider.provide(ca_cert_path: options[:ca_cert_path], connect_timeout: options[:blobstore_timeout]),
+          signer:        NginxSecureLinkSigner.build(options: options, directory_key: directory_key),
+          endpoint:      options[:private_endpoint],
+          user:          options[:username],
+          password:      options[:password],
+          root_dir:      root_dir,
+          min_size:      min_size,
+          max_size:      max_size
         )
       end
 
@@ -69,7 +81,7 @@ module CloudController
         end
       end
 
-      def cp_to_blobstore(source_path, destination_key, retries=2)
+      def cp_to_blobstore(source_path, destination_key)
         start     = Time.now.utc
         log_entry = 'cp-skip'
         size      = -1
@@ -80,10 +92,10 @@ module CloudController
           size = file.size
           next unless within_limits?(size)
 
-          with_retries(retries, 'cp', destination_key: destination_key) do
-            response = with_error_handling { @client.put(url(destination_key), file, @headers) }
+          response = with_error_handling { @client.put(url(destination_key), file, @headers) }
 
-            raise BlobstoreError.new("Could not create object, #{response.status}/#{response.content}") if response.status != 201 && response.status != 204
+          if response.status != 201 && response.status != 204
+            raise BlobstoreError.new("Could not create object, #{response.status}/#{response.content}")
           end
 
           log_entry = 'cp-finish'
@@ -146,24 +158,13 @@ module CloudController
         response = with_error_handling { @client.delete(url, header: @headers) }
         return if response.status == 204
 
-        raise FileNotFound.new("Could not find object '#{URI(url).path}', #{response.status}/#{response.content}") if response.status == 404
+        # requesting to delete something which is already gone is ok
+        return if response.status == 404
+
         raise BlobstoreError.new("Could not delete all in path, #{response.status}/#{response.content}")
       end
 
-      def configure_ssl(httpclient, ca_cert_path)
-        httpclient.ssl_config.verify_mode = skip_cert_verify ? OpenSSL::SSL::VERIFY_NONE : OpenSSL::SSL::VERIFY_PEER
-        httpclient.ssl_config.set_default_paths
-
-        if ca_cert_path && File.exist?(ca_cert_path)
-          httpclient.ssl_config.add_trust_ca(ca_cert_path)
-        end
-      end
-
       private
-
-      def skip_cert_verify
-        VCAP::CloudController::Config.config[:skip_cert_verify]
-      end
 
       def url(key)
         [@endpoint, 'admin', @directory_key, partitioned_key(key)].compact.join('/')
@@ -179,21 +180,6 @@ module CloudController
 
       def logger
         @logger ||= Steno.logger('cc.blobstore.dav_client')
-      end
-
-      def with_retries(retries, log_prefix, log_data)
-        yield
-      rescue StandardError => e
-        logger.debug("#{log_prefix}-retry",
-          {
-            error:             e,
-            remaining_retries: retries
-          }.merge(log_data)
-        )
-
-        retries -= 1
-        retry unless retries < 0
-        raise e
       end
 
       def with_error_handling

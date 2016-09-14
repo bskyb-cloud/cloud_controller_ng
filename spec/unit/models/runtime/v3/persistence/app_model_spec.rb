@@ -2,7 +2,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe AppModel do
+  RSpec.describe AppModel do
     let(:app_model) { AppModel.make }
     let(:space) { Space.find(guid: app_model.space_guid) }
 
@@ -79,7 +79,7 @@ module VCAP::CloudController
 
           expect {
             AppModel.make(name: 'lowerCase', space_guid: space_guid)
-          }.to raise_error(Sequel::ValidationFailed, /space_guid and name/)
+          }.to raise_error(Sequel::ValidationFailed, 'name must be unique in space')
         end
 
         it 'should allow standard ascii characters' do
@@ -140,7 +140,7 @@ module VCAP::CloudController
 
           expect {
             AppModel.make(name: name, space_guid: space.guid)
-          }.to raise_error(Sequel::ValidationFailed, /space_guid and name/)
+          }.to raise_error(Sequel::ValidationFailed, 'name must be unique in space')
         end
       end
 

@@ -2,7 +2,7 @@ require 'spec_helper'
 
 module VCAP::CloudController
   module Jobs::Runtime
-    describe AppBitsCopier do
+    RSpec.describe AppBitsCopier do
       let(:src_app) { VCAP::CloudController::AppFactory.make }
       let(:dest_app) { VCAP::CloudController::AppFactory.make }
       let(:compressed_path) { File.expand_path('../../../fixtures/good.zip', File.dirname(__FILE__)) }
@@ -10,7 +10,8 @@ module VCAP::CloudController
       let(:blobstore_dir) { Dir.mktmpdir }
       let(:app_event_repository) { double(:app_event_repository, record_src_copy_bits: nil, record_dest_copy_bits: nil) }
       let(:package_blobstore) do
-        CloudController::Blobstore::FogClient.new({ provider: 'Local', local_root: blobstore_dir }, 'package')
+        CloudController::Blobstore::FogClient.new(connection_config: { provider: 'Local', local_root: blobstore_dir },
+                                                  directory_key: 'package')
       end
       let(:user) { User.make }
       let(:email) { 'some-user@example.com' }

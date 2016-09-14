@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe Config do
+  RSpec.describe Config do
     let(:message_bus) { Config.message_bus }
 
     describe '.from_file' do
@@ -89,6 +89,14 @@ module VCAP::CloudController
 
         it ' sets a default value for num_of_staged_droplets_per_app_to_store' do
           expect(config[:droplets][:max_staged_droplets_stored]).to eq(5)
+        end
+
+        it 'sets a default value for the minimum number of candidate stagers' do
+          expect(config[:minimum_candidate_stagers]).to eq(5)
+        end
+
+        it 'sets a default value for the bits service' do
+          expect(config[:bits_service]).to eq({ enabled: false })
         end
       end
 
@@ -237,6 +245,7 @@ module VCAP::CloudController
             config_hash['app_bits_upload_grace_period_in_seconds'] = -2345
             config_hash['staging']['auth']['user'] = 'f@t:%a'
             config_hash['staging']['auth']['password'] = 'm@/n!'
+            config_hash['minimum_candidate_stagers'] = 0
 
             File.open(File.join(tmpdir, 'incorrect_overridden_config.yml'), 'w') do |f|
               YAML.dump(config_hash, f)
@@ -245,6 +254,10 @@ module VCAP::CloudController
 
           after do
             FileUtils.rm_r(tmpdir)
+          end
+
+          it 'resets minimum_candidate_stagers to the default of 5' do
+            expect(config_from_file[:minimum_candidate_stagers]).to eq(5)
           end
 
           it 'reset the negative value of app_bits_upload_grace_period_in_seconds to 0' do
@@ -266,6 +279,9 @@ module VCAP::CloudController
         @test_config = {
           packages: {
             fog_connection: {},
+            fog_aws_storage_options: {
+              encryption: 'AES256'
+            },
             app_package_directory_key: 'app_key',
           },
           droplets: {
@@ -293,6 +309,7 @@ module VCAP::CloudController
             },
           },
 
+          bits_service: { enabled: false },
           reserved_private_domains: File.join(Paths::FIXTURES, 'config/reserved_private_domains.dat'),
         }
       end
@@ -327,8 +344,7 @@ module VCAP::CloudController
         expect(VCAP::CloudController::Stagers).to receive(:new).with(
           @test_config,
           message_bus,
-          instance_of(Dea::Pool),
-          instance_of(Runners))
+          instance_of(Dea::Pool))
         Config.configure_components(@test_config)
         Config.configure_components_depending_on_message_bus(message_bus)
       end

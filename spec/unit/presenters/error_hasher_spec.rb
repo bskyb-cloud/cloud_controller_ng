@@ -1,6 +1,6 @@
 require 'spec_helper'
 
-describe ErrorHasher do
+RSpec.describe ErrorHasher do
   subject(:error_hasher) { ErrorHasher.new(error) }
 
   let(:unknown_error) do
@@ -16,7 +16,7 @@ describe ErrorHasher do
   end
 
   let(:api_error) do
-    error = VCAP::Errors::ApiError.new_from_details('DomainInvalid', 'notadomain')
+    error = CloudController::Errors::ApiError.new_from_details('DomainInvalid', 'notadomain')
     error.set_backtrace('fake backtrace')
     error
   end

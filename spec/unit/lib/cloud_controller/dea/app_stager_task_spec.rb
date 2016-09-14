@@ -1,21 +1,25 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe Dea::AppStagerTask do
+  RSpec.describe Dea::AppStagerTask do
     let(:message_bus) { CfMessageBus::MockMessageBus.new }
     let(:dea_pool) { double(:dea_pool, reserve_app_memory: nil) }
     let(:config_hash) { { staging: { timeout_in_seconds: 360 } } }
+    let(:droplet_sha1) { nil }
     let(:app) do
       AppFactory.make(
         package_hash:  'abc',
-        droplet_hash:  nil,
+        droplet_hash:  droplet_sha1,
         package_state: 'PENDING',
         state:         'STARTED',
         instances:     1,
         disk_quota:    1024
       )
     end
-    let(:stager_id) { 'my_stager' }
+
+    let(:dea_advertisement) { Dea::NatsMessages::DeaAdvertisement.new({ 'id' => 'my_stager' }, nil) }
+    let(:stager_id) { dea_advertisement.dea_id }
+
     let(:blobstore_url_generator) { CloudController::DependencyLocator.instance.blobstore_url_generator }
 
     let(:options) { {} }
@@ -57,24 +61,354 @@ module VCAP::CloudController
       }
     end
 
+    def stage(&blk)
+      stub_schedule_sync do
+        @before_staging_completion.call if @before_staging_completion
+        message_bus.respond_to_request("staging.#{stager_id}.start", first_reply_json)
+      end
+
+      response = staging_task.stage(&blk)
+      response
+    end
+
     before do
       expect(app.staged?).to be false
 
       allow(VCAP).to receive(:secure_uuid) { 'some_task_id' }
-      allow(dea_pool).to receive(:find_stager).with(app.stack.name, 1024, anything).and_return(stager_id)
+      allow(dea_pool).to receive(:find_stager).with(app.stack.name, 1024, anything).and_return(dea_advertisement)
 
       allow(EM).to receive(:add_timer)
       allow(EM).to receive(:defer).and_yield
       allow(EM).to receive(:schedule_sync)
     end
 
+    context 'when http is enabled' do
+      context 'when the dea supports http' do
+        let(:dea_advertisement) { Dea::NatsMessages::DeaAdvertisement.new({ 'id' => 'my_stager', 'url' => 'https://adea.dea' }, nil) }
+        let(:staging_message) { 'message' }
+        before do
+          allow(Dea::Client).to receive(:enabled?).and_return(true)
+          allow(staging_task).to receive(:staging_request).and_return(staging_message)
+        end
+
+        it 'uses http' do
+          expect(app).to receive(:update).with({ package_state: 'PENDING', staging_task_id: staging_task.task_id })
+          expect(message_bus).to receive(:publish).with('staging.stop', { app_id: app.guid })
+          expect(dea_pool).to receive(:reserve_app_memory).with(stager_id, app.memory)
+          expect(Dea::Client).to receive(:stage).with(dea_advertisement.url, staging_message).and_return(202)
+          expect(message_bus).not_to receive(:publish).with('staging.my_stager.start', staging_task.staging_request)
+          staging_task.stage
+        end
+
+        context 'when staging is not supported' do
+          it 'failsover to NATs' do
+            expect(message_bus).to receive(:publish).with('staging.stop', { app_id: app.guid })
+            expect(Dea::Client).to receive(:stage).with(dea_advertisement.url, staging_message).and_return(404)
+            expect(message_bus).to receive(:publish).with('staging.my_stager.start', staging_task.staging_request)
+
+            stage
+          end
+        end
+
+        context 'when an error occurs' do
+          let(:logger) { double(Steno) }
+
+          before do
+            allow(staging_task).to receive(:logger).and_return(logger)
+            allow(logger).to receive(:info)
+          end
+
+          it 'marks app as failed and raises an error' do
+            allow(Dea::Client).to receive(:stage).and_raise 'failure'
+
+            expect(app).to receive(:mark_as_failed_to_stage).with('StagingError')
+            expect(logger).to receive(:error).with(/failure/)
+            expect { staging_task.stage }.to raise_error 'failure'
+          end
+
+          context 'when the dea chosen returns a 503' do
+            it 'retries to stage' do
+              expect(Dea::Client).to receive(:stage).and_return(503, 202)
+              expect(staging_task).to receive(:stage).twice.and_call_original
+
+              staging_task.stage
+            end
+          end
+        end
+      end
+
+      context 'when the dea does not support http' do
+        it 'uses nats' do
+          expect(app).to receive(:update).with({ package_state: 'PENDING', staging_task_id: staging_task.task_id })
+          expect(message_bus).to receive(:publish).with('staging.stop', { app_id: app.guid })
+          expect(dea_pool).to receive(:reserve_app_memory).with(stager_id, app.memory)
+          expect(staging_task).not_to receive(:stage_with_http)
+          staging_task.stage
+        end
+      end
+    end
+
+    describe '#handle_http_response' do
+      let(:response) { reply_json.merge({ 'dea_id' => dea_advertisement.dea_id }) }
+
+      before do
+        allow(Dea::Client).to receive(:enabled?).and_return(true)
+        staging_task.stage
+      end
+
+      context 'when the DEA sends a staging success response' do
+        let(:detected_buildpack) { 'buildpack detect output' }
+
+        context 'when no other staging has happened' do
+          before do
+            allow(dea_pool).to receive(:mark_app_started)
+          end
+
+          it 'marks the app as staged' do
+            expect { staging_task.handle_http_response(response) }.to change { app.refresh.staged? }.to(true)
+          end
+
+          it 'saves the detected buildpack' do
+            expect { staging_task.handle_http_response(response) }.to change { app.refresh.detected_buildpack }.from(nil)
+          end
+
+          context 'and the droplet has been uploaded' do
+            let(:droplet_sha1) { 'Abc' }
+            it 'saves the detected start command' do
+              expect { staging_task.handle_http_response(response) }.to change {
+                app.current_droplet.refresh
+                app.detected_start_command
+              }.from('').to('wait_for_godot')
+            end
+          end
+
+          context 'when the droplet somehow has not been uploaded (defensive)' do
+            it 'does not change the start command' do
+              expect { staging_task.handle_http_response(response) }.not_to change {
+                app.detected_start_command
+              }.from('')
+            end
+          end
+
+          context 'when detected_start_command is not returned' do
+            let(:response) do
+              {
+                'task_id'                => 'task-id',
+                'task_log'               => 'task-log',
+                'task_streaming_log_url' => nil,
+                'detected_buildpack'     => detected_buildpack,
+                'buildpack_key'          => buildpack_key,
+                'error'                  => reply_json_error,
+                'error_info'             => reply_error_info,
+                'droplet_sha1'           => 'droplet-sha1'
+              }
+            end
+
+            let(:droplet_sha1) { 'Abc' }
+
+            it 'does not change the detected start command' do
+              expect { staging_task.handle_http_response(response) }.not_to change {
+                app.current_droplet.refresh
+                app.detected_start_command
+              }.from('')
+            end
+          end
+
+          context 'when an admin buildpack is used' do
+            let(:admin_buildpack) { Buildpack.make(name: 'buildpack-name') }
+            let(:buildpack_key) { admin_buildpack.key }
+            before do
+              app.buildpack = admin_buildpack.name
+            end
+
+            it 'saves the detected buildpack guid' do
+              expect { staging_task.handle_http_response(response) }.to change { app.refresh.detected_buildpack_guid }.from(nil)
+            end
+          end
+
+          it 'does not clobber other attributes that changed between staging' do
+            # fake out the app refresh as the race happens after it
+            allow(app).to receive(:refresh)
+
+            other_app_ref         = App.find(guid: app.guid)
+            other_app_ref.command = 'some other command'
+            other_app_ref.save
+
+            expect { staging_task.handle_http_response(response) }.to_not change {
+              other_app_ref.refresh.command
+            }
+          end
+
+          it 'marks app started in dea pool' do
+            expect(dea_pool).to receive(:mark_app_started).with({ dea_id: dea_advertisement.dea_id, app_id: app.guid })
+            staging_task.handle_http_response(response)
+          end
+
+          context 'when callback is not nil' do
+            before do
+              @callback_options = nil
+            end
+
+            it 'calls provided callback' do
+              staging_task.handle_http_response(response) { |options| @callback_options = options }
+              expect(@callback_options[:started_instances]).to equal(1)
+            end
+          end
+        end
+
+        context 'when staging was already marked as failed' do
+          before do
+            app.mark_as_failed_to_stage
+          end
+
+          it 'does not mark the app as staged' do
+            expect {
+              ignore_staging_error { staging_task.handle_http_response(response) }
+            }.not_to change { app.refresh.staged? }
+          end
+
+          it 'raises a StagingError' do
+            expect {
+              staging_task.handle_http_response(response)
+            }.to raise_error(
+              CloudController::Errors::ApiError,
+              /staging had already been marked as failed, this could mean that staging took too long/
+            )
+          end
+        end
+      end
+
+      context 'when the response is empty' do
+        let(:response) { nil }
+        let(:logger) { double(Steno).as_null_object }
+
+        before do
+          allow(staging_task).to receive(:logger).and_return(logger)
+        end
+
+        it 'logs StagingError' do
+          expect(logger).to receive(:error).with(/Encountered error on stager with id #{stager_id}/)
+          ignore_staging_error { staging_task.handle_http_response(response) }
+        end
+
+        it 'keeps the app as not staged' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to_not change { app.staged? }.from(false)
+        end
+
+        context 'when it has a callback' do
+          before do
+            @callback_called = false
+            staging_task.stage { @callback_called = true }
+            expect(@callback_called).to be false
+          end
+          it 'does not call provided callback (not yet)' do
+            ignore_staging_error { staging_task.handle_http_response(response) }
+            expect(@callback_called).to be false
+          end
+        end
+
+        it 'marks the app as having failed to stage' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to change { app.staging_failed? }.to(true)
+        end
+
+        it 'leaves the app with a generic staging failed reason' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to change { app.staging_failed_reason }.to('StagerError')
+        end
+      end
+
+      context 'when app staging returned an error response' do
+        let(:reply_json_error) { 'staging failed' }
+        let(:logger) { double(Steno).as_null_object }
+
+        before do
+          allow(staging_task).to receive(:logger).and_return(logger)
+        end
+
+        it 'logs StagingError' do
+          expect(logger).to receive(:error) do |msg|
+            expect(msg).to match(/Encountered error on stager with id #{stager_id}/)
+          end
+
+          ignore_staging_error { staging_task.handle_http_response(response) }
+        end
+
+        it 'keeps the app as not staged' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to_not change { app.staged? }.from(false)
+        end
+
+        it 'does not save the detected buildpack' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to_not change { app.detected_buildpack }.from(nil)
+        end
+
+        it 'does not save the detected buildpack guid' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to_not change { app.detected_buildpack_guid }.from(nil)
+        end
+
+        it 'does not save the detected start command' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to_not change { app.detected_start_command }.from('')
+        end
+
+        context 'when it has a callback' do
+          before do
+            @callback_called = false
+            staging_task.stage { @callback_called = true }
+            expect(@callback_called).to be false
+          end
+          it 'does not call provided callback (not yet)' do
+            ignore_staging_error { staging_task.handle_http_response(response) }
+            expect(@callback_called).to be false
+          end
+        end
+
+        it 'marks the app as having failed to stage' do
+          expect {
+            ignore_staging_error { staging_task.handle_http_response(response) }
+          }.to change { app.staging_failed? }.to(true)
+        end
+
+        context 'when a staging error is present' do
+          let(:reply_error_info) { { 'type' => 'NoAppDetectedError', 'message' => 'uh oh' } }
+
+          it 'sets the staging failed reason to the specified value' do
+            expect {
+              ignore_staging_error { staging_task.handle_http_response(response) }
+            }.to change { app.staging_failed_reason }.to('NoAppDetectedError')
+          end
+        end
+
+        context 'when a staging error is not present' do
+          let(:reply_error_info) { nil }
+
+          it 'sets staging failed reason to StagerError' do
+            expect {
+              ignore_staging_error { staging_task.handle_http_response(response) }
+            }.to change { app.staging_failed_reason }.to('StagerError')
+          end
+        end
+      end
+    end
+
     context 'when no stager can be found' do
-      let(:stager_id) { nil }
+      let(:dea_advertisement) { nil }
 
       it 'should raise an error' do
         expect {
           staging_task.stage
-        }.to raise_error(Errors::ApiError, /no available stagers/)
+        }.to raise_error(CloudController::Errors::ApiError, /no available stagers/)
       end
     end
 
@@ -89,7 +423,7 @@ module VCAP::CloudController
       context 'when the app memory requirement exceeds the staging memory requirement (1024)' do
         it 'should request a stager with the app memory requirement' do
           app.memory = 1025
-          expect(dea_pool).to receive(:find_stager).with(app.stack.name, 1025, anything).and_return(stager_id)
+          expect(dea_pool).to receive(:find_stager).with(app.stack.name, 1025, anything).and_return(dea_advertisement)
           staging_task.stage
         end
       end
@@ -97,7 +431,7 @@ module VCAP::CloudController
       context 'when the app memory requirement is less than the staging memory requirement' do
         it 'requests the staging memory requirement' do
           config_hash[:staging][:minimum_staging_memory_mb] = 2048
-          expect(dea_pool).to receive(:find_stager).with(app.stack.name, 2048, anything).and_return(stager_id)
+          expect(dea_pool).to receive(:find_stager).with(app.stack.name, 2048, anything).and_return(dea_advertisement)
           staging_task.stage
         end
       end
@@ -108,7 +442,7 @@ module VCAP::CloudController
         it 'should request a stager with enough disk' do
           app.disk_quota                                  = 12
           config_hash[:staging][:minimum_staging_disk_mb] = 1025
-          expect(dea_pool).to receive(:find_stager).with(app.stack.name, anything, 1025).and_return(stager_id)
+          expect(dea_pool).to receive(:find_stager).with(app.stack.name, anything, 1025).and_return(dea_advertisement)
           staging_task.stage
         end
       end
@@ -117,7 +451,7 @@ module VCAP::CloudController
         it 'should request a stager with enough disk' do
           app.disk_quota                                  = 123
           config_hash[:staging][:minimum_staging_disk_mb] = nil
-          expect(dea_pool).to receive(:find_stager).with(app.stack.name, anything, 4096).and_return(stager_id)
+          expect(dea_pool).to receive(:find_stager).with(app.stack.name, anything, 4096).and_return(dea_advertisement)
           staging_task.stage
         end
       end
@@ -126,7 +460,7 @@ module VCAP::CloudController
         it 'should request a stager with enough disk' do
           app.disk_quota                                  = 123
           config_hash[:staging][:minimum_staging_disk_mb] = 122
-          expect(dea_pool).to receive(:find_stager).with(app.stack.name, anything, 123).and_return(stager_id)
+          expect(dea_pool).to receive(:find_stager).with(app.stack.name, anything, 123).and_return(dea_advertisement)
           staging_task.stage
         end
       end
@@ -134,16 +468,6 @@ module VCAP::CloudController
 
     describe 'staging' do
       describe 'receiving the first response from the stager (the staging setup completion message)' do
-        def stage(&blk)
-          stub_schedule_sync do
-            @before_staging_completion.call if @before_staging_completion
-            message_bus.respond_to_request("staging.#{stager_id}.start", first_reply_json)
-          end
-
-          response = staging_task.stage(&blk)
-          response
-        end
-
         context 'it sets up the app' do
           before do
             allow(app).to receive(:update).and_call_original
@@ -212,7 +536,7 @@ module VCAP::CloudController
           let(:first_reply_json) { 'invalid-json' }
 
           it 'raises a StagingError' do
-            expect { stage }.to raise_error(Errors::ApiError, /failed to stage/)
+            expect { stage }.to raise_error(CloudController::Errors::ApiError, /failed to stage/)
           end
 
           it 'keeps the app as not staged' do
@@ -254,7 +578,7 @@ module VCAP::CloudController
           let(:first_reply_json_error) { 'staging failed' }
 
           it 'raises a StagingError' do
-            expect { stage }.to raise_error(Errors::ApiError, /failed to stage/)
+            expect { stage }.to raise_error(CloudController::Errors::ApiError, /failed to stage/)
           end
 
           it 'keeps the app as not staged' do
@@ -423,7 +747,7 @@ module VCAP::CloudController
               expect {
                 stage
               }.to raise_error(
-                Errors::ApiError,
+                CloudController::Errors::ApiError,
                 /another staging request was initiated/
               )
             end
@@ -473,7 +797,7 @@ module VCAP::CloudController
               expect {
                 stage
               }.to raise_error(
-                Errors::ApiError,
+                CloudController::Errors::ApiError,
                 /staging had already been marked as failed, this could mean that staging took too long/
               )
             end
@@ -519,7 +843,7 @@ module VCAP::CloudController
           end
 
           it 'leaves the app with a generic staging failed reason' do
-            expect { stage }.to change { app.staging_failed_reason }.to('StagingError')
+            expect { stage }.to change { app.staging_failed_reason }.to('StagerError')
           end
         end
 
@@ -575,7 +899,7 @@ module VCAP::CloudController
             let(:reply_error_info) { nil }
 
             it 'sets a generic staging failed reason' do
-              expect { stage }.to change { app.staging_failed_reason }.to('StagingError')
+              expect { stage }.to change { app.staging_failed_reason }.to('StagerError')
             end
           end
         end
@@ -583,7 +907,7 @@ module VCAP::CloudController
 
       describe 'reserve app memory' do
         before do
-          allow(dea_pool).to receive(:find_stager).with(app.stack.name, 1025, 4096).and_return(stager_id)
+          allow(dea_pool).to receive(:find_stager).with(app.stack.name, 1025, 4096).and_return(dea_advertisement)
         end
 
         context 'when app memory is less when configured minimum_staging_memory_mb' do
@@ -639,8 +963,8 @@ module VCAP::CloudController
 
     def ignore_staging_error
       yield
-    rescue VCAP::Errors::ApiError => e
-      raise e unless e.name == 'StagingError'
+    rescue CloudController::Errors::ApiError => e
+      raise e unless e.name == 'StagingError' || e.name == 'NoAppDetectedError' || e.name == 'StagerError'
     end
   end
 end

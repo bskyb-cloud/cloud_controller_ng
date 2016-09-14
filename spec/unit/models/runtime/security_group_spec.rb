@@ -2,7 +2,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe SecurityGroup, type: :model do
+  RSpec.describe SecurityGroup, type: :model do
     def build_transport_rule(attrs={})
       {
         'protocol' => 'udp',
@@ -179,6 +179,36 @@ module VCAP::CloudController
               expect(subject).not_to be_valid
               expect(subject.errors[:rules].length).to eq 1
               expect(subject.errors[:rules][0]).to start_with 'rule number 1 contains invalid destination'
+            end
+          end
+        end
+      end
+
+      context 'validates description' do
+        describe 'good' do
+          context 'when description is a string' do
+            let(:rule) { build_transport_rule('protocol' => protocol, 'description' => 'this is a description') }
+
+            it 'is valid' do
+              expect(subject).to be_valid
+            end
+          end
+
+          context 'description is not present' do
+            let(:rule) { build_transport_rule('protocol' => protocol) }
+
+            it 'is valid' do
+              expect(subject).to be_valid
+            end
+          end
+        end
+
+        describe 'bad' do
+          context 'description is not a string' do
+            let(:rule) { build_transport_rule('protocol' => protocol, 'description' => true) }
+
+            it 'is not valid' do
+              expect(subject).not_to be_valid
             end
           end
         end

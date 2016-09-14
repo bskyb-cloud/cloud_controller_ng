@@ -11,11 +11,11 @@ module VCAP::CloudController
     class ServiceInstanceAlreadyBoundToSameRoute < StandardError; end
     class AppNotFound < StandardError; end
     class RouteServiceDisabled < StandardError; end
+    class VolumeMountServiceDisabled < StandardError; end
 
     include VCAP::CloudController::LockCheck
 
-    def initialize(services_event_repository, access_validator, logger)
-      @services_event_repository = services_event_repository
+    def initialize(access_validator, logger)
       @access_validator = access_validator
       @logger = logger
     end
@@ -52,6 +52,8 @@ module VCAP::CloudController
 
       notify_diego(route_binding, attributes_to_update)
 
+      services_event_repository.record_service_instance_event(:bind_route, route_binding.service_instance, { route_guid: route.guid })
+
       route_binding
     end
 
@@ -68,14 +70,17 @@ module VCAP::CloudController
       @access_validator.validate_access(:update, route_binding.service_instance)
       delete_route_binding(route_binding)
 
+      services_event_repository.record_service_instance_event(:unbind_route, route_binding.service_instance, { route_guid: route.guid })
+
       route_binding.notify_diego if route_binding.route_service_url
     end
 
-    def create_app_service_instance_binding(service_instance_guid, app_guid, binding_attrs, arbitrary_parameters)
+    def create_app_service_instance_binding(service_instance_guid, app_guid, binding_attrs, arbitrary_parameters, volume_mount_services_enabled)
       service_instance = ServiceInstance.first(guid: service_instance_guid)
       raise ServiceInstanceNotFound unless service_instance
       raise ServiceInstanceNotBindable unless service_instance.bindable?
       raise AppNotFound unless App.first(guid: app_guid)
+      raise VolumeMountServiceDisabled if service_instance.volume_service? && !volume_mount_services_enabled
 
       service_binding = ServiceBinding.new(binding_attrs)
       @access_validator.validate_access(:create, service_binding)
@@ -95,6 +100,8 @@ module VCAP::CloudController
         raise e
       end
 
+      services_event_repository.record_service_binding_event(:create, service_binding)
+
       service_binding
     end
 
@@ -103,7 +110,7 @@ module VCAP::CloudController
       deletion_job = Jobs::DeleteActionJob.new(ServiceBinding, service_binding.guid, delete_action)
       delete_and_audit_job = Jobs::AuditEventJob.new(
         deletion_job,
-        @services_event_repository,
+        services_event_repository,
         :record_service_binding_event,
         :delete,
         service_binding.class,
@@ -170,6 +177,10 @@ module VCAP::CloudController
       mitigate_orphan(route_binding)
       route_binding.destroy
       raise e
+    end
+
+    def services_event_repository
+      ::CloudController::DependencyLocator.instance.services_event_repository
     end
   end
 end

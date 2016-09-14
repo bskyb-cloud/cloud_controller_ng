@@ -10,7 +10,7 @@ module VCAP::CloudController
        :blobstore_url_generator, :missing_blob_handler, :blob_sender, :config]
     end
 
-    include VCAP::Errors
+    include CloudController::Errors
 
     STAGING_PATH = '/staging'.freeze
 
@@ -150,11 +150,11 @@ module VCAP::CloudController
     def upload_v3_app_buildpack_cache(stack_name, guid)
       app_model = AppModel.find(guid: guid)
 
-      raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', 'App not found') if app_model.nil?
+      raise CloudController::Errors::ApiError.new_from_details('ResourceNotFound', 'App not found') if app_model.nil?
       raise ApiError.new_from_details('StagingError', "malformed buildpack cache upload request for #{guid}") unless v3_upload_path
       check_file_md5
 
-      cache_key = CacheKeyPresenter.cache_key(guid: guid, stack_name: stack_name)
+      cache_key = Presenters::V3::CacheKeyPresenter.cache_key(guid: guid, stack_name: stack_name)
 
       blobstore_upload = Jobs::Runtime::BlobstoreUpload.new(v3_upload_path, cache_key, :buildpack_cache_blobstore)
       Jobs::Enqueuer.new(blobstore_upload, queue: Jobs::LocalQueue.new(config)).enqueue
@@ -164,7 +164,7 @@ module VCAP::CloudController
     get "#{V3_APP_BUILDPACK_CACHE_PATH}/:stack/:guid/download", :download_v3_app_buildpack_cache
     def download_v3_app_buildpack_cache(stack_name, guid)
       app_model = AppModel.find(guid: guid)
-      raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', 'App not found') if app_model.nil?
+      raise CloudController::Errors::ApiError.new_from_details('ResourceNotFound', 'App not found') if app_model.nil?
 
       logger.info 'v3-droplet.begin-download', app_guid: guid, stack: stack_name
 
@@ -180,7 +180,7 @@ module VCAP::CloudController
       raise ApiError.new_from_details('BlobstoreNotLocal') unless @blobstore.local?
 
       droplet = DropletModel.find(guid: guid)
-      raise VCAP::Errors::ApiError.new_from_details('ResourceNotFound', 'Package not found') if droplet.nil?
+      raise CloudController::Errors::ApiError.new_from_details('ResourceNotFound', 'Package not found') if droplet.nil?
 
       blob = @blobstore.blob(droplet.blobstore_key)
       blob_name = "droplet_#{droplet.guid}"

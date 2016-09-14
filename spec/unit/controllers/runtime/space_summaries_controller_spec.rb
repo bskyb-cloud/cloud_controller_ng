@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe SpaceSummariesController do
+  RSpec.describe SpaceSummariesController do
     let(:space) { Space.make }
     let(:app_obj) { AppFactory.make(space: space) }
     let!(:first_route) { Route.make(space: space, app_guids: [app_obj.guid]) }
@@ -17,21 +17,22 @@ module VCAP::CloudController
       ServiceBinding.make(app: app_obj, service_instance: second_service)
 
       allow(CloudController::DependencyLocator.instance).to receive(:instances_reporters).and_return(instances_reporters)
-      allow(instances_reporters).to receive(:number_of_starting_and_running_instances_for_apps).and_return(running_instances)
+      allow(instances_reporters).to receive(:number_of_starting_and_running_instances_for_processes).and_return(running_instances)
       allow_any_instance_of(SpaceSummariesController).to receive(:instances_reporters).and_return(instances_reporters)
       app_obj.reload
+      set_current_user_as_admin
     end
 
     describe 'GET /v2/spaces/:id/summary' do
       it 'contains guid and name for the space' do
-        get "/v2/spaces/#{space.guid}/summary", '', admin_headers
+        get "/v2/spaces/#{space.guid}/summary"
         expect(last_response.status).to eq(200)
         expect(decoded_response['guid']).to eq(space.guid)
         expect(decoded_response['name']).to eq(space.name)
       end
 
       it 'returns the space apps' do
-        get "/v2/spaces/#{space.guid}/summary", '', admin_headers
+        get "/v2/spaces/#{space.guid}/summary"
         expected_app_hash = [{
           guid: app_obj.guid,
           urls: [first_route.uri, second_route.uri],
@@ -48,7 +49,7 @@ module VCAP::CloudController
       end
 
       it 'returns the space services' do
-        get "/v2/spaces/#{space.guid}/summary", '', admin_headers
+        get "/v2/spaces/#{space.guid}/summary"
         expected_services = [
           space.service_instances[0].as_summary_json,
           space.service_instances[1].as_summary_json
@@ -63,7 +64,7 @@ module VCAP::CloudController
         service_plan = ServicePlan.make(service: service, public: false)
         service_instance = ManagedServiceInstance.make(space: space, service_plan: service_plan)
 
-        get "/v2/spaces/#{space.guid}/summary", '', admin_headers
+        get "/v2/spaces/#{space.guid}/summary"
 
         parsed_response = MultiJson.load(last_response.body)
         expect(parsed_response['services'].map { |service_json| service_json['guid'] }).to include(service_instance.guid)
@@ -76,7 +77,7 @@ module VCAP::CloudController
         service_plan2 = ServicePlan.make(service: service2, public: false)
         service_instance2 = ManagedServiceInstance.make(space: other_space, service_plan: service_plan2)
 
-        get "/v2/spaces/#{space.guid}/summary", '', admin_headers
+        get "/v2/spaces/#{space.guid}/summary"
 
         parsed_response = MultiJson.load(last_response.body)
         expect(parsed_response['services'].map { |service_json| service_json['guid'] }).to_not include service_instance2.guid
@@ -84,12 +85,12 @@ module VCAP::CloudController
 
       context 'when the instances reporter fails' do
         before do
-          allow(instances_reporters).to receive(:number_of_starting_and_running_instances_for_apps).and_raise(
-            Errors::InstancesUnavailable.new(RuntimeError.new('something went wrong.')))
+          allow(instances_reporters).to receive(:number_of_starting_and_running_instances_for_processes).and_raise(
+            CloudController::Errors::InstancesUnavailable.new(RuntimeError.new('something went wrong.')))
         end
 
         it "returns '220001 InstancesError'" do
-          get "/v2/spaces/#{space.guid}/summary", '', admin_headers
+          get "/v2/spaces/#{space.guid}/summary"
 
           expect(last_response.status).to eq(503)
 

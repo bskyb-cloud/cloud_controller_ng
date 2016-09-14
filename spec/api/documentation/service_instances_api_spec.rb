@@ -2,7 +2,7 @@ require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 require 'uri'
 
-resource 'Service Instances', type: [:api, :legacy_api] do
+RSpec.resource 'Service Instances', type: [:api, :legacy_api] do
   tags = %w(accounting mongodb)
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let(:service_broker) { VCAP::CloudController::ServiceBroker.make }
@@ -215,6 +215,7 @@ EOF
           expect(status).to eq(201)
           expect(parsed_response['metadata']['guid']).to eq(service_instance.guid)
           expect(parsed_response['entity']['routes_url']).to eq("/v2/service_instances/#{service_instance.guid}/routes")
+          audited_event VCAP::CloudController::Event.find(type: 'audit.service_instance.bind_route', actee: service_instance.guid)
         end
       end
 
@@ -228,10 +229,19 @@ EOF
           client.delete "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}", {}, headers
           expect(status).to eq(204)
           expect(response_body).to be_empty
+          audited_event VCAP::CloudController::Event.find(type: 'audit.service_instance.unbind_route', actee: service_instance.guid)
         end
       end
 
       standard_model_list :route, VCAP::CloudController::RoutesController, outer_model: :service_instance
+    end
+
+    describe 'Service Keys' do
+      before do
+        VCAP::CloudController::ServiceKey.make(name: 'a-service-key', service_instance: service_instance)
+      end
+
+      standard_model_list :service_key, VCAP::CloudController::ServiceInstancesController, outer_model: :service_instance
     end
   end
 

@@ -1,10 +1,17 @@
 require 'spec_helper'
 require 'cloud_controller/dependency_locator'
 
-describe CloudController::DependencyLocator do
+RSpec.describe CloudController::DependencyLocator do
   subject(:locator) { CloudController::DependencyLocator.instance }
 
   let(:config) { TestConfig.config }
+  let(:bits_service_config) do
+    {
+      enabled: true,
+      public_endpoint: 'https://bits-service.com',
+      private_endpoint: 'http://bits-service.service.cf.internal'
+    }
+  end
 
   before { locator.config = config }
 
@@ -25,8 +32,27 @@ describe CloudController::DependencyLocator do
     end
 
     it 'creates blob store' do
-      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(options: config[:droplets], directory_key: 'key')
+      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).
+        with(options: config[:droplets], directory_key: 'key', resource_type: :droplets)
       locator.droplet_blobstore
+    end
+
+    context('when bits service is enabled') do
+      let(:config) do
+        {
+          droplets: {
+            fog_connection: 'fog_connection',
+            droplet_directory_key: 'key',
+          },
+          bits_service: bits_service_config
+        }
+      end
+
+      it 'creates the client with the right arguments' do
+        expect(CloudController::Blobstore::ClientProvider).to receive(:provide).
+          with(options: config[:droplets], directory_key: 'key', resource_type: :droplets)
+        locator.droplet_blobstore
+      end
     end
   end
 
@@ -41,8 +67,30 @@ describe CloudController::DependencyLocator do
     end
 
     it 'creates blob store' do
-      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(options: config[:droplets], directory_key: 'key', root_dir: 'buildpack_cache')
+      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(
+        options: config[:droplets],
+        directory_key: 'key',
+        root_dir: 'buildpack_cache',
+        resource_type: :buildpack_cache)
       locator.buildpack_cache_blobstore
+    end
+
+    context('when bits service is enabled') do
+      let(:config) do
+        {
+          droplets: {
+            fog_connection: 'fog_connection',
+            droplet_directory_key: 'key',
+          },
+          bits_service: bits_service_config
+        }
+      end
+
+      it 'creates the client with the right arguments' do
+        expect(CloudController::Blobstore::ClientProvider).to receive(:provide).
+          with(options: config[:droplets], directory_key: 'key', root_dir: 'buildpack_cache', resource_type: :buildpack_cache)
+        locator.buildpack_cache_blobstore
+      end
     end
   end
 
@@ -57,8 +105,26 @@ describe CloudController::DependencyLocator do
     end
 
     it 'creates blob store' do
-      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).with(options: config[:packages], directory_key: 'key')
+      expect(CloudController::Blobstore::ClientProvider).to receive(:provide).
+        with(options: config[:packages], directory_key: 'key', resource_type: :packages)
       locator.package_blobstore
+    end
+
+    context('when bits service is enabled') do
+      let(:config) do
+        {
+          packages: {
+            app_package_directory_key: 'key'
+          },
+          bits_service: bits_service_config
+        }
+      end
+
+      it 'creates the client with the right arguments' do
+        expect(CloudController::Blobstore::ClientProvider).to receive(:provide).
+          with(options: config[:packages], directory_key: 'key', resource_type: :packages)
+        locator.package_blobstore
+      end
     end
   end
 
@@ -119,7 +185,7 @@ describe CloudController::DependencyLocator do
   describe '#app_event_repository' do
     subject { locator.app_event_repository }
 
-    it { is_expected.to be_a(VCAP::CloudController::Repositories::Runtime::AppEventRepository) }
+    it { is_expected.to be_a(VCAP::CloudController::Repositories::AppEventRepository) }
 
     it 'memoizes the instance' do
       expect(locator.app_event_repository).to eq(locator.app_event_repository)
@@ -129,7 +195,7 @@ describe CloudController::DependencyLocator do
   describe '#space_event_repository' do
     subject { locator.space_event_repository }
 
-    it { is_expected.to be_a(VCAP::CloudController::Repositories::Runtime::SpaceEventRepository) }
+    it { is_expected.to be_a(VCAP::CloudController::Repositories::SpaceEventRepository) }
   end
 
   describe '#object_renderer' do
@@ -193,29 +259,6 @@ describe CloudController::DependencyLocator do
         and_return(renderer)
 
       expect(locator.large_paginated_collection_renderer).to eq(renderer)
-    end
-  end
-
-  describe '#entity_only_paginated_collection_renderer' do
-    it 'returns paginated collection renderer configured via config' do
-      eager_loader = instance_of(VCAP::CloudController::RestController::SecureEagerLoader)
-      serializer = instance_of(VCAP::CloudController::RestController::EntityOnlyPreloadedObjectSerializer)
-      opts = {
-        max_results_per_page: 100_000,
-        default_results_per_page: 100_001,
-        max_inline_relations_depth: 100_002,
-        collection_transformer: nil
-      }
-
-      TestConfig.override(renderer: opts)
-
-      renderer = double('renderer')
-      expect(VCAP::CloudController::RestController::PaginatedCollectionRenderer).
-        to receive(:new).
-        with(eager_loader, serializer, opts).
-        and_return(renderer)
-
-      expect(locator.entity_only_paginated_collection_renderer).to eq(renderer)
     end
   end
 

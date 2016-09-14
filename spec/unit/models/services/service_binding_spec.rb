@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe VCAP::CloudController::ServiceBinding, type: :model do
+  RSpec.describe VCAP::CloudController::ServiceBinding, type: :model do
     it { is_expected.to have_timestamp_columns }
 
     describe 'Associations' do
@@ -14,6 +14,15 @@ module VCAP::CloudController
       it { is_expected.to validate_presence :service_instance }
       it { is_expected.to validate_db_presence :credentials }
       it { is_expected.to validate_uniqueness [:app_id, :service_instance_id] }
+
+      it 'validates max length of volume_mounts' do
+        too_long = 'a' * (65_535 + 1)
+
+        binding = ServiceBinding.make
+        binding.volume_mounts = too_long
+
+        expect { binding.save }.to raise_error(Sequel::ValidationFailed, /volume_mounts max_length/)
+      end
 
       describe 'changing the binding after creation' do
         subject(:binding) { ServiceBinding.make }
@@ -60,18 +69,37 @@ module VCAP::CloudController
       end
     end
 
-    it_behaves_like 'a model with an encrypted attribute' do
-      let(:service_instance) { ManagedServiceInstance.make }
+    describe 'encrypted columns' do
+      describe 'credentials' do
+        it_behaves_like 'a model with an encrypted attribute' do
+          let(:service_instance) { ManagedServiceInstance.make }
 
-      def new_model
-        ServiceBinding.make(
-          service_instance: service_instance,
-          credentials: value_to_encrypt
-        )
+          def new_model
+            ServiceBinding.make(
+              service_instance: service_instance,
+              credentials: value_to_encrypt
+            )
+          end
+
+          let(:encrypted_attr) { :credentials }
+          let(:attr_salt) { :salt }
+        end
       end
 
-      let(:encrypted_attr) { :credentials }
-      let(:attr_salt) { :salt }
+      describe 'volume_mounts' do
+        it_behaves_like 'a model with an encrypted attribute' do
+          let(:service_instance) { ManagedServiceInstance.make }
+
+          def new_model
+            ServiceBinding.make(
+              service_instance: service_instance,
+              volume_mounts: value_to_encrypt
+            )
+          end
+
+          let(:encrypted_attr) { :volume_mounts }
+        end
+      end
     end
 
     describe 'bad relationships' do
@@ -271,6 +299,42 @@ module VCAP::CloudController
         expect(visible_to_developer.all).to eq [service_binding]
         expect(visible_to_auditor.all).to eq [service_binding]
         expect(visible_to_other_user.all).to be_empty
+      end
+    end
+
+    describe '#filter_volume_mounts' do
+      it 'removes the private key from all mounts' do
+        binding = described_class.new
+        binding.volume_mounts = [
+          {
+            container_dir: 'val1',
+            mode: 'val2',
+            device_type: 'val3',
+            hash1_private: 'val1_private'
+          },
+          {
+            hash2: 'val2',
+            hash2_private: 'val2_private'
+          }
+        ]
+
+        expect(binding.censor_volume_mounts).to match_array(
+          [{ 'container_dir' => 'val1', 'mode' => 'val2', 'device_type' => 'val3' }, {}]
+        )
+      end
+
+      it 'handles nil volume_mounts' do
+        binding = described_class.new
+        binding.volume_mounts = nil
+
+        expect(binding.censor_volume_mounts).to eq([])
+      end
+
+      it 'handles empty string volume_mounts' do
+        binding = described_class.new
+        binding.volume_mounts = ''
+
+        expect(binding.censor_volume_mounts).to eq([])
       end
     end
   end

@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController::RoutingApi
-  describe Client do
+  RSpec.describe Client do
     let(:token_issuer) { double(:token_issuer) }
     let(:token_info) { double(:token_info) }
     let(:routing_api_url) { 'http://routing-api.example.com' }
@@ -192,6 +192,26 @@ module VCAP::CloudController::RoutingApi
         it 'return nil' do
           group = routing_api.router_group('no-group-guid')
           expect(group).to be_nil
+        end
+      end
+    end
+
+    describe '.router_group_guid' do
+      let(:status) { 200 }
+      let(:body) do
+        [
+          { guid: 'random-guid-1', name: 'group-name', type: 'tcp' },
+          { guid: 'router-group-guid', name: 'group-name-2', type: 'my-type' },
+        ].to_json
+      end
+
+      it 'provides the associated router name for the given guid' do
+        expect(routing_api.router_group_guid('group-name')).to eq('random-guid-1')
+      end
+
+      context 'when there is no router group guid for the given name' do
+        it 'returns nil' do
+          expect(routing_api.router_group_guid('some-random-guid')).to be_nil
         end
       end
     end

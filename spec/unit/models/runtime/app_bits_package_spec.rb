@@ -1,6 +1,6 @@
 require 'spec_helper'
 
-describe AppBitsPackage do
+RSpec.describe AppBitsPackage do
   let(:compressed_path) { File.expand_path('../../../fixtures/good.zip', File.dirname(__FILE__)) }
   let(:app) { VCAP::CloudController::AppFactory.make }
   let(:package) { VCAP::CloudController::PackageModel.make }
@@ -8,11 +8,15 @@ describe AppBitsPackage do
   let(:local_tmp_dir) { Dir.mktmpdir }
 
   let(:global_app_bits_cache) do
-    CloudController::Blobstore::FogClient.new({ provider: 'Local', local_root: blobstore_dir }, 'global_app_bits_cache', nil, nil, 4, 8)
+    CloudController::Blobstore::FogClient.new(connection_config: { provider: 'Local', local_root: blobstore_dir },
+                                              directory_key: 'global_app_bits_cache',
+                                              min_size: 4,
+                                              max_size: 8)
   end
 
   let(:package_blobstore) do
-    CloudController::Blobstore::FogClient.new({ provider: 'Local', local_root: blobstore_dir }, 'package')
+    CloudController::Blobstore::FogClient.new(connection_config: { provider: 'Local', local_root: blobstore_dir },
+                                              directory_key: 'package')
   end
 
   let(:packer) { AppBitsPackage.new }
@@ -259,12 +263,12 @@ describe AppBitsPackage do
       it 'raises an exception' do
         expect {
           create
-        }.to raise_exception VCAP::Errors::ApiError, /package.+larger/i
+        }.to raise_exception CloudController::Errors::ApiError, /package.+larger/i
       end
 
       it 'removes the compressed path afterwards' do
         expect(FileUtils).to receive(:rm_f).with(compressed_path)
-        expect { create }.to raise_exception VCAP::Errors::ApiError, /package.+larger/i
+        expect { create }.to raise_exception CloudController::Errors::ApiError, /package.+larger/i
       end
     end
 

@@ -6,7 +6,7 @@ module VCAP::CloudController
     module Client
       ACTIVE_APP_STATES = [:RUNNING, :STARTING].freeze
       class << self
-        include VCAP::Errors
+        include CloudController::Errors
 
         attr_reader :config, :message_bus, :dea_pool, :message_bus
 
@@ -22,7 +22,7 @@ module VCAP::CloudController
             client.connect_timeout = 5
             client.receive_timeout = 5
             client.send_timeout = 5
-            client.keep_alive_timeout = 5
+            client.keep_alive_timeout = 1
 
             ssl = client.ssl_config
             ssl.verify_mode = OpenSSL::SSL::VERIFY_PEER
@@ -37,10 +37,22 @@ module VCAP::CloudController
           end
         end
 
-        def start(app, options={})
-          instances_to_start = options[:instances_to_start] || app.instances
-          start_instances(app, ((app.instances - instances_to_start)...app.instances))
-          app.routes_changed = false
+        def enabled?
+          @http_client != nil
+        end
+
+        def stage(url, msg)
+          raise ApiError.new_from_details('StagerError', 'Client not HTTP enabled') unless enabled?
+
+          begin
+            response = @http_client.post("#{url}/v1/stage", header: { 'Content-Type' => 'application/json' }, body: MultiJson.dump(msg))
+            status = response.status
+            return status if [202, 404, 503].include?(status)
+          rescue => e
+            raise ApiError.new_from_details('StagerError', "url: #{url}/v1/stage, error: #{e.message}")
+          end
+
+          raise ApiError.new_from_details('StagerError', "received #{status} from #{url}/v1/stage")
         end
 
         def run
@@ -59,7 +71,7 @@ module VCAP::CloudController
             msg = "Request failed for app: #{app.name}, instance: #{index}"
             msg << ' as the instance is out of range.'
 
-            raise Errors::ApiError.new_from_details('SshError', msg)
+            raise CloudController::Errors::ApiError.new_from_details('SshError', msg)
           end
 
           message = {
@@ -141,7 +153,7 @@ module VCAP::CloudController
         def change_running_instances(app, delta)
           if delta > 0
             range = (app.instances - delta...app.instances)
-            start_instances(app, range)
+            Dea::AppStarterTask.new(app, @blobstore_url_generator, config).start(specific_instances: range)
           elsif delta < 0
             range = (app.instances...app.instances - delta)
             stop_indices(app, range.to_a)
@@ -149,27 +161,6 @@ module VCAP::CloudController
         end
 
         # @param [Enumerable, #each] indices an Enumerable of indices / indexes
-        def start_instances(app, indices)
-          indices = Array(indices)
-          insufficient_resources_error = false
-          callbacks = []
-          indices.each do |idx|
-            begin
-              callback = start_instance_at_index(app, idx)
-              callbacks << callback if callback
-            rescue Errors::ApiError => e
-              if e.name == 'InsufficientRunningResourcesAvailable'
-                insufficient_resources_error = true
-              else
-                raise e
-              end
-            end
-          end
-
-          raise Errors::ApiError.new_from_details('InsufficientRunningResourcesAvailable') if insufficient_resources_error
-        ensure
-          callbacks.each(&:call)
-        end
 
         # @param [Array] indices an Enumerable of integer indices
         def stop_indices(app, indices)
@@ -267,27 +258,30 @@ module VCAP::CloudController
           stats
         end
 
-        private
+        def send_start(dea, message)
+          dea_id = dea.dea_id
 
-        def start_instance_at_index(app, index)
-          start_message = Dea::StartAppMessage.new(app, index, config, @blobstore_url_generator)
-
-          unless start_message.has_app_package?
-            logger.error 'dea-client.no-package-found', guid: app.guid
-            raise Errors::ApiError.new_from_details('AppPackageNotFound', app.guid)
+          if dea.url && enabled?
+            url = dea.url
+            logger.debug "sending 'dea.start' for dea_id: #{dea_id} to #{url} with '#{message}'"
+            connection = @http_client.post_async("#{url}/v1/apps", header: { 'Content-Type' => 'application/json' }, body: MultiJson.dump(message))
+            return lambda do
+              begin
+                connection.pop
+              rescue => e
+                logger.warn 'start failed', dea_id: dea_id, url: url, error: e.to_s
+              end
+            end
           end
 
-          dea = dea_pool.find_dea(mem: app.memory, disk: app.disk_quota, stack: app.stack.name, app_id: app.guid)
-          if dea.nil?
-            logger.error 'dea-client.no-resources-available', message: scrub_sensitive_fields(start_message)
-            raise Errors::ApiError.new_from_details('InsufficientRunningResourcesAvailable')
-          end
+          subject = "dea.#{dea_id}.start"
+          logger.debug "sending 'dea.start'", dea_id: dea_id, subject: subject
+          message_bus.publish(subject, message)
 
-          callback = dea_send_start(dea, start_message)
-          dea_pool.mark_app_started(dea_id: dea.dea_id, app_id: app.guid)
-          dea_pool.reserve_app_memory(dea.dea_id, app.memory)
-          callback
+          nil
         end
+
+        private
 
         def health_manager_client
           CloudController::DependencyLocator.instance.health_manager_client
@@ -334,27 +328,6 @@ module VCAP::CloudController
         def dea_publish_update(args)
           logger.debug "sending 'dea.update' with '#{args}'"
           message_bus.publish('dea.update', args)
-        end
-
-        def dea_send_start(dea, args)
-          dea_id = dea.dea_id
-          url = dea.url
-          logger.debug "sending 'dea.start' for dea_id: #{dea_id} to #{url} with '#{args}'"
-
-          if dea.url && @http_client
-            connection = @http_client.post_async("#{url}/v1/apps", header: { 'Content-Type' => 'application/json' }, body: MultiJson.dump(args))
-            return lambda do
-              begin
-                connection.pop
-              rescue => e
-                logger.warn 'start failed', dea_id: dea_id, url: url, error: e.to_s
-              end
-            end
-          end
-
-          message_bus.publish("dea.#{dea_id}.start", args)
-
-          nil
         end
 
         def dea_request_find_droplet(args, opts={})

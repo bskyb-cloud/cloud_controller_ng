@@ -26,15 +26,16 @@ module VCAP::CloudController
     end
 
     query_parameters :name, :organization_guid, :developer_guid, :app_guid
+    sortable_parameters :id, :name
 
     deprecated_endpoint "#{path_guid}/domains"
 
     def self.translate_validation_exception(e, attributes)
       name_errors = e.errors.on([:organization_id, :name])
       if name_errors && name_errors.include?(:unique)
-        Errors::ApiError.new_from_details('SpaceNameTaken', attributes['name'])
+        CloudController::Errors::ApiError.new_from_details('SpaceNameTaken', attributes['name'])
       else
-        Errors::ApiError.new_from_details('SpaceInvalid', e.errors.full_messages)
+        CloudController::Errors::ApiError.new_from_details('SpaceInvalid', e.errors.full_messages)
       end
     end
 
@@ -105,9 +106,10 @@ module VCAP::CloudController
         relation_name = :managed_service_instances
       end
 
+      admin_override = SecurityContext.admin? || SecurityContext.admin_read_only?
       service_instances = Query.filtered_dataset_from_query_params(
         model_class,
-        space.user_visible_relationship_dataset(relation_name, SecurityContext.current_user, SecurityContext.admin?),
+        space.user_visible_relationship_dataset(relation_name, SecurityContext.current_user, admin_override),
         ServiceInstancesController.query_parameters,
         @opts)
       service_instances.filter(space: space)
@@ -140,18 +142,18 @@ module VCAP::CloudController
       put "/v2/spaces/:guid/#{plural_role}", "add_#{role}_by_username".to_sym
 
       define_method("add_#{role}_by_username") do |guid|
-        FeatureFlag.raise_unless_enabled!('set_roles_by_username') unless SecurityContext.admin?
+        FeatureFlag.raise_unless_enabled!(:set_roles_by_username)
 
         username = parse_and_validate_json(body)['username']
 
         begin
           user_id = @username_lookup_uaa_client.id_for_username(username)
         rescue UaaUnavailable
-          raise VCAP::Errors::ApiError.new_from_details('UaaUnavailable')
+          raise CloudController::Errors::ApiError.new_from_details('UaaUnavailable')
         rescue UaaEndpointDisabled
-          raise VCAP::Errors::ApiError.new_from_details('UaaEndpointDisabled')
+          raise CloudController::Errors::ApiError.new_from_details('UaaEndpointDisabled')
         end
-        raise VCAP::Errors::ApiError.new_from_details('UserNotFound', username) unless user_id
+        raise CloudController::Errors::ApiError.new_from_details('UserNotFound', username) unless user_id
 
         user = User.where(guid: user_id).first || User.create(guid: user_id)
 
@@ -168,22 +170,22 @@ module VCAP::CloudController
       delete "/v2/spaces/:guid/#{plural_role}", "remove_#{role}_by_username".to_sym
 
       define_method("remove_#{role}_by_username") do |guid|
-        FeatureFlag.raise_unless_enabled!('unset_roles_by_username') unless SecurityContext.admin?
+        FeatureFlag.raise_unless_enabled!(:unset_roles_by_username)
 
         username = parse_and_validate_json(body)['username']
 
         begin
           user_id = @username_lookup_uaa_client.id_for_username(username)
         rescue UaaUnavailable
-          raise VCAP::Errors::ApiError.new_from_details('UaaUnavailable')
+          raise CloudController::Errors::ApiError.new_from_details('UaaUnavailable')
         rescue UaaEndpointDisabled
-          raise VCAP::Errors::ApiError.new_from_details('UaaEndpointDisabled')
+          raise CloudController::Errors::ApiError.new_from_details('UaaEndpointDisabled')
         end
-        raise VCAP::Errors::ApiError.new_from_details('UserNotFound', username) unless user_id
+        raise CloudController::Errors::ApiError.new_from_details('UserNotFound', username) unless user_id
 
         user = User.where(guid: user_id).first
 
-        raise VCAP::Errors::ApiError.new_from_details('UserNotFound', username) unless user
+        raise CloudController::Errors::ApiError.new_from_details('UserNotFound', username) unless user
 
         space = find_guid_and_validate_access(:update, guid)
         space.send("remove_#{role}", user)
@@ -204,7 +206,7 @@ module VCAP::CloudController
 
     def raise_if_dependency_present!(space)
       if space.service_instances.present? || space.app_models.present? || space.service_brokers.present?
-        raise VCAP::Errors::ApiError.new_from_details('NonrecursiveSpaceDeletionFailed', space.name)
+        raise CloudController::Errors::ApiError.new_from_details('NonrecursiveSpaceDeletionFailed', space.name)
       end
     end
 

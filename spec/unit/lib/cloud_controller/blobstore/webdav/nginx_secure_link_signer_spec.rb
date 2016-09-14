@@ -3,7 +3,7 @@ require 'cloud_controller/blobstore/webdav/nginx_secure_link_signer'
 
 module CloudController
   module Blobstore
-    describe NginxSecureLinkSigner do
+    RSpec.describe NginxSecureLinkSigner do
       subject(:signer) do
         described_class.new(
           internal_endpoint:    internal_endpoint,
@@ -11,12 +11,12 @@ module CloudController
           public_endpoint:      public_endpoint,
           public_path_prefix:   public_path_prefix,
           basic_auth_user:      user,
-          basic_auth_password:  password
+          basic_auth_password:  password,
+          httpclient:           httpclient
         )
       end
 
-      let(:ssl_config) { double(:ssl_config, :verify_mode= => nil, set_default_paths: nil) }
-      let(:httpclient) { instance_double(HTTPClient, ssl_config: ssl_config) }
+      let(:httpclient) { instance_double(HTTPClient) }
 
       let(:expires) { 16726859876 } # some time in the year 2500
 
@@ -29,35 +29,6 @@ module CloudController
       let(:user) { 'some-user' }
       let(:password) { 'some-password' }
       let(:basic_auth_header) { { 'Authorization' => 'Basic ' + Base64.strict_encode64("#{user}:#{password}").strip } }
-
-      before do
-        allow(HTTPClient).to receive_messages(new: httpclient)
-      end
-
-      describe 'ssl cert verification' do
-        let(:skip_cert_verify) { true }
-        let(:config) { { skip_cert_verify: skip_cert_verify } }
-
-        before do
-          allow(VCAP::CloudController::Config).to receive(:config).and_return(config)
-          allow(signer).to receive(:new)
-        end
-
-        context 'when skip_cert_verify is set to true' do
-          it 'verifies without certs' do
-            expect(httpclient).to have_received(:ssl_config).exactly(2).times
-            expect(ssl_config).to have_received(:verify_mode=).with(OpenSSL::SSL::VERIFY_NONE)
-          end
-        end
-
-        context 'when skip_cert_verify is set to false' do
-          let(:skip_cert_verify) { false }
-          it 'verifies with certs' do
-            expect(httpclient).to have_received(:ssl_config).exactly(2).times
-            expect(ssl_config).to have_received(:verify_mode=).with(OpenSSL::SSL::VERIFY_PEER)
-          end
-        end
-      end
 
       describe '#sign_internal_url' do
         let(:response) { instance_double(HTTP::Message, content: 'https://signed.example.com?valid-signing=some-md5-stuff', status: 200) }
@@ -97,6 +68,14 @@ module CloudController
               signer.sign_internal_url(expires: expires, path: 'some/path')
             }.to raise_error(SigningRequestError, /Could not get a signed url/)
           end
+        end
+
+        it 'raises SigningRequestError when HTTPClient raises SSLError' do
+          allow(httpclient).to receive(:get).and_raise(OpenSSL::SSL::SSLError.new('My SSL Error'))
+
+          expect {
+            signer.sign_internal_url(expires: expires, path: 'some/path')
+          }.to raise_error(SigningRequestError, /My SSL Error/)
         end
       end
 
@@ -147,6 +126,14 @@ module CloudController
               signer.sign_public_url(expires: expires, path: 'some/path')
             }.to raise_error(SigningRequestError, /Could not get a signed url/)
           end
+        end
+
+        it 'raises SigningRequestError when HTTPClient raises SSLError' do
+          allow(httpclient).to receive(:get).and_raise(OpenSSL::SSL::SSLError.new('My SSL Error'))
+
+          expect {
+            signer.sign_internal_url(expires: expires, path: 'some/path')
+          }.to raise_error(SigningRequestError, /My SSL Error/)
         end
       end
     end

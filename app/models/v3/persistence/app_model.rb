@@ -27,10 +27,11 @@ module VCAP::CloudController
 
     def validate
       validates_presence :name
-      validates_unique [:space_guid, :name]
       validates_format APP_NAME_REGEX, :name
       validate_environment_variables
       validate_droplet_is_staged
+
+      validates_unique [:space_guid, :name], message: Sequel.lit('name must be unique in space')
     end
 
     def lifecycle_type

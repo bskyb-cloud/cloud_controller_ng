@@ -2,7 +2,7 @@ require 'spec_helper'
 
 module VCAP::CloudController
   module Diego
-    describe Messenger do
+    RSpec.describe Messenger do
       let(:stager_client) { instance_double(StagerClient) }
       let(:nsync_client) { instance_double(NsyncClient) }
       let(:config) { TestConfig.config }
@@ -17,10 +17,16 @@ module VCAP::CloudController
         app
       end
 
-      subject(:messenger) { Messenger.new(stager_client, nsync_client, protocol) }
+      subject(:messenger) { Messenger.new(app) }
+
+      before do
+        allow(CloudController::DependencyLocator.instance).to receive(:stager_client).and_return(stager_client)
+        allow(CloudController::DependencyLocator.instance).to receive(:nsync_client).and_return(nsync_client)
+        allow(Diego::Protocol).to receive(:new).with(app).and_return(protocol)
+      end
 
       describe '#send_stage_request' do
-        let(:staging_guid) { StagingGuid.from_app(app) }
+        let(:staging_guid) { StagingGuid.from_process(app) }
         let(:message) { { staging: 'message' } }
 
         before do
@@ -29,15 +35,15 @@ module VCAP::CloudController
         end
 
         it 'sends the staging message to the stager' do
-          messenger.send_stage_request(app, config)
+          messenger.send_stage_request(config)
 
-          expect(protocol).to have_received(:stage_app_request).with(app, config)
+          expect(protocol).to have_received(:stage_app_request).with(config)
           expect(stager_client).to have_received(:stage).with(staging_guid, message)
         end
       end
 
       describe '#send_desire_request' do
-        let(:process_guid) { ProcessGuid.from_app(app) }
+        let(:process_guid) { ProcessGuid.from_process(app) }
         let(:message) { { desire: 'message' } }
 
         before do
@@ -46,29 +52,29 @@ module VCAP::CloudController
         end
 
         it 'sends a desire app request' do
-          messenger.send_desire_request(app, default_health_check_timeout)
+          messenger.send_desire_request(default_health_check_timeout)
 
-          expect(protocol).to have_received(:desire_app_request).with(app, default_health_check_timeout)
+          expect(protocol).to have_received(:desire_app_request).with(default_health_check_timeout)
           expect(nsync_client).to have_received(:desire_app).with(process_guid, message)
         end
       end
 
       describe '#send_stop_staging_request' do
-        let(:staging_guid) { StagingGuid.from_app(app) }
+        let(:staging_guid) { StagingGuid.from_process(app) }
 
         before do
           allow(stager_client).to receive(:stop_staging)
         end
 
         it 'sends a stop_staging request to the stager' do
-          messenger.send_stop_staging_request(app)
+          messenger.send_stop_staging_request
 
           expect(stager_client).to have_received(:stop_staging).with(staging_guid)
         end
       end
 
       describe '#send_stop_index_request' do
-        let(:process_guid) { ProcessGuid.from_app(app) }
+        let(:process_guid) { ProcessGuid.from_process(app) }
         let(:index) { 3 }
 
         before do
@@ -76,21 +82,21 @@ module VCAP::CloudController
         end
 
         it 'sends a stop index request' do
-          messenger.send_stop_index_request(app, index)
+          messenger.send_stop_index_request(index)
 
           expect(nsync_client).to have_received(:stop_index).with(process_guid, index)
         end
       end
 
       describe '#send_stop_app_request' do
-        let(:process_guid) { ProcessGuid.from_app(app) }
+        let(:process_guid) { ProcessGuid.from_process(app) }
 
         before do
           allow(nsync_client).to receive(:stop_app)
         end
 
         it 'sends a stop app request' do
-          messenger.send_stop_app_request(app)
+          messenger.send_stop_app_request
 
           expect(nsync_client).to have_received(:stop_app).with(process_guid)
         end

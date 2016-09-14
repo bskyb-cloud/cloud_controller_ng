@@ -2,7 +2,7 @@ require 'spec_helper'
 require 'actions/app_stop'
 
 module VCAP::CloudController
-  describe AppStop do
+  RSpec.describe AppStop do
     let(:app_stop) { AppStop.new(user, user_email) }
     let(:user) { double(:user, guid: 'diug') }
     let(:user_email) { 'guy@place.io' }
@@ -23,7 +23,7 @@ module VCAP::CloudController
       end
 
       it 'creates an audit event' do
-        expect_any_instance_of(Repositories::Runtime::AppEventRepository).to receive(:record_app_stop).with(
+        expect_any_instance_of(Repositories::AppEventRepository).to receive(:record_app_stop).with(
           app_model,
           user.guid,
           user_email

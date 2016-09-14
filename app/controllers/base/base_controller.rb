@@ -8,10 +8,10 @@ require 'cloud_controller/basic_auth/dea_basic_auth_authenticator'
 module VCAP::CloudController::RestController
   # The base class for all api endpoints.
   class BaseController
-    V2_ROUTE_PREFIX = '/v2'.freeze
+    V2_ROUTE_PREFIX ||= '/v2'.freeze
 
     include VCAP::CloudController
-    include VCAP::Errors
+    include CloudController::Errors
     include VCAP::RestAPI
     include Messages
     include Routes
@@ -81,14 +81,16 @@ module VCAP::CloudController::RestController
     rescue Sequel::ValidationFailed => e
       raise self.class.translate_validation_exception(e, request_attrs)
     rescue Sequel::HookFailed => e
-      raise VCAP::Errors::ApiError.new_from_details('InvalidRequest', e.message)
+      raise CloudController::Errors::ApiError.new_from_details('InvalidRequest', e.message)
     rescue Sequel::DatabaseError => e
       raise self.class.translate_and_log_exception(logger, e)
+    rescue CloudController::Blobstore::BlobstoreError => e
+      raise CloudController::Errors::ApiError.new_from_details('BlobstoreError', e.message)
     rescue JsonMessage::Error => e
       logger.debug("Rescued JsonMessage::Error at #{__FILE__}:#{__LINE__}\n#{e.inspect}\n#{e.backtrace.join("\n")}")
-      raise VCAP::Errors::ApiError.new_from_details('MessageParseError', e)
-    rescue VCAP::Errors::InvalidRelation => e
-      raise VCAP::Errors::ApiError.new_from_details('InvalidRelation', e)
+      raise CloudController::Errors::ApiError.new_from_details('MessageParseError', e)
+    rescue CloudController::Errors::InvalidRelation => e
+      raise CloudController::Errors::ApiError.new_from_details('InvalidRelation', e)
     end
 
     # Fetch the current active user.  May be nil
@@ -130,13 +132,13 @@ module VCAP::CloudController::RestController
       return if VCAP::CloudController::SecurityContext.current_user
 
       if VCAP::CloudController::SecurityContext.missing_token?
-        raise VCAP::Errors::ApiError.new_from_details('NotAuthenticated')
+        raise CloudController::Errors::NotAuthenticated
       elsif VCAP::CloudController::SecurityContext.invalid_token?
-        raise VCAP::Errors::ApiError.new_from_details('InvalidAuthToken')
+        raise CloudController::Errors::ApiError.new_from_details('InvalidAuthToken')
       else
         logger.error 'Unexpected condition: valid token with no user/client id ' \
                        "or admin scope. Token hash: #{VCAP::CloudController::SecurityContext.token}"
-        raise VCAP::Errors::ApiError.new_from_details('InvalidAuthToken')
+        raise CloudController::Errors::ApiError.new_from_details('InvalidAuthToken')
       end
     end
 
@@ -175,13 +177,13 @@ module VCAP::CloudController::RestController
     def check_write_permissions!
       admin       = SecurityContext.roles.admin?
       write_scope = SecurityContext.scopes.include?('cloud_controller.write')
-      raise VCAP::Errors::ApiError.new_from_details('NotAuthorized') if !admin && !write_scope
+      raise CloudController::Errors::ApiError.new_from_details('NotAuthorized') if !admin && !write_scope
     end
 
     def check_read_permissions!
       admin      = SecurityContext.roles.admin?
       read_scope = SecurityContext.scopes.include?('cloud_controller.read')
-      raise VCAP::Errors::ApiError.new_from_details('NotAuthorized') if !admin && !read_scope
+      raise CloudController::Errors::ApiError.new_from_details('NotAuthorized') if !admin && !read_scope
     end
 
     def current_user
@@ -201,7 +203,13 @@ module VCAP::CloudController::RestController
     end
 
     def bad_request!(message)
-      raise VCAP::Errors::ApiError.new_from_details('MessageParseError', message)
+      raise CloudController::Errors::ApiError.new_from_details('MessageParseError', message)
+    end
+
+    def overwrite_request_attr(key, value)
+      @request_attrs = @request_attrs.deep_dup
+      @request_attrs[key] = value
+      @request_attrs.freeze
     end
 
     attr_reader :config, :logger, :env, :params, :body, :request_attrs
@@ -282,7 +290,7 @@ module VCAP::CloudController::RestController
 
           unless CloudController::BasicAuth::BasicAuthAuthenticator.valid?(env, credentials) ||
                   CloudController::BasicAuth::DeaBasicAuthAuthenticator.valid?(env, credentials)
-            raise Errors::ApiError.new_from_details('NotAuthenticated')
+            raise CloudController::Errors::NotAuthenticated
           end
         end
       end
@@ -300,7 +308,7 @@ module VCAP::CloudController::RestController
         msg[0] = msg[0] + ':'
         msg.concat(e.backtrace).join('\\n')
         logger.warn(msg.join('\\n'))
-        Errors::ApiError.new_from_details('DatabaseError')
+        CloudController::Errors::ApiError.new_from_details('DatabaseError')
       end
     end
   end

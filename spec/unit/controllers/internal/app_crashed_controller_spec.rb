@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe AppCrashedController do
+  RSpec.describe AppCrashedController do
     let(:diego_app) do
       AppFactory.make.tap do |app|
         app.package_state = 'PENDING'
@@ -136,9 +136,11 @@ module VCAP::CloudController
 
         expect(app_event).to be
         expect(app_event.space).to eq(diego_app.space)
-        expect(app_event.type).to eq('app.crash')
-        expect(app_event.actor_type).to eq('app')
-        expect(app_event.actor).to eq(v3_app.guid)
+        expect(app_event.type).to eq('audit.app.process.crash')
+        expect(app_event.actor_type).to eq('v3-process')
+        expect(app_event.actor).to eq(diego_app.guid)
+        expect(app_event.actee_type).to eq('v3-app')
+        expect(app_event.actee).to eq(v3_app.guid)
         expect(app_event.metadata['instance']).to eq(crashed_request['instance'])
         expect(app_event.metadata['index']).to eq(crashed_request['index'])
         expect(app_event.metadata['exit_status']).to eq(crashed_request['exit_status'])

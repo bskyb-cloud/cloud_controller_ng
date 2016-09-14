@@ -1,0 +1,94 @@
+---
+title: Cloud Controller API Reference
+
+language_tabs:
+  - shell: curl
+
+includes:
+ # snippets have to be at the top to be used in other files
+  - snippets/query_params
+  - snippets/object_attributes
+  - api_resources/apps
+  - api_resources/droplets
+  - api_resources/packages
+  - api_resources/processes
+  - api_resources/route_mappings
+  - api_resources/service_bindings
+  - api_resources/tasks
+  - general/header
+  - apps/header
+  - apps/object
+  - apps/create
+  - apps/get
+  - apps/env
+  - apps/update
+  - apps/current_droplet
+  - apps/get_current_droplet
+  - apps/start
+  - apps/stop
+  - apps/delete
+  - apps/list
+  - droplets/header
+  - droplets/object
+  - droplets/lifecycle_object
+  - droplets/create
+  - droplets/copy
+  - droplets/get
+  - droplets/delete
+  - droplets/list
+  - droplets/app/list
+  - droplets/package/list
+  - packages/header
+  - packages/object
+  - packages/create
+  - packages/get
+  - packages/stage
+  - packages/upload_bits
+  - packages/download_bits
+  - packages/copy_bits
+  - packages/delete
+  - packages/list
+  - packages/app/list
+  - processes/header
+  - processes/object
+  - processes/health_check_object
+  - processes/stats_object
+  - processes/get
+  - processes/stats
+  - processes/update
+  - processes/scale
+  - processes/terminate_instance
+  - processes/list
+  - processes/app/header
+  - processes/object
+  - processes/health_check_object
+  - processes/stats_object
+  - processes/app/get
+  - processes/app/stats
+  - processes/app/scale
+  - processes/app/terminate_instance
+  - processes/app/list
+  - route_mappings/header
+  - route_mappings/object
+  - route_mappings/create
+  - route_mappings/get
+  - route_mappings/delete
+  - route_mappings/list
+  - route_mappings/app/list
+  - service_bindings/header
+  - service_bindings/object
+  - service_bindings/create
+  - service_bindings/get
+  - service_bindings/delete
+  - service_bindings/list
+  - tasks/header
+  - tasks/object
+  - tasks/create
+  - tasks/get
+  - tasks/cancel
+  - tasks/list
+  - tasks/app/cancel
+  - tasks/app/list
+
+search: true
+---

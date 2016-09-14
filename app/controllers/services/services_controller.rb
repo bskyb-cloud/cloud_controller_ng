@@ -6,7 +6,7 @@ module VCAP::CloudController
       to_many :service_plans
     end
 
-    query_parameters :active, :label, :provider, :service_broker_guid
+    query_parameters :active, :label, :provider, :service_broker_guid, :unique_id
 
     def self.dependencies
       [:services_event_repository]
@@ -30,14 +30,14 @@ module VCAP::CloudController
       if SecurityContext.missing_token?
         @opts.delete(:inline_relations_depth)
       elsif SecurityContext.invalid_token?
-        raise VCAP::Errors::ApiError.new_from_details('InvalidAuthToken')
+        raise CloudController::Errors::ApiError.new_from_details('InvalidAuthToken')
       end
 
       super
     end
 
     def self.translate_validation_exception(e, attributes)
-      Errors::ApiError.new_from_details('ServiceInvalid', e.errors.full_messages)
+      CloudController::Errors::ApiError.new_from_details('ServiceInvalid', e.errors.full_messages)
     end
 
     def delete(guid)

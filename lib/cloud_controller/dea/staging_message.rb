@@ -20,6 +20,7 @@ module VCAP::CloudController
           start_message:                start_app_message(app),
           admin_buildpacks:             admin_buildpacks,
           egress_network_rules:         staging_egress_rules,
+          accepts_http:                 @config[:dea_client] ? true : false
         }
       end
 
@@ -49,7 +50,7 @@ module VCAP::CloudController
       end
 
       def service_binding_to_staging_request(service_binding)
-        ServiceBindingPresenter.new(service_binding).to_hash
+        ServiceBindingPresenter.new(service_binding, include_instance: true).to_hash
       end
 
       def staging_egress_rules
@@ -58,7 +59,7 @@ module VCAP::CloudController
       end
 
       def admin_buildpacks
-        AdminBuildpacksPresenter.new(@blobstore_url_generator).to_staging_message_array
+        AdminBuildpacksPresenter.enabled_buildpacks
       end
 
       def start_app_message(app)

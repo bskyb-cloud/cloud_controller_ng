@@ -9,6 +9,7 @@ module VCAP::CloudController
         @message_bus = message_bus
         @percentage_of_top_stagers = (config[:placement_top_stager_percentage] || 0) / 100.0
         @dea_advertisements = {}
+        @min_candidate_stagers = config[:minimum_candidate_stagers]
       end
 
       def register_subscriptions
@@ -59,7 +60,7 @@ module VCAP::CloudController
 
           prune_stale_deas
           best_ad = top_n_stagers_for(memory, disk, stack).sample
-          best_ad && best_ad[0]
+          best_ad && best_ad[1]
         end
       end
 
@@ -89,7 +90,7 @@ module VCAP::CloudController
 
       def validate_stack_availability(stack)
         unless @dea_advertisements.any? { |_, ad| ad.has_stack?(stack) }
-          raise Errors::ApiError.new_from_details('StackNotFound', "The requested app stack #{stack} is not available on this system.")
+          raise CloudController::Errors::ApiError.new_from_details('StackNotFound', "The requested app stack #{stack} is not available on this system.")
         end
       end
 
@@ -98,7 +99,7 @@ module VCAP::CloudController
           ad.meets_needs?(memory, stack) && ad.has_sufficient_disk?(disk)
         }.sort_by { |id, ad|
           ad.available_memory
-        }.last([5, @percentage_of_top_stagers * @dea_advertisements.size].max.to_i)
+        }.last([@min_candidate_stagers, @percentage_of_top_stagers * @dea_advertisements.size].max.to_i)
       end
     end
   end

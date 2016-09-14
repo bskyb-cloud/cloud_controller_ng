@@ -1,20 +1,24 @@
 require 'spec_helper'
-require 'cloud_controller/diego/v3/protocol/app_protocol'
+require 'cloud_controller/diego/v3/protocol/package_staging_protocol'
 require 'cloud_controller/diego/v3/messenger'
 
 module VCAP::CloudController
   module Diego
     module V3
-      describe Messenger do
+      RSpec.describe Messenger do
         let(:stager_client) { instance_double(StagerClient) }
         let(:config) { TestConfig.config }
-        let(:protocol) { instance_double(V3::Protocol::AppProtocol) }
+        let(:protocol) { instance_double(V3::Protocol::PackageStagingProtocol) }
         let(:default_health_check_timeout) { 9999 }
 
         let(:package) { PackageModel.make }
         let(:droplet) { DropletModel.make(package_guid: package.guid) }
 
-        subject(:messenger) { Messenger.new(stager_client, protocol) }
+        subject(:messenger) { Messenger.new(protocol) }
+
+        before do
+          allow(CloudController::DependencyLocator.instance).to receive(:stager_client).and_return(stager_client)
+        end
 
         describe '#send_stage_request' do
           let(:staging_guid) { droplet.guid }

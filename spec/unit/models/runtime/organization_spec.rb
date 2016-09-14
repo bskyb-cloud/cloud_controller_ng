@@ -2,7 +2,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe Organization, type: :model do
+  RSpec.describe Organization, type: :model do
     it { is_expected.to have_timestamp_columns }
 
     describe 'Associations' do
@@ -50,13 +50,13 @@ module VCAP::CloudController
     end
 
     describe 'Validations' do
+      let(:org) { Organization.make }
+
       it { is_expected.to validate_presence :name }
       it { is_expected.to validate_uniqueness :name }
       it { is_expected.to strip_whitespace :name }
 
       describe 'name' do
-        subject(:org) { Organization.make }
-
         it 'should allow standard ascii characters' do
           org.name = "A -_- word 2!?()\'\"&+."
           expect {
@@ -95,14 +95,12 @@ module VCAP::CloudController
 
       describe 'space_quota_definitions' do
         it 'adds when in this org' do
-          org = Organization.make
           quota = SpaceQuotaDefinition.make(organization: org)
 
           expect { org.add_space_quota_definition(quota) }.to_not raise_error
         end
 
         it 'does not add when quota is in a different org' do
-          org = Organization.make
           quota = SpaceQuotaDefinition.make
 
           expect { org.add_space_quota_definition(quota) }.to raise_error(Sequel::HookFailed)
@@ -111,14 +109,12 @@ module VCAP::CloudController
 
       describe 'private_domains' do
         it 'allowed when the organization is not the owner' do
-          org = Organization.make
           domain = PrivateDomain.make
 
           expect { org.add_private_domain(domain) }.to_not raise_error
         end
 
         it 'does not add when the organization is the owner' do
-          org = Organization.make
           domain = PrivateDomain.make(owning_organization: org)
 
           org.add_private_domain(domain)
@@ -126,7 +122,6 @@ module VCAP::CloudController
         end
 
         it 'lists all private domains owned and shared' do
-          org = Organization.make
           owned_domain = PrivateDomain.make(owning_organization: org)
           domain = PrivateDomain.make
           org.add_private_domain(domain)
@@ -150,8 +145,6 @@ module VCAP::CloudController
       end
 
       describe 'status' do
-        subject(:org) { Organization.make }
-
         it "should allow 'active' and 'suspended'" do
           ['active', 'suspended'].each do |status|
             org.status = status
@@ -477,21 +470,21 @@ module VCAP::CloudController
           space_1.add_developer(user)
           space_1.refresh
           expect(user.spaces).to include(space_1)
-          expect { org.remove_user(user) }.to raise_error(VCAP::Errors::ApiError)
+          expect { org.remove_user(user) }.to raise_error(CloudController::Errors::ApiError)
         end
 
         it "should raise an error if the user's managed space is associated with an organization's space" do
           space_1.add_manager(user)
           space_1.refresh
           expect(user.managed_spaces).to include(space_1)
-          expect { org.remove_user(user) }.to raise_error(VCAP::Errors::ApiError)
+          expect { org.remove_user(user) }.to raise_error(CloudController::Errors::ApiError)
         end
 
         it "should raise an error if the user's audited space is associated with an organization's space" do
           space_1.add_auditor(user)
           space_1.refresh
           expect(user.audited_spaces).to include(space_1)
-          expect { org.remove_user(user) }.to raise_error(VCAP::Errors::ApiError)
+          expect { org.remove_user(user) }.to raise_error(CloudController::Errors::ApiError)
         end
 
         it "should raise an error if any of the user's spaces are associated with any of the organization's spaces" do
@@ -499,7 +492,7 @@ module VCAP::CloudController
           space_2.add_manager(user)
           space_2.refresh
           expect(user.managed_spaces).to include(space_2)
-          expect { org.remove_user(user) }.to raise_error(VCAP::Errors::ApiError)
+          expect { org.remove_user(user) }.to raise_error(CloudController::Errors::ApiError)
         end
 
         it 'should remove the user from an organization if they are not associated with any spaces' do
@@ -567,7 +560,7 @@ module VCAP::CloudController
           end
 
           it 'raises an exception' do
-            expect { org.save }.to raise_error(VCAP::Errors::ApiError, /Quota Definition could not be found: default/)
+            expect { org.save }.to raise_error(CloudController::Errors::ApiError, /Quota Definition could not be found: default/)
           end
         end
       end
@@ -591,7 +584,7 @@ module VCAP::CloudController
           it 'uses what is provided' do
             expect {
               org.save
-            }.to raise_error(VCAP::Errors::ApiError, /Invalid relation: Could not find VCAP::CloudController::QuotaDefinition with guid: #{quota_definition_guid}/)
+            }.to raise_error(CloudController::Errors::ApiError, /Invalid relation: Could not find VCAP::CloudController::QuotaDefinition with guid: #{quota_definition_guid}/)
           end
         end
       end

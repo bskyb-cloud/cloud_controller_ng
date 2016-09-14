@@ -2,7 +2,7 @@ require 'spec_helper'
 
 module VCAP::CloudController
   module Jobs
-    describe ExceptionCatchingJob do
+    RSpec.describe ExceptionCatchingJob do
       subject(:exception_catching_job) do
         ExceptionCatchingJob.new(handler)
       end
@@ -12,6 +12,16 @@ module VCAP::CloudController
       context '#perform' do
         it 'delegates to the handler' do
           expect(exception_catching_job.perform).to eq('fake-perform')
+        end
+
+        context 'when a BlobstoreError occurs' do
+          it 'wraps the error in an ApiError' do
+            allow(handler).to receive(:perform).and_raise(CloudController::Blobstore::BlobstoreError, 'oh no!')
+
+            expect {
+              exception_catching_job.perform
+            }.to raise_error(CloudController::Errors::ApiError, /three retries/)
+          end
         end
       end
 
@@ -23,7 +33,7 @@ module VCAP::CloudController
 
       context '#error(job, exception)' do
         let(:job) { double('Job').as_null_object }
-        let(:error_presenter) { instance_double(ErrorPresenter, error_hash: 'sanitized exception hash').as_null_object }
+        let(:error_presenter) { instance_double(ErrorPresenter, to_hash: 'sanitized exception hash').as_null_object }
         let(:background_logger) { instance_double(Steno::Logger).as_null_object }
 
         before do

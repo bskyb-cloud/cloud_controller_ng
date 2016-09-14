@@ -9,8 +9,8 @@ Rails.application.routes.draw do
   put '/apps/:guid/start', to: 'apps_v3#start'
   put '/apps/:guid/stop', to: 'apps_v3#stop'
   get '/apps/:guid/env', to: 'apps_v3#show_environment'
-  put '/apps/:guid/current_droplet', to: 'apps_v3#assign_current_droplet'
-  get '/apps/:guid/stats', to: 'apps_v3#stats'
+  put '/apps/:guid/droplets/current', to: 'apps_v3#assign_current_droplet'
+  get '/apps/:guid/droplets/current', to: 'apps_v3#current_droplet'
 
   # processes
   get '/processes', to: 'processes#index'
@@ -36,10 +36,12 @@ Rails.application.routes.draw do
 
   # droplets
   post '/packages/:package_guid/droplets', to: 'droplets#create'
+  post '/droplets/:guid/copy', to: 'droplets#copy'
   get '/droplets', to: 'droplets#index'
   get '/droplets/:guid', to: 'droplets#show'
   delete '/droplets/:guid', to: 'droplets#destroy'
   get '/apps/:app_guid/droplets', to: 'droplets#index'
+  get '/packages/:package_guid/droplets', to: 'droplets#index'
 
   # route_mappings
   post '/route_mappings', to: 'route_mappings#create'
@@ -55,8 +57,6 @@ Rails.application.routes.draw do
 
   post '/apps/:app_guid/tasks', to: 'tasks#create'
   get '/apps/:app_guid/tasks', to: 'tasks#index'
-  get '/apps/:app_guid/tasks/:task_guid', to: 'tasks#show'
-  put '/apps/:app_guid/tasks/:task_guid/cancel', to: 'tasks#cancel'
 
   # service_bindings
   post '/service_bindings', to: 'service_bindings#create'

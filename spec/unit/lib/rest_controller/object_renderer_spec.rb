@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController::RestController
-  describe ObjectRenderer do
+  RSpec.describe ObjectRenderer do
     subject(:renderer) { described_class.new(eager_loader, serializer, renderer_opts) }
     let(:eager_loader) { SecureEagerLoader.new }
     let(:serializer) { PreloadedObjectSerializer.new }
@@ -20,7 +20,7 @@ module VCAP::CloudController::RestController
         it 'raises BadQueryParameter error' do
           expect {
             subject.render_json(controller, instance, opts)
-          }.to raise_error(VCAP::Errors::ApiError, /inline_relations_depth/)
+          }.to raise_error(CloudController::Errors::ApiError, /inline_relations_depth/)
         end
       end
 

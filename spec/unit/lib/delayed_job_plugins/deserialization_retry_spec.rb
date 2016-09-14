@@ -1,6 +1,6 @@
 require 'spec_helper'
 
-describe DeserializationRetry do
+RSpec.describe DeserializationRetry do
   context 'when a Delayed::Job fails to load because the class is missing' do
     it 'prevents DelayedJob from marking it as failed' do
       handler = VCAP::CloudController::Jobs::Runtime::EventsCleanup.new(10_000)
@@ -16,7 +16,7 @@ describe DeserializationRetry do
       expect(job.locked_by).to be_nil
       expect(job.locked_at).to be_nil
 
-      expect(job.run_at).to be_within(1.second).of Delayed::Job.db_time_now + 5.minutes
+      expect(job.run_at).to be_within(2.seconds).of Delayed::Job.db_time_now + 5.minutes
       expect(job.attempts).to eq(1)
     end
 

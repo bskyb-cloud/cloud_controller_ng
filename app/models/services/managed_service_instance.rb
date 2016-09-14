@@ -103,6 +103,10 @@ module VCAP::CloudController
       service.route_service?
     end
 
+    def volume_service?
+      service.volume_service?
+    end
+
     def logger
       @logger ||= Steno.logger('cc.models.service_instance')
     end
@@ -116,7 +120,8 @@ module VCAP::CloudController
     end
 
     def dashboard_url
-      unless VCAP::CloudController::SecurityContext.admin? || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
+      admin_context = VCAP::CloudController::SecurityContext.admin? || VCAP::CloudController::SecurityContext.admin_read_only?
+      unless admin_context || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
         return ''
       end
       super

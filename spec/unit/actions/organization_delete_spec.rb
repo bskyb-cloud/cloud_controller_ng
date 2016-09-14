@@ -3,8 +3,8 @@ require 'actions/organization_delete'
 require 'actions/space_delete'
 
 module VCAP::CloudController
-  describe OrganizationDelete do
-    let(:services_event_repository) { Repositories::Services::EventRepository.new(user: user, user_email: user_email) }
+  RSpec.describe OrganizationDelete do
+    let(:services_event_repository) { Repositories::ServiceEventRepository.new(user: user, user_email: user_email) }
     let(:space_delete) { SpaceDelete.new(user.id, user_email, services_event_repository) }
     subject(:org_delete) { OrganizationDelete.new(space_delete) }
 
@@ -65,7 +65,7 @@ module VCAP::CloudController
           end
           it 'returns an OrganizationDeletionFailed error' do
             errors = org_delete.delete(org_dataset)
-            expect(errors.first).to be_instance_of(VCAP::Errors::ApiError)
+            expect(errors.first).to be_instance_of(CloudController::Errors::ApiError)
             expect(errors.first.name).to eq 'OrganizationDeletionFailed'
           end
 

@@ -2,7 +2,7 @@ require 'spec_helper'
 require 'actions/app_start'
 
 module VCAP::CloudController
-  describe AppStart do
+  RSpec.describe AppStart do
     let(:user) { double(:user, guid: '7') }
     let(:user_email) { '1@2.3' }
     let(:app_start) { AppStart.new(user, user_email) }
@@ -21,7 +21,7 @@ module VCAP::CloudController
 
       context 'when the app has a docker lifecycle' do
         let(:package) { PackageModel.make(:docker, package_hash: 'some-awesome-thing', state: PackageModel::READY_STATE) }
-        let(:droplet) { DropletModel.make(package_guid: package.guid, state: DropletModel::STAGED_STATE) }
+        let(:droplet) { DropletModel.make(:docker, package_guid: package.guid, state: DropletModel::STAGED_STATE, docker_receipt_image: package.docker_data.image) }
         let(:droplet_guid) { droplet.guid }
 
         before do
@@ -52,7 +52,7 @@ module VCAP::CloudController
           end
 
           it 'creates an audit event' do
-            expect_any_instance_of(Repositories::Runtime::AppEventRepository).to receive(:record_app_start).with(
+            expect_any_instance_of(Repositories::AppEventRepository).to receive(:record_app_start).with(
               app_model,
               user.guid,
               user_email

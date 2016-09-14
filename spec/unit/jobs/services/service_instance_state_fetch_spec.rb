@@ -4,7 +4,7 @@ require 'jobs/services/service_instance_state_fetch'
 module VCAP::CloudController
   module Jobs
     module Services
-      describe ServiceInstanceStateFetch do
+      RSpec.describe ServiceInstanceStateFetch do
         let(:broker) { ServiceBroker.make }
         let(:client_attrs) do
           {
@@ -98,7 +98,7 @@ module VCAP::CloudController
             uri = URI(broker.broker_url)
             uri.user = broker.auth_username
             uri.password = broker.auth_password
-            stub_request(:get, "#{uri}/v2/service_instances/#{service_instance.guid}/last_operation").to_return(
+            stub_request(:get, %r{#{uri}/v2/service_instances/#{service_instance.guid}/last_operation}).to_return(
               status: status,
               body: response.to_json
             )
@@ -204,7 +204,7 @@ module VCAP::CloudController
                   event = Event.find(type: 'audit.service_instance.create')
                   expect(event).to be
                   expect(event.actee).to eq(service_instance.guid)
-                  expect(event.metadata['request']).to eq({ 'dummy_data' => 'dummy_data' })
+                  expect(event.metadata['request']).to have_key('dummy_data')
                 end
               end
             end
@@ -305,7 +305,7 @@ module VCAP::CloudController
                 uri = URI(broker.broker_url)
                 uri.user = broker.auth_username
                 uri.password = broker.auth_password
-                stub_request(:get, "#{uri}/v2/service_instances/#{service_instance.guid}/last_operation").to_raise(HTTPClient::TimeoutError.new)
+                stub_request(:get, %r{#{uri}/v2/service_instances/#{service_instance.guid}/last_operation}).to_raise(HTTPClient::TimeoutError.new)
               end
 
               it 'should enqueue another fetch job' do

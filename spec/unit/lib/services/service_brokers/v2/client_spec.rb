@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::Services::ServiceBrokers::V2
-  describe Client do
+  RSpec.describe Client do
     let(:service_broker) { VCAP::CloudController::ServiceBroker.make }
 
     let(:client_attrs) {
@@ -193,6 +193,23 @@ module VCAP::Services::ServiceBrokers::V2
         end
       end
 
+      context 'when the broker returns a operation' do
+        let(:code) { 202 }
+        let(:message) { 'Accepted' }
+        let(:response_data) do
+          { operation: 'a_broker_operation_identifier' }
+        end
+
+        it 'return immediately with the broker response' do
+          client = Client.new(client_attrs)
+          attributes, _ = client.provision(instance, accepts_incomplete: true)
+
+          expect(attributes[:last_operation][:broker_provided_operation]).to eq('a_broker_operation_identifier')
+          expect(attributes[:last_operation][:type]).to eq('create')
+          expect(attributes[:last_operation][:state]).to eq('in progress')
+        end
+      end
+
       context 'when the broker returns a 202' do
         let(:code) { 202 }
         let(:message) { 'Accepted' }
@@ -204,6 +221,7 @@ module VCAP::Services::ServiceBrokers::V2
           client = Client.new(client_attrs)
           attributes, _ = client.provision(instance, accepts_incomplete: true)
 
+          expect(attributes[:instance][:broker_provided_operation]).to be_nil
           expect(attributes[:last_operation][:type]).to eq('create')
           expect(attributes[:last_operation][:state]).to eq('in progress')
         end
@@ -328,9 +346,10 @@ module VCAP::Services::ServiceBrokers::V2
       let(:response_body) { response_data.to_json }
       let(:code) { '200' }
       let(:message) { 'OK' }
+      let(:broker_provided_operation) { nil }
 
       before do
-        instance.save_with_new_operation({}, { type: 'create' })
+        instance.save_with_new_operation({}, { type: 'create', broker_provided_operation: broker_provided_operation })
         allow(http_client).to receive(:get).and_return(response)
       end
 
@@ -338,7 +357,24 @@ module VCAP::Services::ServiceBrokers::V2
         client.fetch_service_instance_state(instance)
 
         expect(http_client).to have_received(:get).
-          with("/v2/service_instances/#{instance.guid}/last_operation")
+          with("/v2/service_instances/#{instance.guid}/last_operation?plan_id=#{plan.broker_provided_id}&service_id=#{instance.service.broker_provided_id}")
+      end
+      context 'when the broker operation id is specified' do
+        let(:broker_provided_operation) { 'a_broker_provided_operation' }
+        it 'makes a put request with correct path' do
+          client.fetch_service_instance_state(instance)
+
+          expect(http_client).to have_received(:get) do |path|
+            uri = URI.parse(path)
+            expect(uri.host).to be nil
+            expect(uri.path).to eq("/v2/service_instances/#{instance.guid}/last_operation")
+
+            query_params = Rack::Utils.parse_nested_query(uri.query)
+            expect(query_params['plan_id']).to eq(plan.broker_provided_id)
+            expect(query_params['service_id']).to eq(instance.service.broker_provided_id)
+            expect(query_params['operation']).to eq(broker_provided_operation)
+          end
+        end
       end
 
       it 'returns the attributes to update the service instance model' do
@@ -540,6 +576,21 @@ module VCAP::Services::ServiceBrokers::V2
             expect(attributes[:last_operation][:state]).to eq('in progress')
             expect(attributes[:last_operation][:description]).to eq('')
             expect(error).to be_nil
+          end
+
+          context 'when the broker returns an operation' do
+            let(:response_data) do
+              { operation: 'a_broker_operation_identifier' }
+            end
+
+            it 'return immediately with the broker response' do
+              attributes, _, error = client.update(instance, new_plan, accepts_incomplete: true)
+
+              expect(attributes[:last_operation][:type]).to eq('update')
+              expect(attributes[:last_operation][:state]).to eq('in progress')
+              expect(attributes[:last_operation][:broker_provided_operation]).to eq('a_broker_operation_identifier')
+              expect(error).to be_nil
+            end
           end
         end
       end
@@ -922,6 +973,43 @@ module VCAP::Services::ServiceBrokers::V2
         end
       end
 
+      context 'with volume mounts' do
+        before do
+          instance.service_plan.service.update_from_hash(requires: ['volume_mount'])
+        end
+
+        let(:response_data) do
+          {
+            'volume_mounts' => [{ 'mount' => 'olympus' }, { 'mount' => 'everest' }]
+          }
+        end
+
+        it 'stores the volume mount on the service binding' do
+          attributes = client.bind(binding, arbitrary_parameters)
+
+          binding.set_all(attributes)
+          binding.save
+
+          expect(binding.volume_mounts).to match_array([{ 'mount' => 'olympus' }, { 'mount' => 'everest' }])
+        end
+
+        context 'when the volume mounts cause an error to be raised' do
+          let(:response_data) do
+            {
+              'volume_mounts' => 'invalid'
+            }
+          end
+
+          it 'raises an error and initiates orphan mitigation' do
+            expect {
+              client.bind(binding, arbitrary_parameters)
+            }.to raise_error(Errors::ServiceBrokerInvalidVolumeMounts)
+
+            expect(orphan_mitigator).to have_received(:cleanup_failed_bind).with(client_attrs, binding)
+          end
+        end
+      end
+
       context 'when binding fails' do
         let(:instance) { VCAP::CloudController::ManagedServiceInstance.make }
         let(:binding) do
@@ -1036,6 +1124,7 @@ module VCAP::Services::ServiceBrokers::V2
           }.to raise_error(Errors::ServiceBrokerBadResponse)
         end
       end
+
       context 'when the broker returns an error' do
         let(:code) { '204' }
         let(:response_data) do
@@ -1119,6 +1208,25 @@ module VCAP::Services::ServiceBrokers::V2
                 description: ''
               }
             })
+          end
+
+          context 'when the broker provides a operation' do
+            let(:response_data) do
+              { operation: 'a_broker_operation_identifier' }
+            end
+
+            it 'return immediately with the broker response' do
+              attributes, _ = client.deprovision(instance, accepts_incomplete: true)
+
+              expect(attributes).to eq({
+                last_operation: {
+                  type: 'delete',
+                  state: 'in progress',
+                  description: '',
+                  broker_provided_operation: 'a_broker_operation_identifier'
+                }
+              })
+            end
           end
         end
 

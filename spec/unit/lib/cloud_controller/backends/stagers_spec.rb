@@ -1,20 +1,19 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe Stagers do
+  RSpec.describe Stagers do
     let(:config) { TestConfig.config }
 
     let(:message_bus) { instance_double(CfMessageBus::MessageBus) }
     let(:dea_pool) { instance_double(Dea::Pool) }
-    let(:runners) { Runners.new(config, message_bus, dea_pool) }
     let(:package_hash) { 'fake-package-hash' }
     let(:buildpack) { instance_double(AutoDetectionBuildpack, custom?: false) }
-    let(:docker_image) { nil }
+    let(:docker) { false }
     let(:custom_buildpacks_enabled?) { true }
 
     let(:app) do
       instance_double(App,
-        docker_image:               docker_image,
+        docker?:                    docker,
         package_hash:               package_hash,
         buildpack:                  buildpack,
         custom_buildpacks_enabled?: custom_buildpacks_enabled?,
@@ -23,7 +22,7 @@ module VCAP::CloudController
     end
 
     subject(:stagers) do
-      Stagers.new(config, message_bus, dea_pool, runners)
+      Stagers.new(config, message_bus, dea_pool)
     end
 
     describe '#validate_app' do
@@ -33,7 +32,7 @@ module VCAP::CloudController
         it 'raises' do
           expect {
             subject.validate_app(app)
-          }.to raise_error(Errors::ApiError, /app package is invalid/)
+          }.to raise_error(CloudController::Errors::ApiError, /app package is invalid/)
         end
       end
 
@@ -54,7 +53,7 @@ module VCAP::CloudController
           it 'raises' do
             expect {
               subject.validate_app(app)
-            }.to raise_error(Errors::ApiError, /Custom buildpacks are disabled/)
+            }.to raise_error(CloudController::Errors::ApiError, /Custom buildpacks are disabled/)
           end
         end
       end
@@ -82,9 +81,7 @@ module VCAP::CloudController
 
       context 'with a docker app' do
         let(:buildpack) { instance_double(AutoDetectionBuildpack, custom?: true) }
-        let(:docker_image) do
-          'fake-docker-image'
-        end
+        let(:docker) { true }
 
         context 'and Docker disabled' do
           before do
@@ -94,7 +91,7 @@ module VCAP::CloudController
           it 'raises' do
             expect {
               subject.validate_app(app)
-            }.to raise_error(Errors::ApiError, /Docker support has not been enabled/)
+            }.to raise_error(CloudController::Errors::ApiError, /Docker support has not been enabled/)
           end
         end
 
@@ -116,7 +113,7 @@ module VCAP::CloudController
           it 'raises NoBuildpacksFound' do
             expect {
               subject.validate_app(app)
-            }.to raise_error(Errors::ApiError, /There are no buildpacks available/)
+            }.to raise_error(CloudController::Errors::ApiError, /There are no buildpacks available/)
           end
         end
 
@@ -149,8 +146,8 @@ module VCAP::CloudController
           expect(stager).to be_a(Diego::Stager)
         end
 
-        context 'when the app has a docker image' do
-          let(:docker_image) { 'foobar' }
+        context 'when the app is docker' do
+          let(:docker) { true }
 
           it 'finds a diego stager' do
             expect(stagers).to receive(:diego_stager).with(app).and_call_original
@@ -178,46 +175,6 @@ module VCAP::CloudController
       it 'finds a Diego backend' do
         stager = stagers.stager_for_package(package, lifecycle_type)
         expect(stager).to be_a(Diego::V3::Stager)
-      end
-
-      context 'buildpack lifecycle' do
-        let(:lifecycle_type) { 'buildpack' }
-
-        it 'uses the v3 buildpack lifecycle protocol' do
-          allow(Diego::Buildpack::V3::LifecycleProtocol).to receive(:new).and_call_original
-
-          stagers.stager_for_package(package, lifecycle_type)
-
-          expect(Diego::Buildpack::V3::LifecycleProtocol).to have_received(:new)
-        end
-
-        it 'uses the v3 buildpack staging completion handler' do
-          allow(Diego::Buildpack::V3::StagingCompletionHandler).to receive(:new).and_call_original
-
-          stagers.stager_for_package(package, lifecycle_type)
-
-          expect(Diego::Buildpack::V3::StagingCompletionHandler).to have_received(:new)
-        end
-      end
-
-      context 'docker lifecycle' do
-        let(:lifecycle_type) { 'docker' }
-
-        it 'uses the v3 docker lifecycle protocol' do
-          allow(Diego::Docker::V3::LifecycleProtocol).to receive(:new).and_call_original
-
-          stagers.stager_for_package(package, lifecycle_type)
-
-          expect(Diego::Docker::V3::LifecycleProtocol).to have_received(:new)
-        end
-
-        it 'uses the v3 buildpack staging completion handler' do
-          allow(Diego::Docker::V3::StagingCompletionHandler).to receive(:new).and_call_original
-
-          stagers.stager_for_package(package, lifecycle_type)
-
-          expect(Diego::Docker::V3::StagingCompletionHandler).to have_received(:new)
-        end
       end
     end
   end

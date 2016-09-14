@@ -5,7 +5,7 @@ module VCAP
   module CloudController
     module Diego
       module Buildpack
-        describe LifecycleProtocol do
+        RSpec.describe LifecycleProtocol do
           let(:blobstore_url_generator) do
             instance_double(::CloudController::Blobstore::UrlGenerator).tap do |url_generator|
               allow(url_generator).to receive(:app_package_download_url).and_return('')
@@ -16,10 +16,20 @@ module VCAP
             end
           end
           let(:lifecycle_protocol) { LifecycleProtocol.new(blobstore_url_generator) }
-          let(:app) { App.make }
+          let(:app) do
+            app_with_droplet = App.make
+            app_with_droplet.add_new_droplet('meowmeowmeow')
+            app_with_droplet.current_droplet.save
+            app_with_droplet
+          end
 
           it_behaves_like 'a lifecycle protocol' do
-            let(:app) { App.make }
+            let(:app) do
+              app_with_droplet = App.make
+              app_with_droplet.add_new_droplet('meowmeowmeow')
+              app_with_droplet.current_droplet.save
+              app_with_droplet
+            end
           end
 
           describe '#lifecycle_data' do
@@ -115,6 +125,18 @@ module VCAP
                 droplet_uri = lifecycle_protocol.desired_app_message(app)['droplet_uri']
 
                 expect(droplet_uri).to eq('www.droplet.com')
+              end
+            end
+
+            context 'droplet_hash' do
+              before do
+                app.current_droplet.droplet_hash = 'some_hash'
+              end
+
+              it 'includes the droplet_hash' do
+                droplet_hash = lifecycle_protocol.desired_app_message(app)['droplet_hash']
+
+                expect(droplet_hash).to eq('some_hash')
               end
             end
           end

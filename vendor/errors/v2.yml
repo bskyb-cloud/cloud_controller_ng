@@ -78,6 +78,11 @@
   http_code: 500
   message: "Database error"
 
+10012:
+  name: OrderByParameterInvalid
+  http_code: 500
+  message: "Cannot order by: %s"
+
 20001:
   name: UserInvalid
   http_code: 400
@@ -117,6 +122,16 @@
   name: OrganizationNotFound
   http_code: 404
   message: "The organization could not be found: %s"
+
+30004:
+  name: LastManagerInOrg
+  http_code: 403
+  message: "Cannot remove last Org Manager in org"
+
+30005:
+  name: LastBillingManagerInOrg
+  http_code: 403
+  message: "Cannot remove last Billing Manager in org"
 
 40001:
   name: SpaceInvalid
@@ -282,6 +297,11 @@
   name: MultipleAppPortsMappedDiegoToDea
   http_code: 400
   message: "The app has routes mapped to multiple ports. Multiple ports are supported for Diego only. Please unmap routes from all but one app port. Multiple routes can be mapped to the same port if desired."
+
+60025:
+  name: VolumeMountServiceDisabled
+  http_code: 403
+  message: "Support for volume mount services is disabled"
 
 70001:
   name: RuntimeInvalid
@@ -488,6 +508,11 @@
   http_code: 502
   message: "Failed to perform operation due to blobstore unavailability."
 
+150007:
+  name: BlobstoreError
+  http_code: 500
+  message: "Failed to perform blobstore operation after three retries."
+
 160001:
   name: AppBitsUploadInvalid
   http_code: 400
@@ -673,6 +698,11 @@
   http_code: 403
   message: "There are no more ports available for router group: %s. Please contact your administrator for more information."
 
+210009:
+  name: RouterGroupNotFound
+  http_code: 404
+  message: "The router group could not be found: %s"
+
 220001:
   name: InstancesError
   http_code: 400
@@ -848,6 +878,11 @@
   http_code: 400
   message: "Resource inside space %s must first be deleted, or specify recursive delete."
 
+290012:
+  name: BitsServiceError
+  http_code: 500
+  message: "The bits service returned an error: %s"
+
 300001:
   name: SecurityGroupInvalid
   http_code: 400
@@ -912,6 +947,16 @@
   name: SpaceQuotaInstanceLimitExceeded
   http_code: 400
   message: "You have exceeded the instance limit for your space's quota."
+
+310009:
+  name: OrgQuotaTotalReservedRoutePortsExceeded
+  http_code: 400
+  message: "You have exceeded the total reserved route ports for your organization's quota."
+
+310010:
+  name: SpaceQuotaTotalReservedRoutePortsExceeded
+  http_code: 400
+  message: "You have exceeded the total reserved route ports for your space's quota."
 
 320001:
   name: DiegoDisabled

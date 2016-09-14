@@ -6,7 +6,7 @@ module VCAP::CloudController
   module Diego
     module V3
       module Protocol
-        describe TaskProtocol do
+        RSpec.describe TaskProtocol do
           let(:default_health_check_timeout) { 99 }
           let(:egress_rules) { double(:egress_rules) }
 
@@ -48,7 +48,7 @@ module VCAP::CloudController
 
             context 'the task has a buildpack droplet' do
               let(:app) { AppModel.make }
-              let(:droplet) { DropletModel.make(:buildpack, app_guid: app.guid) }
+              let(:droplet) { DropletModel.make(:buildpack, app_guid: app.guid, droplet_hash: 'some_hash') }
 
               before do
                 app.buildpack_lifecycle_data = BuildpackLifecycleDataModel.make
@@ -58,7 +58,7 @@ module VCAP::CloudController
               it 'contains the correct payload for creating a task' do
                 result = protocol.task_request(task, config)
 
-                expect(JSON.parse(result)).to eq({
+                expect(JSON.parse(result)).to match({
                   'task_guid' => task.guid,
                   'rootfs' => app.lifecycle_data.stack,
                   'log_guid' => app.guid,
@@ -67,10 +67,12 @@ module VCAP::CloudController
                   'disk_mb' => 1024,
                   'egress_rules' => ['running_egress_rule'],
                   'droplet_uri' => 'www.droplet.url',
+                  'droplet_hash' => 'some_hash',
                   'lifecycle' => Lifecycles::BUILDPACK,
                   'command' => 'be rake my panda',
                   'completion_callback' => "http://#{user}:#{password}@#{internal_service_hostname}:#{external_port}/internal/v3/tasks/#{task.guid}/completed",
-                  'log_source' => 'APP/TASK/' + task.name
+                  'log_source' => 'APP/TASK/' + task.name,
+                  'volume_mounts' => an_instance_of(Array)
                 })
               end
             end
@@ -82,7 +84,7 @@ module VCAP::CloudController
               it 'contains the correct payload for creating a task' do
                 result = protocol.task_request(task, config)
 
-                expect(JSON.parse(result)).to eq({
+                expect(JSON.parse(result)).to match({
                   'task_guid' => task.guid,
                   'log_guid' => app.guid,
                   'environment' => expected_envs,
@@ -93,7 +95,8 @@ module VCAP::CloudController
                   'lifecycle' => Lifecycles::DOCKER,
                   'command' => 'be rake my panda',
                   'completion_callback' => "http://#{user}:#{password}@#{internal_service_hostname}:#{external_port}/internal/v3/tasks/#{task.guid}/completed",
-                  'log_source' => 'APP/TASK/' + task.name
+                  'log_source' => 'APP/TASK/' + task.name,
+                  'volume_mounts' => an_instance_of(Array)
                 })
               end
             end

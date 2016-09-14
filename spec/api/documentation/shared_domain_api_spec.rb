@@ -1,7 +1,7 @@
 require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 
-resource 'Shared Domains', type: [:api, :legacy_api] do
+RSpec.resource 'Shared Domains', type: [:api, :legacy_api] do
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let(:guid) { VCAP::CloudController::SharedDomain.first.guid }
   let!(:domains) { 3.times { VCAP::CloudController::SharedDomain.make } }
@@ -35,7 +35,7 @@ resource 'Shared Domains', type: [:api, :legacy_api] do
 
   post '/v2/shared_domains' do
     field :name, 'The name of the domain.', required: true, example_values: ['example.com', 'foo.example.com']
-    field :router_group_guid, 'The guid of the router group.', required: false, experimental: true
+    field :router_group_guid, 'The guid of the router group.', required: false
 
     example 'Create a Shared Domain' do
       client.post '/v2/shared_domains', fields_json(router_group_guid: 'my-random-guid'), headers

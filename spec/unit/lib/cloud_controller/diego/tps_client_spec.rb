@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController::Diego
-  describe TPSClient do
+  RSpec.describe TPSClient do
     let(:app) { VCAP::CloudController::AppFactory.make }
     let(:app2) { VCAP::CloudController::AppFactory.make }
 
@@ -18,58 +18,12 @@ module VCAP::CloudController::Diego
       context 'when there is a tps url configured' do
         context 'and the first attempt returns lrp status' do
           before do
-            stub_request(:get, tps_status_url).to_return(
-              status: 200,
-              body: [
-                {
-                  process_guid: 'abc',
-                  instance_guid: '123',
-                  index: 0,
-                  state: 'RUNNING',
-                  since: 1257894000,
-                },
-                { process_guid: 'abc',
-                  instance_guid: '456',
-                  index: 1,
-                  state: 'STARTING',
-                  since: 1257895000,
-                },
-                {
-                  process_guid: 'abc',
-                  instance_guid: '789',
-                  index: 1,
-                  state: 'CRASHED',
-                  details: 'down-hard',
-                  since: 1257896000,
-                }
-              ].to_json)
+            stub_request(:get, tps_status_url).to_return(status: 200,
+                                                         body: { 'cool' => 'instances' }.to_json)
           end
 
           it "reports each instance's index, state, since, process_guid, instance_guid, and details" do
-            expected_lrp_instances = [
-              {
-                process_guid: 'abc',
-                instance_guid: '123',
-                index: 0,
-                state: 'RUNNING',
-                since: 1257894000,
-              },
-              {
-                process_guid: 'abc',
-                instance_guid: '456',
-                index: 1,
-                state: 'STARTING',
-                since: 1257895000,
-              },
-              {
-                process_guid: 'abc',
-                instance_guid: '789',
-                index: 1,
-                state: 'CRASHED',
-                details: 'down-hard',
-                since: 1257896000,
-              }
-            ]
+            expected_lrp_instances = { cool: 'instances' }
 
             expect(client.lrp_instances(app)).to eq(expected_lrp_instances)
           end
@@ -79,7 +33,7 @@ module VCAP::CloudController::Diego
           it 'retries and eventually raises InstancesUnavailable' do
             stub = stub_request(:get, tps_status_url).to_raise(Errno::ECONNREFUSED)
 
-            expect { client.lrp_instances(app) }.to raise_error(VCAP::Errors::InstancesUnavailable, /connection refused/i)
+            expect { client.lrp_instances(app) }.to raise_error(CloudController::Errors::InstancesUnavailable, /connection refused/i)
             expect(stub).to have_been_requested.times(3)
           end
         end
@@ -102,7 +56,7 @@ module VCAP::CloudController::Diego
           it 'raises InstancesUnavailable' do
             expect {
               client.lrp_instances(app)
-            }.to raise_error(VCAP::Errors::InstancesUnavailable, /response code: 500, response body: This Broke/i)
+            }.to raise_error(CloudController::Errors::InstancesUnavailable, /response code: 500, response body: This Broke/i)
           end
         end
 
@@ -137,7 +91,7 @@ module VCAP::CloudController::Diego
         it 'raises InstancesUnavailable' do
           expect {
             client.lrp_instances(app)
-          }.to raise_error(VCAP::Errors::InstancesUnavailable, 'TPS URL not configured')
+          }.to raise_error(CloudController::Errors::InstancesUnavailable, 'TPS URL not configured')
         end
       end
     end
@@ -152,65 +106,14 @@ module VCAP::CloudController::Diego
           before do
             stub_request(:get, tps_stats_url).with(
               headers: { 'Authorization' => 'my-token' }
-            ).to_return(
-              status: 200,
-              body: [
-                {
-                  process_guid: 'abc',
-                  instance_guid: '123',
-                  index: 0,
-                  state: 'RUNNING',
-                  since: 1257894000,
-                  stats: { cpu: 80, mem: 128, disk: 1024 }
-                },
-                {
-                  process_guid: 'abc',
-                  instance_guid: '456',
-                  index: 1,
-                  state: 'STARTING',
-                  since: 1257895000,
-                  stats: { cpu: 70, mem: 256, disk: 1024 }
-                },
-                {
-                  process_guid: 'abc',
-                  instance_guid: '789',
-                  index: 1,
-                  state: 'CRASHED',
-                  since: 1257896000,
-                  details: 'down-hard',
-                  stats: { cpu: 50, mem: 512, disk: 2048 }
-                }
-              ].to_json)
+            ).to_return(status: 200, body: { 'foo' => 'bar', 'lisa' => 'baz' }.to_json)
           end
 
-          it "reports each instance's index, state, since, process_guid, instance_guid, details, and stats" do
-            expected_instance_stats = [
-              {
-                process_guid: 'abc',
-                instance_guid: '123',
-                index: 0,
-                state: 'RUNNING',
-                since: 1257894000,
-                stats: { cpu: 80, mem: 128, disk: 1024 }
-              },
-              {
-                process_guid: 'abc',
-                instance_guid: '456',
-                index: 1,
-                state: 'STARTING',
-                since: 1257895000,
-                stats: { cpu: 70, mem: 256, disk: 1024 }
-              },
-              {
-                process_guid: 'abc',
-                instance_guid: '789',
-                index: 1,
-                state: 'CRASHED',
-                details: 'down-hard',
-                since: 1257896000,
-                stats: { cpu: 50, mem: 512, disk: 2048 }
-              }
-            ]
+          it 'returns a symbolized hash of the JSON body' do
+            expected_instance_stats = {
+              foo: 'bar',
+              lisa: 'baz'
+            }
 
             expect(client.lrp_instances_stats(app)).to eq(expected_instance_stats)
           end
@@ -222,7 +125,7 @@ module VCAP::CloudController::Diego
 
             expect {
               client.lrp_instances_stats(app)
-            }.to raise_error(VCAP::Errors::InstancesUnavailable, /connection refused/i)
+            }.to raise_error(CloudController::Errors::InstancesUnavailable, /connection refused/i)
             expect(stub).to have_been_requested.times(3)
           end
         end
@@ -245,7 +148,7 @@ module VCAP::CloudController::Diego
           it 'raises InstancesUnavailable' do
             expect {
               client.lrp_instances_stats(app)
-            }.to raise_error(VCAP::Errors::InstancesUnavailable, /response code: 500/i)
+            }.to raise_error(CloudController::Errors::InstancesUnavailable, /response code: 500/i)
           end
         end
 
@@ -280,7 +183,7 @@ module VCAP::CloudController::Diego
         it 'raises InstancesUnavailable' do
           expect {
             client.lrp_instances_stats(app)
-          }.to raise_error(VCAP::Errors::InstancesUnavailable, 'TPS URL not configured')
+          }.to raise_error(CloudController::Errors::InstancesUnavailable, 'TPS URL not configured')
         end
       end
     end
@@ -291,49 +194,11 @@ module VCAP::CloudController::Diego
           before do
             stub_request(:get, tps_bulk_status_url).to_return(
               status: 200,
-              body: {
-                ProcessGuid.from_app(app) => [
-                  {
-                    process_guid: 'abc',
-                    instance_guid: '123',
-                    index: 0,
-                    state: 'RUNNING',
-                    since: 1257894000,
-                  }
-                ],
-                ProcessGuid.from_app(app2) => [
-                  {
-                    process_guid: 'def',
-                    instance_guid: '456',
-                    index: 0,
-                    state: 'RUNNING',
-                    since: 1257894000,
-                  }
-                ]
-              }.to_json)
+              body: { 'cool' => 'processes' }.to_json)
           end
 
           it 'returns a map of application guid to instance statuses' do
-            expected_lrp_instance_map = {
-              app.guid.to_sym => [
-                {
-                  process_guid: 'abc',
-                  instance_guid: '123',
-                  index: 0,
-                  state: 'RUNNING',
-                  since: 1257894000,
-                },
-              ],
-              app2.guid.to_sym => [
-                {
-                  process_guid: 'def',
-                  instance_guid: '456',
-                  index: 0,
-                  state: 'RUNNING',
-                  since: 1257894000,
-                }
-              ]
-            }
+            expected_lrp_instance_map = { 'cool' => 'processes' }
 
             expect(client.bulk_lrp_instances([app, app2])).to eq(expected_lrp_instance_map)
           end
@@ -357,7 +222,7 @@ module VCAP::CloudController::Diego
           it 'retries and eventually raises InstancesUnavailable' do
             stub = stub_request(:get, tps_bulk_status_url).to_raise(Errno::ECONNREFUSED)
 
-            expect { client.bulk_lrp_instances([app, app2]) }.to raise_error(VCAP::Errors::InstancesUnavailable, /connection refused/i)
+            expect { client.bulk_lrp_instances([app, app2]) }.to raise_error(CloudController::Errors::InstancesUnavailable, /connection refused/i)
             expect(stub).to have_been_requested.times(3)
           end
         end
@@ -370,7 +235,7 @@ module VCAP::CloudController::Diego
           it 'raises InstancesUnavailable' do
             expect {
               client.bulk_lrp_instances([app, app2])
-            }.to raise_error(VCAP::Errors::InstancesUnavailable, /response code: 500, response body: This Broke/i)
+            }.to raise_error(CloudController::Errors::InstancesUnavailable, /response code: 500, response body: This Broke/i)
           end
         end
 
@@ -405,7 +270,7 @@ module VCAP::CloudController::Diego
         it 'raises InstancesUnavailable' do
           expect {
             client.bulk_lrp_instances([app])
-          }.to raise_error(VCAP::Errors::InstancesUnavailable, 'TPS URL not configured')
+          }.to raise_error(CloudController::Errors::InstancesUnavailable, 'TPS URL not configured')
         end
       end
     end

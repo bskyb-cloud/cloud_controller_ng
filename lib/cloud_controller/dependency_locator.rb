@@ -1,6 +1,6 @@
-require 'repositories/runtime/app_event_repository'
-require 'repositories/runtime/space_event_repository'
-require 'repositories/runtime/route_event_repository'
+require 'repositories/app_event_repository'
+require 'repositories/space_event_repository'
+require 'repositories/route_event_repository'
 require 'cloud_controller/rest_controller/object_renderer'
 require 'cloud_controller/rest_controller/paginated_collection_renderer'
 require 'cloud_controller/upload_handler'
@@ -11,6 +11,10 @@ require 'cloud_controller/diego/stager_client'
 require 'cloud_controller/diego/tps_client'
 require 'cloud_controller/diego/messenger'
 require 'cloud_controller/blobstore/client_provider'
+require 'cloud_controller/resource_pool_wrapper'
+require 'cloud_controller/bits_service_resource_pool_wrapper'
+
+require 'bits_service_client'
 
 module CloudController
   class DependencyLocator
@@ -79,7 +83,8 @@ module CloudController
 
       Blobstore::ClientProvider.provide(
         options: options,
-        directory_key: options.fetch(:droplet_directory_key)
+        directory_key: options.fetch(:droplet_directory_key),
+        resource_type: :droplets
       )
     end
 
@@ -89,7 +94,8 @@ module CloudController
       Blobstore::ClientProvider.provide(
         options: options,
         directory_key: options.fetch(:droplet_directory_key),
-        root_dir: 'buildpack_cache'
+        root_dir: 'buildpack_cache',
+        resource_type: :buildpack_cache
       )
     end
 
@@ -98,7 +104,8 @@ module CloudController
 
       Blobstore::ClientProvider.provide(
         options: options,
-        directory_key: options.fetch(:app_package_directory_key)
+        directory_key: options.fetch(:app_package_directory_key),
+        resource_type: :packages
       )
     end
 
@@ -116,7 +123,8 @@ module CloudController
 
       Blobstore::ClientProvider.provide(
         options: options,
-        directory_key: options.fetch(:buildpack_directory_key, 'cc-buildpacks')
+        directory_key: options.fetch(:buildpack_directory_key, 'cc-buildpacks'),
+        resource_type: :buildpacks
       )
     end
 
@@ -138,15 +146,15 @@ module CloudController
     end
 
     def space_event_repository
-      Repositories::Runtime::SpaceEventRepository.new
+      Repositories::SpaceEventRepository.new
     end
 
     def route_event_repository
-      Repositories::Runtime::RouteEventRepository.new
+      Repositories::RouteEventRepository.new
     end
 
     def services_event_repository
-      Repositories::Services::EventRepository.new(
+      Repositories::ServiceEventRepository.new(
         user: SecurityContext.current_user,
         user_email: SecurityContext.current_user_email
       )
@@ -158,18 +166,6 @@ module CloudController
 
     def app_repository
       AppRepository.new
-    end
-
-    def app_presenter
-      AppPresenter.new
-    end
-
-    def package_presenter
-      PackagePresenter.new
-    end
-
-    def droplet_presenter
-      DropletPresenter.new
     end
 
     def object_renderer
@@ -187,10 +183,6 @@ module CloudController
 
     def large_paginated_collection_renderer
       create_paginated_collection_renderer(max_results_per_page: LARGE_COLLECTION_SIZE)
-    end
-
-    def entity_only_paginated_collection_renderer
-      create_paginated_collection_renderer(serializer: VCAP::CloudController::RestController::EntityOnlyPreloadedObjectSerializer.new)
     end
 
     def username_populating_collection_renderer
@@ -235,6 +227,35 @@ module CloudController
         CloudController::BlobSender::NginxLocalBlobSender.new
       else
         CloudController::BlobSender::DefaultLocalBlobSender.new
+      end
+    end
+
+    def bits_service_resource_pool
+      return nil unless use_bits_service
+      BitsService::ResourcePool.new(endpoint: bits_service_options[:private_endpoint])
+    end
+
+    def resource_pool_wrapper
+      if bits_service_resource_pool
+        BitsServiceResourcePoolWrapper
+      else
+        ResourcePoolWrapper
+      end
+    end
+
+    def bits_service_options
+      @config[:bits_service]
+    end
+
+    def use_bits_service
+      bits_service_options[:enabled]
+    end
+
+    def packer_class
+      if use_bits_service
+        Jobs::Runtime::BitsServicePacker
+      else
+        Jobs::Runtime::AppBitsPacker
       end
     end
 

@@ -1,13 +1,15 @@
-# This used to be https, but that causes problems in the vagrant container used by warden-jenkins.
-source 'http://rubygems.org'
+source 'https://rubygems.org'
 
 gem 'addressable'
-gem 'railties', '~>4.2.5.2'
+gem 'railties', '~>4.2.7.1'
 gem 'rake'
-gem 'eventmachine', '~> 1.0.0'
+
+# nats wants to lock us to an older version. we already use eventmachine 1.0.9, so do not want a downgrade.
+gem 'eventmachine', '~> 1.0.9'
+
 gem 'fog'
 gem 'i18n'
-gem 'nokogiri', '~> 1.6.2'
+gem 'nokogiri', '~> 1.6.8'
 gem 'unf'
 gem 'netaddr'
 gem 'rfc822'
@@ -21,7 +23,7 @@ gem 'membrane', '~> 1.0'
 gem 'httpclient'
 gem 'steno'
 gem 'cloudfront-signer'
-gem 'vcap_common', '~> 4.0.3'
+gem 'vcap_common', '~> 4.0.4'
 gem 'allowy'
 gem 'loggregator_emitter', '~> 5.0'
 gem 'delayed_job_sequel', git: 'https://github.com/cloudfoundry/delayed_job_sequel.git'
@@ -29,9 +31,9 @@ gem 'thin', '~> 1.6.0'
 gem 'newrelic_rpm', '3.12.0.288'
 gem 'clockwork', require: false
 gem 'statsd-ruby'
-gem 'activemodel', '~> 4.2.5.2'
-gem 'actionpack', '~> 4.2.5.2'
-gem 'actionview', '~> 4.2.5.2'
+gem 'activemodel', '~> 4.2.7.1'
+gem 'actionpack', '~> 4.2.7.1'
+gem 'actionview', '~> 4.2.7.1'
 gem 'public_suffix'
 
 # Requiring this particular commit to get a fix to a race condition when subscribing before a connection is made.
@@ -44,9 +46,10 @@ gem 'nats', git: 'https://github.com/nats-io/ruby-nats', ref: '8571cf9d685b60630
 gem 'vcap-concurrency', git: 'https://github.com/cloudfoundry/vcap-concurrency.git', ref: '2a5b0179'
 gem 'cf-uaa-lib', '~> 3.1.0', git: 'https://github.com/cloudfoundry/cf-uaa-lib.git', ref: 'b1e11235dc6cd7d8d4680e005526de37201305ea'
 gem 'cf-message-bus', '~> 0.3.0'
+gem 'bits_service_client', github: 'cloudfoundry-incubator/bits-service-client'
 
 group :db do
-  gem 'mysql2', '0.3.20'
+  gem 'mysql2', '0.4.4'
   gem 'pg', '0.16.0'
 end
 

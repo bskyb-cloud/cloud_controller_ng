@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe VCAP::CloudController::UserProvidedServiceInstance, type: :model do
+  RSpec.describe VCAP::CloudController::UserProvidedServiceInstance, type: :model do
     let(:service_instance) { VCAP::CloudController::UserProvidedServiceInstance.make }
 
     it_behaves_like 'a model with an encrypted attribute' do
@@ -87,7 +87,7 @@ module VCAP::CloudController
 
         event = ServiceUsageEvent.last
         expect(ServiceUsageEvent.count).to eq(1)
-        expect(event.state).to eq(Repositories::Services::ServiceUsageEventRepository::CREATED_EVENT_STATE)
+        expect(event.state).to eq(Repositories::ServiceUsageEventRepository::CREATED_EVENT_STATE)
         expect(event).to match_service_instance(instance)
       end
 
@@ -105,7 +105,7 @@ module VCAP::CloudController
         event = VCAP::CloudController::ServiceUsageEvent.last
 
         expect(VCAP::CloudController::ServiceUsageEvent.count).to eq(2)
-        expect(event.state).to eq(Repositories::Services::ServiceUsageEventRepository::DELETED_EVENT_STATE)
+        expect(event.state).to eq(Repositories::ServiceUsageEventRepository::DELETED_EVENT_STATE)
         expect(event).to match_service_instance(instance)
       end
     end

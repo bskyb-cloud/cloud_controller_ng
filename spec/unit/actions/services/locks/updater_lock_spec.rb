@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe UpdaterLock do
+  RSpec.describe UpdaterLock do
     let(:service_instance) { ManagedServiceInstance.make }
     let(:updater_lock) { UpdaterLock.new(service_instance) }
     let(:operation) { ServiceInstanceOperation.make(state: 'override me') }
@@ -30,7 +30,7 @@ module VCAP::CloudController
       it 'does not let you lock again' do
         expect {
           updater_lock.lock!
-        }.to raise_error Errors::ApiError
+        }.to raise_error CloudController::Errors::ApiError
       end
     end
 

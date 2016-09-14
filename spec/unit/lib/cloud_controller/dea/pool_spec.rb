@@ -1,10 +1,16 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe VCAP::CloudController::Dea::Pool do
+  RSpec.describe VCAP::CloudController::Dea::Pool do
     let(:message_bus) { CfMessageBus::MockMessageBus.new }
-    subject { Dea::Pool.new(TestConfig.config, message_bus) }
+    let(:config) { TestConfig.config }
+    subject { Dea::Pool.new(config, message_bus) }
     let(:available_disk) { 100 }
+    let(:min_stagers) { 5 }
+    let(:num_stagers) { 10 }
+    let(:last_stager_index) { num_stagers - 1 }
+    let(:first_stager_index) { num_stagers - min_stagers }
+
     let(:dea_advertise_msg) do
       {
         'id' => 'dea-id',
@@ -403,13 +409,13 @@ module VCAP::CloudController
       describe 'stager availability' do
         it 'raises if there are no stagers with that stack' do
           subject.process_advertise_message(dea_advertise_msg)
-          expect { subject.find_stager('unknown-stack-name', 0, 0) }.to raise_error(Errors::ApiError, /The stack could not be found/)
+          expect { subject.find_stager('unknown-stack-name', 0, 0) }.to raise_error(CloudController::Errors::ApiError, /The stack could not be found/)
         end
 
         it 'only finds registered stagers' do
-          expect { subject.find_stager('stack', 0, 0) }.to raise_error(Errors::ApiError, /The stack could not be found/)
+          expect { subject.find_stager('stack', 0, 0) }.to raise_error(CloudController::Errors::ApiError, /The stack could not be found/)
           subject.process_advertise_message(dea_advertise_msg)
-          expect(subject.find_stager('stack', 0, 0)).to eq('dea-id')
+          expect(subject.find_stager('stack', 0, 0).dea_id).to eq('dea-id')
         end
       end
 
@@ -440,7 +446,7 @@ module VCAP::CloudController
             subject.process_advertise_message(dea_advertise_msg)
 
             Timecop.travel(9)
-            expect(subject.find_stager('stack', 1024, 0)).to eq('dea-id')
+            expect(subject.find_stager('stack', 1024, 0).dea_id).to eq('dea-id')
 
             Timecop.travel(1)
             expect(subject.find_stager('stack', 1024, 0)).to be_nil
@@ -455,7 +461,7 @@ module VCAP::CloudController
               subject.process_advertise_message(dea_advertise_msg)
 
               Timecop.travel(11)
-              expect(subject.find_stager('stack', 1024, 0)).to eq('dea-id')
+              expect(subject.find_stager('stack', 1024, 0).dea_id).to eq('dea-id')
 
               Timecop.travel(5)
               expect(subject.find_stager('stack', 1024, 0)).to be_nil
@@ -468,22 +474,45 @@ module VCAP::CloudController
         it 'only finds stagers that can satisfy memory request' do
           subject.process_advertise_message(dea_advertise_msg)
           expect(subject.find_stager('stack', 1025, 0)).to be_nil
-          expect(subject.find_stager('stack', 1024, 0)).to eq('dea-id')
+          expect(subject.find_stager('stack', 1024, 0).dea_id).to eq('dea-id')
         end
 
-        it 'samples out of the top 5 stagers with enough memory' do
-          (0..9).to_a.shuffle.each do |i|
-            subject.process_advertise_message(
-              'id' => "staging-id-#{i}",
-              'stacks' => ['stack-name'],
-              'available_memory' => 1024 * i,
-            )
+        context 'with no minimum candidate stager count configured' do
+          it 'samples out of the top 5 stagers with enough memory' do
+            (0..last_stager_index).to_a.shuffle.each do |i|
+              subject.process_advertise_message(
+                'id' => "staging-id-#{i}",
+                'stacks' => ['stack-name'],
+                'available_memory' => 1024 * i,
+              )
+            end
+
+            correct_stagers = (first_stager_index..last_stager_index).map { |i| "staging-id-#{i}" }
+
+            10.times do
+              expect(correct_stagers).to include(subject.find_stager('stack-name', 1024, 0).dea_id)
+            end
           end
+        end
 
-          correct_stagers = (5..9).map { |i| "staging-id-#{i}" }
+        context 'with a minimum candidate stager count configured' do
+          let(:min_stagers) { 2 }
+          let(:config) { TestConfig.config.merge(minimum_candidate_stagers: min_stagers) }
 
-          10.times do
-            expect(correct_stagers).to include(subject.find_stager('stack-name', 1024, 0))
+          it 'samples using the configured bound' do
+            (0..last_stager_index).to_a.shuffle.each do |i|
+              subject.process_advertise_message(
+                'id' => "staging-id-#{i}",
+                'stacks' => ['stack-name'],
+                'available_memory' => 1024 * i,
+              )
+            end
+
+            correct_stagers = (first_stager_index..last_stager_index).map { |i| "staging-id-#{i}" }
+
+            10.times do
+              expect(correct_stagers).to include(subject.find_stager('stack-name', 1024, 0).dea_id)
+            end
           end
         end
       end
@@ -491,8 +520,8 @@ module VCAP::CloudController
       describe 'stack availability' do
         it 'only finds deas that can satisfy stack request' do
           subject.process_advertise_message(dea_advertise_msg)
-          expect { subject.find_stager('unknown-stack-name', 0, 0) }.to raise_error(Errors::ApiError, /The stack could not be found/)
-          expect(subject.find_stager('stack', 0, 0)).to eq('dea-id')
+          expect { subject.find_stager('unknown-stack-name', 0, 0) }.to raise_error(CloudController::Errors::ApiError, /The stack could not be found/)
+          expect(subject.find_stager('stack', 0, 0).dea_id).to eq('dea-id')
         end
       end
 

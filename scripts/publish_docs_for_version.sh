@@ -8,10 +8,11 @@ if [[ $# -eq 0 ]]; then
 fi
 
 readonly ROOT_DIR="$(dirname "$0")/.."
+readonly GENERATED_DOCS_DIR="docs/v3"
 readonly VERSION=$1
 
 function build_docs() {
-  pushd "${ROOT_DIR}/docs" > /dev/null
+  pushd "${GENERATED_DOCS_DIR}" > /dev/null
     bundle
 
     touch source/versionfile
@@ -59,9 +60,19 @@ function write_versions_json() {
 function update_index_html() {
   if [[ ${VERSION} != 'release-candidate' ]]; then
     cat <<INDEX > index.html
----
-redirect_to: version/${VERSION}/index.html
----
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="canonical" href="/version/${VERSION}/index.html"/>
+<meta http-equiv="content-type" content="text/html; charset=utf-8" />
+<meta http-equiv="refresh" content="0;url=/version/${VERSION}/index.html" />
+</head>
+<body>
+    <h1>Redirecting...</h1>
+      <a href="/version/${VERSION}/index.html">Click here if you are not redirected.<a>
+      <script>location='/version/${VERSION}/index.html'</script>
+</body>
+</html>
 INDEX
   fi
 }
@@ -90,8 +101,8 @@ function push_docs() {
 
 function add_new_docs() {
   mkdir -p "version/${VERSION}"
-  mv docs/build/* "version/${VERSION}"
-  rm -rf docs/build
+  mv ${GENERATED_DOCS_DIR}/build/* "version/${VERSION}"
+  rm -rf "${GENERATED_DOCS_DIR}/build"
 }
 
 function main() {

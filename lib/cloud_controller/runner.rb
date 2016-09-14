@@ -12,7 +12,6 @@ require 'cloud_controller/rack_app_builder'
 require 'cloud_controller/metrics/periodic_updater'
 require 'cloud_controller/metrics/request_metrics'
 
-require_relative 'seeds'
 require_relative 'message_bus_configurer'
 
 module VCAP::CloudController
@@ -35,7 +34,7 @@ module VCAP::CloudController
     end
 
     def setup_i18n
-      Errors::ApiError.setup_i18n(Dir[File.expand_path('../../../vendor/errors/i18n/*.yml', __FILE__)], @config[:default_locale])
+      CloudController::Errors::ApiError.setup_i18n(Dir[File.expand_path('../../../vendor/errors/i18n/*.yml', __FILE__)], @config[:default_locale])
     end
 
     def logger
@@ -47,15 +46,6 @@ module VCAP::CloudController
       @parser ||= OptionParser.new do |opts|
         opts.on('-c', '--config [ARG]', 'Configuration File') do |opt|
           @config_file = opt
-        end
-
-        opts.on('-m', '--run-migrations', 'Actually it means insert seed data') do
-          deprecation_warning 'Deprecated: Use -s or --insert-seed flag'
-          @insert_seed_data = true
-        end
-
-        opts.on('-s', '--insert-seed', 'Insert seed data') do
-          @insert_seed_data = true
         end
       end
     end
@@ -89,8 +79,6 @@ module VCAP::CloudController
           message_bus = MessageBus::Configurer.new(servers: @config[:message_bus_servers], logger: logger).go
 
           start_cloud_controller(message_bus)
-
-          Seeds.write_seed_data(@config) if @insert_seed_data
 
           Dea::SubSystem.setup!(message_bus)
 

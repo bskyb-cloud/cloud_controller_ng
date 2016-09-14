@@ -1,15 +1,19 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe RestagesController do
-    let(:app_event_repository) { Repositories::Runtime::AppEventRepository.new }
+  RSpec.describe RestagesController do
+    let(:app_event_repository) { Repositories::AppEventRepository.new }
     before { CloudController::DependencyLocator.instance.register(:app_event_repository, app_event_repository) }
 
     describe 'POST /v2/apps/:id/restage' do
       let(:package_state) { 'STAGED' }
       let!(:application) { AppFactory.make(package_hash: 'abc', package_state: package_state) }
 
-      subject(:restage_request) { post("/v2/apps/#{application.guid}/restage", {}, headers_for(account)) }
+      subject(:restage_request) { post "/v2/apps/#{application.guid}/restage", {} }
+
+      before do
+        set_current_user(account)
+      end
 
       context 'as a user' do
         let(:account) { make_user_for_space(application.space) }
@@ -63,7 +67,7 @@ module VCAP::CloudController
             AppFactory.make(package_hash: 'abc', docker_image: 'some_image', state: 'STARTED')
           end
 
-          subject(:restage_request) { post("/v2/apps/#{docker_app.guid}/restage", {}, headers_for(account)) }
+          subject(:restage_request) { post("/v2/apps/#{docker_app.guid}/restage", {}) }
 
           context 'when there are validation errors' do
             before do

@@ -1,7 +1,7 @@
 require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 
-resource 'Buildpacks', type: [:api, :legacy_api] do
+RSpec.resource 'Buildpacks', type: [:api, :legacy_api] do
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   let!(:buildpacks) { (1..3).map { |i| VCAP::CloudController::Buildpack.make(name: "name_#{i}", position: i) } }
   let(:guid) { buildpacks.first.guid }
@@ -113,15 +113,14 @@ resource 'Buildpacks', type: [:api, :legacy_api] do
     let(:valid_zip) do
       zip_name = File.join(tmpdir, filename)
       TestZip.create(zip_name, 1, 1024)
-      zip_file = File.new(zip_name)
-      Rack::Test::UploadedFile.new(zip_file)
+      File.new(zip_name)
     end
 
     example 'Upload the bits for an admin Buildpack' do
       explanation 'PUT not shown because it involves putting a large zip file. Right now only zipped admin buildpacks are accepted'
 
       no_doc do
-        client.put "/v2/buildpacks/#{guid}/bits", { buildpack: valid_zip }, headers
+        client.put "/v2/buildpacks/#{guid}/bits", { buildpack_name: filename, buildpack_path: valid_zip.path }, headers
       end
 
       expect(status).to eq(201)

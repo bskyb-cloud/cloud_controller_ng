@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe SystemEnvPresenter do
+  RSpec.describe SystemEnvPresenter do
     subject(:system_env_presenter) { SystemEnvPresenter.new(app.all_service_bindings) }
 
     describe '#system_env' do
@@ -27,35 +27,62 @@ module VCAP::CloudController
 
         it 'contains a populated vcap_services' do
           expect(system_env_presenter.system_env[:VCAP_SERVICES]).not_to eq({})
-          expect(system_env_presenter.system_env[:VCAP_SERVICES]).to have_key(service.label)
-          expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label]).to have(1).services
+          expect(system_env_presenter.system_env[:VCAP_SERVICES]).to have_key(service.label.to_sym)
+          expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label.to_sym]).to have(1).services
         end
 
-        it 'includes service binding information' do
-          expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label]).to have(1).items
-          expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label].first).to eq(
-            credentials: service_binding.credentials,
-            syslog_drain_url: 'logs.go-here.com',
-            label: 'elephantsql-n/a',
-            provider: 'cool-provider',
-            plan: service_plan.name,
-            name: 'elephantsql-vip-uat',
-            tags: ['excellent']
-            )
+        it 'includes service binding and instance information' do
+          expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label.to_sym]).to have(1).items
+          binding = system_env_presenter.system_env[:VCAP_SERVICES][service.label.to_sym].first.to_hash
+
+          expect(binding[:credentials]).to eq(service_binding.credentials)
+          expect(binding[:name]).to eq('elephantsql-vip-uat')
+        end
+
+        describe 'volume mounts' do
+          context 'when the service binding has volume mounts' do
+            let!(:service_binding) do
+              ServiceBinding.make(
+                app: app,
+                service_instance: service_instance,
+                syslog_drain_url: 'logs.go-here.com',
+                volume_mounts: [{
+                                    container_dir: '/data/images',
+                                    mode: 'r',
+                                    device_type: 'shared',
+                                    device: {
+                                        driver: 'cephfs',
+                                        volume_id: 'abc',
+                                        mount_config: {
+                                            key: 'value'
+                                        }
+                                    }
+                                }]
+              )
+            end
+
+            it 'includes only the public volume information' do
+              expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label.to_sym][0].to_hash[:volume_mounts]).to eq(['container_dir' => '/data/images',
+                                                                                                                              'mode' => 'r',
+                                                                                                                              'device_type' => 'shared'])
+            end
+          end
+
+          context 'when the service binding has no volume mounts' do
+            it 'is an empty array' do
+              expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label.to_sym][0].to_hash[:volume_mounts]).to eq([])
+            end
+          end
         end
 
         context 'when the service is user-provided' do
           let(:service_instance) { UserProvidedServiceInstance.make(space: space, name: 'elephantsql-vip-uat') }
 
-          it 'includes service binding information' do
-            expect(system_env_presenter.system_env[:VCAP_SERVICES]['user-provided']).to have(1).items
-            expect(system_env_presenter.system_env[:VCAP_SERVICES]['user-provided'].first).to eq(
-              credentials: service_binding.credentials,
-              syslog_drain_url: 'logs.go-here.com',
-              label: 'user-provided',
-              name: 'elephantsql-vip-uat',
-              tags: []
-              )
+          it 'includes service binding and instance information' do
+            expect(system_env_presenter.system_env[:VCAP_SERVICES][:'user-provided']).to have(1).items
+            binding = system_env_presenter.system_env[:VCAP_SERVICES][:'user-provided'].first.to_hash
+            expect(binding[:credentials]).to eq(service_binding.credentials)
+            expect(binding[:name]).to eq('elephantsql-vip-uat')
           end
         end
 
@@ -75,20 +102,13 @@ module VCAP::CloudController
 
           it 'includes the services from the parent' do
             expect(system_env_presenter.system_env[:VCAP_SERVICES]).not_to eq({})
-            expect(system_env_presenter.system_env[:VCAP_SERVICES]).to have_key(service.label)
+            expect(system_env_presenter.system_env[:VCAP_SERVICES]).to have_key(service.label.to_sym)
           end
 
-          it 'includes service binding information' do
-            binding_information = system_env_presenter.system_env[:VCAP_SERVICES]['rabbit'].first
-            expect(binding_information).to eq(
-              credentials: service_binding.credentials,
-              syslog_drain_url: service_binding.syslog_drain_url,
-              label: service.label,
-              provider: service.provider,
-              plan: service_plan.name,
-              name: service_instance.name,
-              tags: service_instance.merged_tags
-              )
+          it 'includes service binding and instance information' do
+            binding_information = system_env_presenter.system_env[:VCAP_SERVICES][:rabbit].first.to_hash
+            expect(binding_information[:credentials]).to eq(service_binding.credentials)
+            expect(binding_information[:name]).to eq('rabbit-instance')
           end
         end
 
@@ -100,8 +120,8 @@ module VCAP::CloudController
 
           it 'should group services by label' do
             expect(system_env_presenter.system_env[:VCAP_SERVICES]).to have(2).groups
-            expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label]).to have(2).services
-            expect(system_env_presenter.system_env[:VCAP_SERVICES][service_alt.label]).to have(1).service
+            expect(system_env_presenter.system_env[:VCAP_SERVICES][service.label.to_sym]).to have(2).services
+            expect(system_env_presenter.system_env[:VCAP_SERVICES][service_alt.label.to_sym]).to have(1).service
           end
         end
       end

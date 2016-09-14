@@ -1,8 +1,9 @@
-require 'cloud_controller/diego/buildpack/v3/buildpack_entry_generator'
+require 'cloud_controller/diego/v3/buildpack/buildpack_entry_generator'
 require 'cloud_controller/diego/normal_env_hash_to_diego_env_array_philosopher'
 require 'cloud_controller/diego/staging_request'
 require 'cloud_controller/diego/task_completion_callback_generator'
 require 'cloud_controller/diego/buildpack/lifecycle_data'
+require 'cloud_controller/diego/protocol/app_volume_mounts'
 
 module VCAP::CloudController
   module Diego
@@ -30,13 +31,15 @@ module VCAP::CloudController
               'completion_callback' => task_completion_callback,
               'lifecycle' => app.lifecycle_type,
               'command' => task.command,
-              'log_source' => 'APP/TASK/' + task.name
+              'log_source' => 'APP/TASK/' + task.name,
+              'volume_mounts' => VCAP::CloudController::Diego::Protocol::AppVolumeMounts.new(app)
             }
 
             if app.lifecycle_type == Lifecycles::BUILDPACK
               result = result.merge({
                 'rootfs' => app.lifecycle_data.stack,
                 'droplet_uri' => blobstore_url_generator.v3_droplet_download_url(droplet),
+                'droplet_hash' => droplet.droplet_hash,
               })
             elsif app.lifecycle_type == Lifecycles::DOCKER
               result = result.merge(

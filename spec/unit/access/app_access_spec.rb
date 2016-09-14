@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe AppAccess, type: :access do
+  RSpec.describe AppAccess, type: :access do
     subject(:access) { AppAccess.new(Security::AccessContext.new) }
     let(:token) { { 'scope' => ['cloud_controller.read', 'cloud_controller.write'] } }
     let(:user) { VCAP::CloudController::User.make }
@@ -37,6 +37,18 @@ module VCAP::CloudController
       end
     end
 
+    context 'admin read only' do
+      include_context :admin_read_only_setup
+
+      before { FeatureFlag.make(name: 'app_bits_upload', enabled: false) }
+
+      it_behaves_like :read_only_access
+
+      it 'does allows admin_read_only to :read_env' do
+        expect(subject).to allow_op_on_object(:read_env, object)
+      end
+    end
+
     context 'space developer' do
       before do
         org.add_user(user)
@@ -55,7 +67,7 @@ module VCAP::CloudController
       context 'app_bits_upload FeatureFlag' do
         it 'disallows when enabled' do
           FeatureFlag.make(name: 'app_bits_upload', enabled: false, error_message: nil)
-          expect { subject.upload?(object) }.to raise_error(VCAP::Errors::ApiError, /app_bits_upload/)
+          expect { subject.upload?(object) }.to raise_error(CloudController::Errors::ApiError, /app_bits_upload/)
         end
       end
 
@@ -81,9 +93,9 @@ module VCAP::CloudController
         before { FeatureFlag.make(name: 'app_scaling', enabled: false, error_message: nil) }
 
         it 'cannot scale' do
-          expect { subject.read_for_update?(object, { 'memory' => 2 }) }.to raise_error(VCAP::Errors::ApiError, /app_scaling/)
-          expect { subject.read_for_update?(object, { 'disk_quota' => 2 }) }.to raise_error(VCAP::Errors::ApiError, /app_scaling/)
-          expect { subject.read_for_update?(object, { 'instances' => 2 }) }.to raise_error(VCAP::Errors::ApiError, /app_scaling/)
+          expect { subject.read_for_update?(object, { 'memory' => 2 }) }.to raise_error(CloudController::Errors::ApiError, /app_scaling/)
+          expect { subject.read_for_update?(object, { 'disk_quota' => 2 }) }.to raise_error(CloudController::Errors::ApiError, /app_scaling/)
+          expect { subject.read_for_update?(object, { 'instances' => 2 }) }.to raise_error(CloudController::Errors::ApiError, /app_scaling/)
         end
 
         it 'allows unchanged fields to be specified' do
@@ -99,7 +111,7 @@ module VCAP::CloudController
         before { TestConfig.override(users_can_select_backend: false) }
 
         it 'does not allow user to change the diego flag' do
-          expect { subject.read_for_update?(object, { 'diego' => true }) }.to raise_error(VCAP::Errors::ApiError, /backend/)
+          expect { subject.read_for_update?(object, { 'diego' => true }) }.to raise_error(CloudController::Errors::ApiError, /backend/)
         end
       end
     end

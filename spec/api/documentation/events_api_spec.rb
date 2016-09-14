@@ -2,7 +2,7 @@ require 'spec_helper'
 require 'rspec_api_documentation/dsl'
 require 'cgi'
 
-resource 'Events', type: [:api, :legacy_api] do
+RSpec.resource 'Events', type: [:api, :legacy_api] do
   DOCUMENTED_EVENT_TYPES = %w(
     app.crash
     audit.app.start
@@ -32,6 +32,8 @@ resource 'Events', type: [:api, :legacy_api] do
     audit.service_instance.create
     audit.service_instance.update
     audit.service_instance.delete
+    audit.service_instance.bind_route
+    audit.service_instance.unbind_route
     audit.user_provided_service_instance.create
     audit.user_provided_service_instance.update
     audit.user_provided_service_instance.delete
@@ -42,7 +44,55 @@ resource 'Events', type: [:api, :legacy_api] do
     audit.route.create
     audit.route.update
     audit.route.delete-request
-  ).freeze
+    audit.app.droplet_mapped
+    audit.app.map-route
+    audit.app.unmap-route
+    audit.app.restage
+    audit.app.copy-bits
+    audit.app.package.create
+    audit.app.package.upload
+    audit.app.package.delete
+    audit.app.package.download
+  ).sort.freeze
+
+  EXPERIMENTAL_EVENT_TYPES = %w(
+    audit.app.droplet.create
+    audit.app.droplet.delete
+    audit.app.process.crash
+    audit.app.process.create
+    audit.app.process.delete
+    audit.app.process.scale
+    audit.app.process.terminate_instance
+    audit.app.process.update
+    audit.app.droplet.download
+    audit.app.task.create
+    audit.app.task.cancel
+  ).sort.freeze
+
+  ACTEE_TYPES = [
+    'v3-app (experimental)',
+    'app',
+    'route',
+    'v3-service-binding (experimental)',
+    'service_plan_visibility',
+    'service_broker',
+    'service',
+    'service_plan',
+    'service_dashboard_client',
+    'service_instance',
+    'user_provided_service_instance',
+    'service_binding',
+    'service_key',
+    'space'
+  ].sort.freeze
+
+  ACTOR_TYPES = %w(
+    v3-process
+    user
+    system
+    service_broker
+  ).sort.freeze
+
   let(:admin_auth_header) { admin_headers['HTTP_AUTHORIZATION'] }
   authenticated_request
 
@@ -54,18 +104,19 @@ resource 'Events', type: [:api, :legacy_api] do
 
   let(:guid) { VCAP::CloudController::Event.first.guid }
 
-  field :guid, 'The guid of the event.', required: false
-  field :type, 'The type of the event.', required: false, readonly: true, valid_values: DOCUMENTED_EVENT_TYPES, example_values: %w(app.crash audit.app.update)
-  field :actor, 'The GUID of the actor.', required: false, readonly: true
-  field :actor_type, 'The actor type.', required: false, readonly: true, example_values: %w(user app)
-  field :actor_name, 'The name of the actor.', required: false, readonly: true
-  field :actee, 'The GUID of the actee.', required: false, readonly: true
-  field :actee_type, 'The actee type.', required: false, readonly: true, example_values: %w(space app v3-app)
-  field :actee_name, 'The name of the actee.', required: false, readonly: true
-  field :timestamp, 'The event creation time.', required: false, readonly: true
-  field :metadata, 'The additional information about event.', required: false, readonly: true, default: {}
-  field :space_guid, 'The guid of the associated space.', required: false, readonly: true
-  field :organization_guid, 'The guid of the associated organization.', required: false, readonly: true
+  response_field :guid, 'The guid of the event.', required: false
+  response_field :type, 'The type of the event.', required: false, readonly: true, valid_values: DOCUMENTED_EVENT_TYPES, example_values: %w(app.crash audit.app.update)
+  response_field :type, 'The type of the event.', experimental: true, required: false, valid_values: EXPERIMENTAL_EVENT_TYPES, example_values: %w(audit.app.process.crash)
+  response_field :actor, 'The GUID of the actor.', required: false, readonly: true
+  response_field :actor_type, 'The actor type.', required: false, readonly: true, example_values: ACTOR_TYPES
+  response_field :actor_name, 'The name of the actor.', required: false, readonly: true
+  response_field :actee, 'The GUID of the actee.', required: false, readonly: true
+  response_field :actee_type, 'The actee type.', required: false, readonly: true, example_values: ACTEE_TYPES
+  response_field :actee_name, 'The name of the actee.', required: false, readonly: true
+  response_field :timestamp, 'The event creation time.', required: false, readonly: true
+  response_field :metadata, 'The additional information about event.', required: false, readonly: true, default: {}
+  response_field :space_guid, 'The guid of the associated space.', required: false, readonly: true
+  response_field :organization_guid, 'The guid of the associated organization.', required: false, readonly: true
 
   standard_model_list(:event, VCAP::CloudController::EventsController)
   standard_model_get(:event)
@@ -131,19 +182,19 @@ resource 'Events', type: [:api, :legacy_api] do
     end
 
     let(:app_event_repository) do
-      VCAP::CloudController::Repositories::Runtime::AppEventRepository.new
+      VCAP::CloudController::Repositories::AppEventRepository.new
     end
 
     let(:space_event_repository) do
-      VCAP::CloudController::Repositories::Runtime::SpaceEventRepository.new
+      VCAP::CloudController::Repositories::SpaceEventRepository.new
     end
 
     let(:route_event_repository) do
-      VCAP::CloudController::Repositories::Runtime::RouteEventRepository.new
+      VCAP::CloudController::Repositories::RouteEventRepository.new
     end
 
     let(:service_event_repository) do
-      VCAP::CloudController::Repositories::Services::EventRepository.new(user: test_user, user_email: test_user_email)
+      VCAP::CloudController::Repositories::ServiceEventRepository.new(user: test_user, user_email: test_user_email)
     end
 
     example 'List App Create Events' do
@@ -755,6 +806,7 @@ resource 'Events', type: [:api, :legacy_api] do
                                    'name' => instance.name,
                                    'service_plan_guid' => instance.service_plan.guid,
                                    'space_guid' => instance.space_guid,
+                                   'parameters' => '[PRIVATE DATA HIDDEN]'
                                  }
                                }
     end
@@ -778,6 +830,7 @@ resource 'Events', type: [:api, :legacy_api] do
                                metadata: {
                                  'request' => {
                                    'service_plan_guid' => instance.service_plan.guid,
+                                   'parameters' => '[PRIVATE DATA HIDDEN]'
                                  }
                                }
     end
@@ -797,7 +850,59 @@ resource 'Events', type: [:api, :legacy_api] do
                                actee_name: instance.name,
                                space_guid: instance.space_guid,
                                metadata: {
-                                 'request' => {}
+                                 'request' => {
+                                   'parameters' => '[PRIVATE DATA HIDDEN]'
+                                 }
+                               }
+    end
+
+    example 'List Service Instance Bind Route Events' do
+      space = VCAP::CloudController::Space.make
+      instance = VCAP::CloudController::ManagedServiceInstance.make(space: space)
+      route = VCAP::CloudController::Route.make(space: space)
+
+      service_event_repository.record_service_instance_event(:bind_route, instance, { route_guid: route.guid })
+
+      client.get '/v2/events?q=type:audit.service_instance.bind_route', {}, headers
+      expect(status).to eq(200)
+      standard_entity_response parsed_response['resources'][0], :event,
+                               actor_type: 'user',
+                               actor: test_user.guid,
+                               actor_name: test_user_email,
+                               actee_type: 'service_instance',
+                               actee: instance.guid,
+                               actee_name: instance.name,
+                               space_guid: instance.space_guid,
+                               metadata: {
+                                 'request' => {
+                                   'route_guid' => route.guid,
+                                   'parameters' => '[PRIVATE DATA HIDDEN]'
+                                 }
+                               }
+    end
+
+    example 'List Service Instance Unbind Route Events' do
+      space = VCAP::CloudController::Space.make
+      instance = VCAP::CloudController::ManagedServiceInstance.make(space: space)
+      route = VCAP::CloudController::Route.make(space: space)
+
+      service_event_repository.record_service_instance_event(:unbind_route, instance, { route_guid: route.guid })
+
+      client.get '/v2/events?q=type:audit.service_instance.unbind_route', {}, headers
+      expect(status).to eq(200)
+      standard_entity_response parsed_response['resources'][0], :event,
+                               actor_type: 'user',
+                               actor: test_user.guid,
+                               actor_name: test_user_email,
+                               actee_type: 'service_instance',
+                               actee: instance.guid,
+                               actee_name: instance.name,
+                               space_guid: instance.space_guid,
+                               metadata: {
+                                 'request' => {
+                                   'route_guid' => route.guid,
+                                   'parameters' => '[PRIVATE DATA HIDDEN]'
+                                 }
                                }
     end
 

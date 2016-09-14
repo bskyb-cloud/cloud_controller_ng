@@ -47,7 +47,7 @@ module VCAP::CloudController
         def get_repository(user_guid, user_email)
           user = User.find(guid: user_guid)
           if user
-            Repositories::Services::EventRepository.new(user: user, user_email: user_email)
+            Repositories::ServiceEventRepository.new(user: user, user_email: user_email)
           end
         end
 
@@ -82,7 +82,7 @@ module VCAP::CloudController
         def record_event(service_instance, request_attrs)
           services_event_repository = get_repository(@user_guid, @user_email)
           return unless services_event_repository
-          type = service_instance.last_operation.type.to_sym
+          type = service_instance.last_operation.type
           services_event_repository.record_service_instance_event(type, service_instance, request_attrs)
         end
 

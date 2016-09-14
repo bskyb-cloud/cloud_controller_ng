@@ -2,7 +2,7 @@ require 'spec_helper'
 require 'actions/services/service_binding_delete'
 
 module VCAP::CloudController
-  describe ServiceBindingDelete do
+  RSpec.describe ServiceBindingDelete do
     subject(:service_binding_delete) { ServiceBindingDelete.new }
 
     describe '#delete' do
@@ -29,7 +29,7 @@ module VCAP::CloudController
         service_instance.service_instance_operation = ServiceInstanceOperation.make state: 'in progress'
         service_binding_delete = ServiceBindingDelete.new
         errors = service_binding_delete.delete([service_binding_1])
-        expect(errors.first).to be_instance_of Errors::ApiError
+        expect(errors.first).to be_instance_of CloudController::Errors::ApiError
       end
 
       context 'when one binding deletion fails' do

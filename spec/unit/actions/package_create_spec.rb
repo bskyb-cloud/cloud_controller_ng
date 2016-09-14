@@ -2,15 +2,15 @@ require 'spec_helper'
 require 'actions/package_create'
 
 module VCAP::CloudController
-  describe PackageCreate do
-    let(:package_create) { PackageCreate.new(user, user_email) }
+  RSpec.describe PackageCreate do
+    let(:package_create) { PackageCreate.new(user_guid, user_email) }
 
     describe '#create' do
       let(:app) { AppModel.make }
       let(:type) { 'docker' }
       let(:app_guid) { app.guid }
       let(:message) { PackageCreateMessage.new({ type: type, app_guid: app_guid }) }
-      let(:user) { User.make }
+      let(:user_guid) { 'gooid' }
       let(:user_email) { 'user@example.com' }
 
       it 'creates the package with the correct values' do
@@ -22,10 +22,10 @@ module VCAP::CloudController
         expect(created_package.type).to eq(type)
       end
 
-      it 'creates an audit event' do
-        expect(Repositories::Runtime::PackageEventRepository).to receive(:record_app_add_package).with(
+      it 'creates an v3 audit event' do
+        expect(Repositories::PackageEventRepository).to receive(:record_app_package_create).with(
           instance_of(PackageModel),
-          user,
+          user_guid,
           user_email,
           {
             'app_guid' => app_guid,

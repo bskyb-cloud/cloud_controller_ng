@@ -1,7 +1,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController::RestController
-  describe OrderApplicator do
+  RSpec.describe OrderApplicator do
     subject(:order_applicator) do
       OrderApplicator.new(opts)
     end
@@ -65,7 +65,7 @@ module VCAP::CloudController::RestController
         let(:opts) { { order_direction: 'decs' } }
 
         it 'raises an error which makes sense to an api client' do
-          expect { sql }.to raise_error(VCAP::Errors::ApiError)
+          expect { sql }.to raise_error(CloudController::Errors::ApiError)
         end
       end
     end

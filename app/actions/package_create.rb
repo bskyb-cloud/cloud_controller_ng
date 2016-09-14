@@ -1,11 +1,11 @@
-require 'repositories/runtime/package_event_repository'
+require 'repositories/package_event_repository'
 
 module VCAP::CloudController
   class PackageCreate
     class InvalidPackage < StandardError; end
 
-    def initialize(user, user_email)
-      @user = user
+    def initialize(user_guid, user_email)
+      @user_guid = user_guid
       @user_email = user_email
     end
 
@@ -21,9 +21,9 @@ module VCAP::CloudController
         package.save
         make_docker_data(message, package)
 
-        Repositories::Runtime::PackageEventRepository.record_app_add_package(
+        Repositories::PackageEventRepository.record_app_package_create(
           package,
-          @user,
+          @user_guid,
           @user_email,
           message.audit_hash)
       end

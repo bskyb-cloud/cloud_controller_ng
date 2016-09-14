@@ -1,19 +1,19 @@
-require 'messages/base_message'
+require 'messages/list_message'
 
 module VCAP::CloudController
-  class ServiceBindingsListMessage < BaseMessage
-    ALLOWED_KEYS = [:page, :per_page, :order_by].freeze
-    VALID_ORDER_BY_KEYS = /created_at|updated_at/
+  class ServiceBindingsListMessage < ListMessage
+    ALLOWED_KEYS = [:app_guids, :service_instance_guids, :order_by, :page, :per_page].freeze
 
     attr_accessor(*ALLOWED_KEYS)
 
     validates_with NoAdditionalParamsValidator
-    validates_numericality_of :page, greater_than: 0, allow_nil: true, only_integer: true
-    validates_numericality_of :per_page, greater_than: 0, allow_nil: true, only_integer: true
-    validates_format_of :order_by, with: /[+-]?(#{VALID_ORDER_BY_KEYS})/, allow_nil: true
 
     def self.from_params(params)
       opts = params.dup
+
+      %w(app_guids service_instance_guids).each do |key|
+        to_array!(opts, key)
+      end
 
       new(opts.symbolize_keys)
     end

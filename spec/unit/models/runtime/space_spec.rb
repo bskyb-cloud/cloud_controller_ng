@@ -2,7 +2,7 @@
 require 'spec_helper'
 
 module VCAP::CloudController
-  describe VCAP::CloudController::Space, type: :model do
+  RSpec.describe VCAP::CloudController::Space, type: :model do
     it { is_expected.to have_timestamp_columns }
 
     describe 'Validations' do
@@ -469,7 +469,8 @@ module VCAP::CloudController
           expect {
             space.space_quota_definition_guid = space_quota_definition_guid
             space.save
-          }.to raise_error(VCAP::Errors::ApiError, /Invalid relation: Could not find VCAP::CloudController::SpaceQuotaDefinition with guid: #{space_quota_definition_guid}/)
+          }.to raise_error(CloudController::Errors::ApiError,
+            /Invalid relation: Could not find VCAP::CloudController::SpaceQuotaDefinition with guid: #{space_quota_definition_guid}/)
         end
       end
     end

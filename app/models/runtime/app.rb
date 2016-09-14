@@ -3,7 +3,7 @@ require 'cloud_controller/database_uri_generator'
 require 'cloud_controller/undo_app_changes'
 require 'cloud_controller/errors/application_missing'
 require 'cloud_controller/errors/invalid_route_relation'
-require 'repositories/runtime/app_usage_event_repository'
+require 'repositories/app_usage_event_repository'
 require 'actions/services/service_binding_delete'
 require 'presenters/message_bus/service_binding_presenter'
 require 'presenters/v3/cache_key_presenter'
@@ -55,7 +55,7 @@ module VCAP::CloudController
     add_association_dependencies routes: :nullify, events: :delete, droplets: :destroy
 
     export_attributes :name, :production, :space_guid, :stack_guid, :buildpack,
-                      :detected_buildpack, :environment_json, :memory, :instances, :disk_quota,
+                      :detected_buildpack, :detected_buildpack_guid, :environment_json, :memory, :instances, :disk_quota,
                       :state, :version, :command, :console, :debug, :staging_task_id,
                       :package_state, :health_check_type, :health_check_timeout,
                       :staging_failed_reason, :staging_failed_description, :diego, :docker_image, :package_updated_at,
@@ -75,10 +75,11 @@ module VCAP::CloudController
 
     encrypt :environment_json, salt: :salt, column: :encrypted_environment_json
     encrypt :docker_credentials_json, salt: :docker_salt, column: :encrypted_docker_credentials_json
+    encrypt :buildpack, salt: :buildpack_salt, column: :encrypted_buildpack
 
     APP_STATES = %w(STOPPED STARTED).map(&:freeze).freeze
     PACKAGE_STATES = %w(PENDING STAGED FAILED).map(&:freeze).freeze
-    STAGING_FAILED_REASONS = %w(StagingError StagingTimeExpired NoAppDetectedError BuildpackCompileFailed
+    STAGING_FAILED_REASONS = %w(StagerError StagingError StagingTimeExpired NoAppDetectedError BuildpackCompileFailed
                                 BuildpackReleaseFailed InsufficientResources NoCompatibleCell).map(&:freeze).freeze
     HEALTH_CHECK_TYPES = %w(port none process).map(&:freeze).freeze
 
@@ -90,6 +91,10 @@ module VCAP::CloudController
     attr_accessor :last_stager_response
 
     alias_method :diego?, :diego
+
+    # user_provided_ports method should be called to
+    # get the value of ports stored in the database
+    alias_method(:user_provided_ports, :ports)
 
     def copy_buildpack_errors
       bp = buildpack
@@ -117,15 +122,16 @@ module VCAP::CloudController
         HealthCheckPolicy.new(self, health_check_timeout),
         CustomBuildpackPolicy.new(self, custom_buildpacks_enabled?),
         DockerPolicy.new(self),
-        PortsPolicy.new(self),
-        DiegoToDeaPolicy.new(self, changed_from_diego_to_dea)
+        PortsPolicy.new(self, changed_from_dea_to_diego?),
+        DiegoToDeaPolicy.new(self, changed_from_diego_to_dea?)
       ]
     end
 
     def validate
       validates_presence :name
       validates_presence :space
-      validates_unique [:space_id, :name]
+      validates_unique [:space_id, :name] if is_v2?
+      validate_uniqueness_of_type_for_same_app_model if is_v3?
       validates_format APP_NAME_REGEX, :name
 
       copy_buildpack_errors
@@ -135,7 +141,22 @@ module VCAP::CloudController
       validates_includes STAGING_FAILED_REASONS, :staging_failed_reason, allow_nil: true
       validates_includes HEALTH_CHECK_TYPES, :health_check_type, allow_missing: true, message: 'must be one of ' + HEALTH_CHECK_TYPES.join(', ')
 
+      validate_health_check_type_and_port_presence_are_in_agreement
       validation_policies.map(&:validate)
+    end
+
+    def validate_uniqueness_of_type_for_same_app_model
+      if non_unique_process_types.present? && new?
+        non_unique_process_types_message = non_unique_process_types.push(type).sort.join(', ')
+        errors.add(:type, Sequel.lit("application process types must be unique (case-insensitive), received: [#{non_unique_process_types_message}]"))
+      end
+    end
+
+    def validate_health_check_type_and_port_presence_are_in_agreement
+      default_to_port = nil
+      if [default_to_port, 'port'].include?(health_check_type) && ports == []
+        errors.add(:ports, 'ports array cannot be empty when health check type is "port"')
+      end
     end
 
     def before_create
@@ -161,13 +182,13 @@ module VCAP::CloudController
 
       # column_changed?(:ports) reports false here for reasons unknown
       @ports_changed_by_user = changed_columns.include?(:ports)
-      update_ports(nil) if changed_from_diego_to_dea && !changed_columns.include?(:ports)
+      update_ports(nil) if changed_from_diego_to_dea? && !changed_columns.include?(:ports)
       super
     end
 
     def before_save
       if needs_package_in_current_state? && !package_hash
-        raise VCAP::Errors::ApiError.new_from_details('AppPackageInvalid', 'bits have not been uploaded')
+        raise CloudController::Errors::ApiError.new_from_details('AppPackageInvalid', 'bits have not been uploaded')
       end
 
       self.stack ||= Stack.default
@@ -247,7 +268,7 @@ module VCAP::CloudController
     end
 
     def buildpack_changed?
-      column_changed?(:buildpack)
+      column_changed?(:encrypted_buildpack)
     end
 
     def desired_instances
@@ -340,6 +361,38 @@ module VCAP::CloudController
     end
     alias_method_chain :environment_json, 'serialization'
 
+    def buildpack_with_serialization=(buildpack_name)
+      self.admin_buildpack = nil
+      self.buildpack_without_serialization = nil
+
+      admin_buildpack = Buildpack.find(name: buildpack_name.to_s)
+
+      if admin_buildpack
+        self.admin_buildpack = admin_buildpack
+      elsif buildpack_name != '' # git url case
+
+        self.buildpack_without_serialization = buildpack_name
+      end
+    end
+    alias_method_chain :buildpack=, 'serialization'
+
+    def buildpack_with_serialization
+      string = buildpack_without_serialization
+
+      if admin_buildpack
+        return admin_buildpack
+      elsif string
+        return CustomBuildpack.new(string)
+      end
+
+      AutoDetectionBuildpack.new
+    end
+    alias_method_chain :buildpack, 'serialization'
+
+    def docker?
+      docker_image.present?
+    end
+
     def docker_credentials_json_with_serialization=(env)
       self.docker_credentials_json_without_serialization = MultiJson.dump(env)
     end
@@ -358,15 +411,15 @@ module VCAP::CloudController
     end
 
     def validate_space(space)
-      objection = Errors::InvalidRouteRelation.new(space.guid)
+      objection = CloudController::Errors::InvalidRouteRelation.new(space.guid)
 
       raise objection unless routes.all? { |route| route.space_id == space.id }
       service_bindings.each { |binding| binding.validate_app_and_service_instance(self, binding.service_instance) }
     end
 
     def validate_route(route)
-      objection = Errors::InvalidRouteRelation.new(route.guid)
-      route_service_objection = Errors::InvalidRouteRelation.new("#{route.guid} - Route services are only supported for apps on Diego")
+      objection = CloudController::Errors::InvalidRouteRelation.new(route.guid)
+      route_service_objection = CloudController::Errors::InvalidRouteRelation.new("#{route.guid} - Route services are only supported for apps on Diego")
 
       raise objection if route.nil?
       raise objection if space.nil?
@@ -436,8 +489,8 @@ module VCAP::CloudController
     end
 
     def active?
-      if diego? && docker_image.present?
-        return false unless FeatureFlag.enabled?('diego_docker')
+      if diego? && docker?
+        return false unless FeatureFlag.enabled?(:diego_docker)
       end
       true
     end
@@ -448,32 +501,6 @@ module VCAP::CloudController
 
     def uris
       routes.map(&:uri)
-    end
-
-    def routing_info
-      route_app_port_map = route_id_app_ports_map
-
-      http_info = []
-      tcp_info = []
-      routes.each do |r|
-        route_app_port_map[r.id].each do |app_port|
-          if r.domain.router_group_guid.nil?
-            info = { 'hostname' => r.uri }
-            info['route_service_url'] = r.route_binding.route_service_url if r.route_binding && r.route_binding.route_service_url
-            info['port'] = app_port
-            http_info.push(info)
-          elsif !route_app_port_map[r.id].blank?
-            info = { 'router_group_guid' => r.domain.router_group_guid }
-            info['external_port'] = r.port
-            info['container_port'] = app_port
-            tcp_info.push(info)
-          end
-        end
-      end
-      route_info = {}
-      route_info['http_routes'] = http_info unless http_info.blank?
-      route_info['tcp_routes'] = tcp_info unless tcp_info.blank?
-      route_info
     end
 
     def mark_as_staged
@@ -489,7 +516,7 @@ module VCAP::CloudController
 
       self.package_state = 'FAILED'
       self.staging_failed_reason = reason
-      self.staging_failed_description = VCAP::Errors::ApiError.new_from_details(reason, 'staging failed').message
+      self.staging_failed_description = CloudController::Errors::ApiError.new_from_details(reason, 'staging failed').message
       self.package_pending_since = nil
       self.state = 'STOPPED' if diego?
       save
@@ -502,28 +529,6 @@ module VCAP::CloudController
       self.package_pending_since = Sequel::CURRENT_TIMESTAMP
     end
 
-    def buildpack
-      if admin_buildpack
-        return admin_buildpack
-      elsif super
-        return CustomBuildpack.new(super)
-      end
-
-      AutoDetectionBuildpack.new
-    end
-
-    def buildpack=(buildpack_name)
-      self.admin_buildpack = nil
-      super(nil)
-      admin_buildpack = Buildpack.find(name: buildpack_name.to_s)
-
-      if admin_buildpack
-        self.admin_buildpack = admin_buildpack
-      elsif buildpack_name != '' # git url case
-        super(buildpack_name)
-      end
-    end
-
     def buildpack_specified?
       !buildpack.is_a?(AutoDetectionBuildpack)
     end
@@ -533,11 +538,11 @@ module VCAP::CloudController
     end
 
     def buildpack_cache_key
-      CacheKeyPresenter.cache_key(guid: guid, stack_name: stack.name)
+      Presenters::V3::CacheKeyPresenter.cache_key(guid: guid, stack_name: stack.name)
     end
 
     def docker_image=(value)
-      value = fill_docker_string(value)
+      value = docker_image_with_tag_name(value)
       super
       self.package_hash = value
     end
@@ -596,14 +601,15 @@ module VCAP::CloudController
 
       begin
         AppObserver.updated(self)
-      rescue Errors::ApiError => e
+      rescue CloudController::Errors::ApiError => e
         UndoAppChanges.new(self).undo(previous_changes) unless diego?
         raise e
       end
     end
 
     def to_hash(opts={})
-      opts[:redact] = if VCAP::CloudController::SecurityContext.admin? || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
+      admin_override = VCAP::CloudController::SecurityContext.admin? || VCAP::CloudController::SecurityContext.admin_read_only?
+      opts[:redact] = if admin_override || space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
                         %w(docker_credentials_json)
                       else
                         %w(environment_json system_env_json docker_credentials_json)
@@ -622,7 +628,7 @@ module VCAP::CloudController
     def handle_add_route(route)
       mark_routes_changed
       if is_v2?
-        Repositories::Runtime::AppEventRepository.new.record_map_route(self, route, SecurityContext.current_user.try(:guid), SecurityContext.current_user_email)
+        Repositories::AppEventRepository.new.record_map_route(self, route, SecurityContext.current_user.try(:guid), SecurityContext.current_user_email)
       end
     end
 
@@ -635,7 +641,7 @@ module VCAP::CloudController
     def handle_remove_route(route)
       mark_routes_changed
       if is_v2?
-        Repositories::Runtime::AppEventRepository.new.record_unmap_route(self, route, SecurityContext.current_user.try(:guid), SecurityContext.current_user_email)
+        Repositories::AppEventRepository.new.record_unmap_route(self, route, SecurityContext.current_user.try(:guid), SecurityContext.current_user_email)
       end
     end
 
@@ -643,65 +649,14 @@ module VCAP::CloudController
       mark_routes_changed
     end
 
-    # user_provided_ports method should be called to
-    # get the value of ports stored in the database
-    alias_method(:user_provided_ports, :ports)
-    def ports
-      ports = super
-      return ports unless ports.nil?
-
-      if diego?
-        ports = docker_ports if self.docker_image.present?
-        ports = DEFAULT_PORTS if ports.blank?
-      end
-
-      ports
-    end
-
     def all_service_bindings
       service_bindings + (app ? app.service_bindings : [])
     end
 
-    private
-
-    def route_id_app_ports_map
-      route_app_port_map = {}
-      self.route_mappings(true).each do |route_map|
-        route_app_port_map[route_map.route_id] = [] if route_app_port_map[route_map.route_id].nil?
-        unless route_map.app_port.nil?
-          route_app_port_map[route_map.route_id].push(route_map.app_port)
-        end
-      end
-
-      route_app_port_map
-    end
-
-    def changed_from_diego_to_dea
-      column_changed?(:diego) && initial_value(:diego).present? && !diego
-    end
-
-    def changed_from_dea_to_diego
-      column_changed?(:diego) && (initial_value(:diego) == false) && diego
-    end
-
-    def changed_from_default_ports
-      @ports_changed_by_user && initial_value(:ports) == [DEFAULT_HTTP_PORT]
-    end
-
-    # HACK: We manually call the Serializer here because the plugin uses the
-    # _before_validation method to serialize ports. This is called before
-    # validations and we want to set the default ports after validations.
-    #
-    # See:
-    # https://github.com/jeremyevans/sequel/blob/7d6753da53196884e218a59a7dcd9a7803881b68/lib/sequel/model/base.rb#L1772-L1779
-    def update_ports(new_ports)
-      self.ports = new_ports
-      self[:ports] = IntegerArraySerializer.serializer.call(self.ports)
-    end
-
     def docker_ports
       exposed_ports = []
-      if !self.needs_staging? && !self.current_saved_droplet.nil? && self.execution_metadata.present?
+      droplet = is_v3? ? app.droplet : current_saved_droplet
+      if !self.needs_staging? && !droplet.nil? && self.execution_metadata.present?
         begin
           metadata = JSON.parse(self.execution_metadata)
           unless metadata['ports'].nil?
@@ -717,13 +672,44 @@ module VCAP::CloudController
       exposed_ports
     end
 
+    private
+
+    def non_unique_process_types
+      @non_unique_process_types ||= app.processes_dataset.select_map(:type).select do |process_type|
+        process_type.downcase == type.downcase
+      end
+    end
+
+    def changed_from_diego_to_dea?
+      column_changed?(:diego) && initial_value(:diego).present? && !diego
+    end
+
+    def changed_from_dea_to_diego?
+      column_changed?(:diego) && (initial_value(:diego) == false) && diego
+    end
+
+    def changed_from_default_ports?
+      @ports_changed_by_user && (initial_value(:ports).nil? || initial_value(:ports) == [DEFAULT_HTTP_PORT])
+    end
+
+    # HACK: We manually call the Serializer here because the plugin uses the
+    # _before_validation method to serialize ports. This is called before
+    # validations and we want to set the default ports after validations.
+    #
+    # See:
+    # https://github.com/jeremyevans/sequel/blob/7d6753da53196884e218a59a7dcd9a7803881b68/lib/sequel/model/base.rb#L1772-L1779
+    def update_ports(new_ports)
+      self.ports = new_ports
+      self[:ports] = IntegerArraySerializer.serializer.call(self.ports)
+    end
+
     def update_route_mappings_ports
-      if changed_from_diego_to_dea
+      if changed_from_diego_to_dea?
         self.route_mappings_dataset.update(app_port: nil) unless self.route_mappings.nil?
-      elsif changed_from_dea_to_diego
+      elsif changed_from_dea_to_diego?
         port = self.user_provided_ports.first if self.user_provided_ports.present?
         self.route_mappings_dataset.update(app_port: port) if port.present?
-      elsif changed_from_default_ports && self.route_mappings.present? && self.docker_image.blank?
+      elsif changed_from_default_ports? && self.route_mappings.present? && self.docker_image.blank?
         self.route_mappings_dataset.update(app_port: DEFAULT_HTTP_PORT)
       end
     end
@@ -751,8 +737,9 @@ module VCAP::CloudController
     # repo/image reference online at the moment, so make a best effort to turn
     # the passed value into a complete, plausible docker image reference:
     # registry-name:registry-port/[scope-name/]repo-name:tag-name
-    def fill_docker_string(value)
-      segs = value.split('/')
+    def docker_image_with_tag_name(docker_image_name)
+      return unless docker_image_name
+      segs = docker_image_name.split('/')
       segs[-1] = segs.last + ':latest' unless segs.last.include?(':')
       segs.join('/')
     end
@@ -762,7 +749,7 @@ module VCAP::CloudController
     end
 
     def app_usage_event_repository
-      @repository ||= Repositories::Runtime::AppUsageEventRepository.new
+      @repository ||= Repositories::AppUsageEventRepository.new
     end
 
     def create_app_usage_buildpack_event

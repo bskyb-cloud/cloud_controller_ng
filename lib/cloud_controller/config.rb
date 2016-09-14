@@ -5,7 +5,7 @@ require 'cloud_controller/backends/stagers'
 require 'cloud_controller/backends/runners'
 require 'cloud_controller/index_stopper'
 require 'cloud_controller/backends/instances_reporters'
-require 'repositories/services/event_repository'
+require 'repositories/service_event_repository'
 
 # Config template for cloud controller
 module VCAP::CloudController
@@ -28,7 +28,7 @@ module VCAP::CloudController
 
         :system_domain => String,
         :system_domain_organization => enum(String, NilClass),
-        :app_domains => [String],
+        :app_domains => Array,
         :app_events => {
           cutoff_age_in_days: Fixnum
         },
@@ -52,14 +52,23 @@ module VCAP::CloudController
 
         optional(:instance_file_descriptor_limit) => Fixnum,
 
-        optional(:allow_debug) => bool,
+        optional(:bits_service) => {
+          enabled: bool,
+        },
 
         optional(:login) => {
           url: String
         },
 
         :hm9000 => {
-          url: String
+          url: String,
+          internal_url: String
+        },
+
+        optional(:dea_client) => {
+          ca_file: String,
+          cert_file: String,
+          key_file: String,
         },
 
         :uaa => {
@@ -164,20 +173,28 @@ module VCAP::CloudController
           optional(:maximum_size) => Integer,
           optional(:minimum_size) => Integer,
           :resource_directory_key => String,
-          :fog_connection => Hash
+          :fog_connection => Hash,
+          optional(:fog_aws_storage_options) => Hash
+        },
+
+        :buildpacks => {
+          :fog_connection => Hash,
+          optional(:fog_aws_storage_options) => Hash
         },
 
         :packages => {
           optional(:max_package_size) => Integer,
           optional(:max_valid_packages_stored) => Integer,
           :app_package_directory_key => String,
-          :fog_connection => Hash
+          :fog_connection => Hash,
+          optional(:fog_aws_storage_options) => Hash
         },
 
         :droplets => {
           droplet_directory_key: String,
           optional(:max_staged_droplets_stored) => Integer,
-          fog_connection: Hash
+          :fog_connection => Hash,
+          optional(:fog_aws_storage_options) => Hash
         },
 
         :db_encryption_key => String,
@@ -232,6 +249,7 @@ module VCAP::CloudController
 
         optional(:dea_advertisement_timeout_in_seconds) => Integer,
         optional(:placement_top_stager_percentage) => Integer,
+        optional(:minimum_candidate_stagers) => Integer,
 
         optional(:diego_stager_url) => String,
         optional(:diego_tps_url) => String,
@@ -244,8 +262,19 @@ module VCAP::CloudController
         },
 
         optional(:route_services_enabled) => bool,
+        optional(:volume_services_enabled) => bool,
 
         optional(:reserved_private_domains) => String,
+
+        optional(:security_event_logging) => {
+          enabled: bool
+        },
+
+        optional(:bits_service) => {
+          enabled: bool,
+          optional(:public_endpoint) => String,
+          optional(:private_endpoint) => String
+        }
       }
     end
 
@@ -288,15 +317,17 @@ module VCAP::CloudController
         tps_client = Diego::TPSClient.new(@config)
         dependency_locator.register(:tps_client, tps_client)
         dependency_locator.register(:upload_handler, UploadHandler.new(config))
-        dependency_locator.register(:app_event_repository, Repositories::Runtime::AppEventRepository.new)
+        dependency_locator.register(:app_event_repository, Repositories::AppEventRepository.new)
 
         blobstore_url_generator = dependency_locator.blobstore_url_generator
         dea_pool = Dea::Pool.new(@config, message_bus)
-        runners = Runners.new(@config, message_bus, dea_pool)
-        stagers = Stagers.new(@config, message_bus, dea_pool, runners)
 
-        dependency_locator.register(:stagers, stagers)
+        runners = Runners.new(@config, message_bus, dea_pool)
         dependency_locator.register(:runners, runners)
+
+        stagers = Stagers.new(@config, message_bus, dea_pool)
+        dependency_locator.register(:stagers, stagers)
+
         dependency_locator.register(:instances_reporters, InstancesReporters.new(tps_client, hm_client))
         dependency_locator.register(:index_stopper, IndexStopper.new(runners))
 
@@ -364,6 +395,8 @@ module VCAP::CloudController
         config[:broker_client_default_async_poll_interval_seconds] ||= 60
         config[:packages][:max_valid_packages_stored] ||= 5
         config[:droplets][:max_staged_droplets_stored] ||= 5
+        config[:minimum_candidate_stagers] = (config[:minimum_candidate_stagers] && config[:minimum_candidate_stagers] > 0) ? config[:minimum_candidate_stagers] : 5
+        config[:bits_service] ||= { enabled: false }
 
         unless config.key?(:users_can_select_backend)
           config[:users_can_select_backend] = true

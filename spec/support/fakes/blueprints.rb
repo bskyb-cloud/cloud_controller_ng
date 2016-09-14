@@ -16,7 +16,6 @@ Sham.define do
   long_description    { |index| "long description-#{index} over 255 characters #{'-' * 255}" }
   version             { |index| "version-#{index}" }
   service_credentials { |index| { "creds-key-#{index}" => "creds-val-#{index}" } }
-  binding_options     { |index| { "binding-options-#{index}" => "value-#{index}" } }
   uaa_id              { |index| "uaa-id-#{index}" }
   domain              { |index| "domain-#{index}.example.com" }
   host                { |index| "host-#{index}" }
@@ -64,22 +63,16 @@ module VCAP::CloudController
     guid     { Sham.guid }
     state    { VCAP::CloudController::DropletModel::STAGING_STATE }
     app { AppModel.make }
-    memory_limit { 123 }
+    staging_memory_in_mb { 123 }
+    buildpack_lifecycle_data { BuildpackLifecycleDataModel.make(droplet: object.save) }
   end
 
   DropletModel.blueprint(:docker) do
     guid     { Sham.guid }
     state    { VCAP::CloudController::DropletModel::STAGING_STATE }
-    app { AppModel.make }
-    memory_limit { 123 }
-  end
-
-  DropletModel.blueprint(:buildpack) do
-    guid     { Sham.guid }
-    state    { VCAP::CloudController::DropletModel::STAGING_STATE }
-    app { AppModel.make }
-    memory_limit { 123 }
-    buildpack_lifecycle_data { BuildpackLifecycleDataModel.make(droplet: object.save) }
+    app { AppModel.make(droplet_guid: guid) }
+    staging_memory_in_mb { 123 }
+    buildpack_lifecycle_data { nil.tap { |_| object.save } }
   end
 
   TaskModel.blueprint do
@@ -150,6 +143,10 @@ module VCAP::CloudController
     requires { ['route_forwarding'] }
   end
 
+  Service.blueprint(:volume_mount) do
+    requires { ['volume_mount'] }
+  end
+
   ServiceInstance.blueprint do
     name              { Sham.name }
     credentials       { Sham.service_credentials }
@@ -167,6 +164,10 @@ module VCAP::CloudController
 
   ManagedServiceInstance.blueprint(:routing) do
     service_plan { ServicePlan.make(:routing) }
+  end
+
+  ManagedServiceInstance.blueprint(:volume_mount) do
+    service_plan { ServicePlan.make(:volume_mount) }
   end
 
   UserProvidedServiceInstance.blueprint do
@@ -205,7 +206,18 @@ module VCAP::CloudController
     space             { Space.make }
     stack             { Stack.make }
     instances         { 1 }
-    type              { 'web' }
+    type              { Sham.name }
+  end
+
+  App.blueprint(:process) do
+    app { AppModel.make }
+    diego { true }
+    name { Sham.name }
+    space { app.space }
+    stack { Stack.make }
+    instances { 1 }
+    type { Sham.name }
+    metadata { {} }
   end
 
   RouteBinding.blueprint do
@@ -264,6 +276,10 @@ module VCAP::CloudController
     service { Service.make(:routing) }
   end
 
+  ServicePlan.blueprint(:volume_mount) do
+    service { Service.make(:volume_mount) }
+  end
+
   ServicePlanVisibility.blueprint do
     service_plan { ServicePlan.make }
     organization { Organization.make }
@@ -293,6 +309,7 @@ module VCAP::CloudController
   QuotaDefinition.blueprint do
     name { Sham.name }
     non_basic_services_allowed { true }
+    total_reserved_route_ports { 5 }
     total_services { 60 }
     total_routes { 1_000 }
     memory_limit { 20_480 } # 20 GB

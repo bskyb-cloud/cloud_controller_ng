@@ -1,20 +1,14 @@
 require 'rails_helper'
 
-describe ProcessesController, type: :controller do
+RSpec.describe ProcessesController, type: :controller do
   let(:space) { VCAP::CloudController::Space.make }
-  let(:membership) { instance_double(VCAP::CloudController::Membership) }
 
   describe '#index' do
-    before do
-      @request.env.merge!(headers_for(VCAP::CloudController::User.make))
-      allow(VCAP::CloudController::Membership).to receive(:new).and_return(membership)
+    let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
-      allow(membership).to receive(:space_guids_for_roles).with(
-        [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-         VCAP::CloudController::Membership::SPACE_MANAGER,
-         VCAP::CloudController::Membership::SPACE_AUDITOR,
-         VCAP::CloudController::Membership::ORG_MANAGER]
-      ).and_return([space.guid])
+    before do
+      stub_readable_space_guids_for(user, space)
+      allow_user_read_access(user, space: space)
     end
 
     it 'returns 200 and lists the processes' do
@@ -29,32 +23,8 @@ describe ProcessesController, type: :controller do
       expect(response_guids).to match_array([process1.guid, process2.guid])
     end
 
-    context 'admin' do
-      before do
-        @request.env.merge!(json_headers(admin_headers))
-        allow(membership).to receive(:has_any_roles?).and_return(false)
-      end
-
-      it 'returns 200 and lists the apps' do
-        process1 = VCAP::CloudController::ProcessModel.make(space: space)
-        process2 = VCAP::CloudController::ProcessModel.make(space: space)
-        process3 = VCAP::CloudController::ProcessModel.make
-
-        get :index
-
-        response_guids = parsed_body['resources'].map { |r| r['guid'] }
-        expect(response.status).to eq(200)
-        expect(response_guids).to match_array([process1.guid, process2.guid, process3.guid])
-      end
-    end
-
     context 'when accessed as an app subresource' do
-      let(:app) { VCAP::CloudController::AppModel.make }
-
-      before do
-        allow(membership).to receive(:has_any_roles?).with(
-          AppSubresource::ROLES_FOR_READING, app.space.guid, app.organization.guid).and_return(true)
-      end
+      let(:app) { VCAP::CloudController::AppModel.make(space: space) }
 
       it 'uses the app as a filter' do
         process1 = VCAP::CloudController::ProcessModel.make(app_guid: app.guid)
@@ -73,6 +43,24 @@ describe ProcessesController, type: :controller do
         expect(parsed_body['pagination']['first']['href']).to include("/v3/apps/#{app.guid}/processes")
       end
 
+      context 'when pagination options are specified' do
+        let(:page) { 1 }
+        let(:per_page) { 1 }
+        let(:params) { { 'page' => page, 'per_page' => per_page, app_guid: app.guid } }
+
+        it 'paginates the response' do
+          VCAP::CloudController::ProcessModel.make(app_guid: app.guid)
+          VCAP::CloudController::ProcessModel.make(app_guid: app.guid)
+
+          get :index, params
+
+          parsed_response = parsed_body
+          response_guids = parsed_response['resources'].map { |r| r['guid'] }
+          expect(parsed_response['pagination']['total_results']).to eq(2)
+          expect(response_guids.length).to eq(per_page)
+        end
+      end
+
       context 'the app does not exist' do
         it 'returns a 404 Resource Not Found' do
           get :index, app_guid: 'hello-i-do-not-exist'
@@ -84,8 +72,7 @@ describe ProcessesController, type: :controller do
 
       context 'when the user does not have permissions to read the app' do
         before do
-          allow(membership).to receive(:has_any_roles?).with(
-            AppSubresource::ROLES_FOR_READING, app.space.guid, app.organization.guid).and_return(false)
+          disallow_user_read_access(user, space: space)
         end
 
         it 'returns a 404 Resource Not Found error' do
@@ -97,14 +84,48 @@ describe ProcessesController, type: :controller do
       end
     end
 
-    it 'fails without read permissions scope on the auth token' do
-      @request.env.merge!(headers_for(VCAP::CloudController::User.make, scopes: ['cloud_controller.write']))
-      get :index
+    context 'when the user does not have read scope' do
+      before do
+        set_current_user(VCAP::CloudController::User.make, scopes: ['cloud_controller.write'])
+      end
 
-      expect(response.status).to eq(403)
-      expect(response.body).to include('NotAuthorized')
+      it 'returns 403 NotAuthorized' do
+        get :index
+
+        expect(response.status).to eq(403)
+        expect(response.body).to include('NotAuthorized')
+      end
     end
 
+    context 'admin types' do
+      let!(:process1) { VCAP::CloudController::ProcessModel.make(space: space) }
+      let!(:process2) { VCAP::CloudController::ProcessModel.make(space: space) }
+      let!(:process3) { VCAP::CloudController::ProcessModel.make }
+
+      context 'admin' do
+        before { set_current_user_as_admin }
+
+        it 'returns 200 and lists all processes' do
+          get :index
+
+          response_guids = parsed_body['resources'].map { |r| r['guid'] }
+          expect(response.status).to eq(200)
+          expect(response_guids).to match_array([process1.guid, process2.guid, process3.guid])
+        end
+      end
+
+      context 'read only admin' do
+        before { set_current_user_as_admin_read_only }
+
+        it 'returns 200 and lists all processes' do
+          get :index
+
+          response_guids = parsed_body['resources'].map { |r| r['guid'] }
+          expect(response.status).to eq(200)
+          expect(response_guids).to match_array([process1.guid, process2.guid, process3.guid])
+        end
+      end
+    end
     context 'when the request parameters are invalid' do
       context 'because there are unknown parameters' do
         let(:params) { { 'invalid' => 'thing', 'bad' => 'stuff' } }
@@ -115,6 +136,16 @@ describe ProcessesController, type: :controller do
           expect(response.status).to eq(400)
           expect(response.body).to include('BadQueryParameter')
           expect(response.body).to include("Unknown query parameter(s): 'invalid', 'bad'")
+        end
+      end
+
+      context 'because of order_by' do
+        it 'returns 400' do
+          get :index, order_by: '^=%'
+
+          expect(response.status).to eq 400
+          expect(response.body).to include 'BadQueryParameter'
+          expect(response.body).to include("Order by can only be 'created_at' or 'updated_at'")
         end
       end
 
@@ -133,12 +164,12 @@ describe ProcessesController, type: :controller do
   end
 
   describe '#show' do
-    let(:process_type) { VCAP::CloudController::App.make }
+    let(:process_type) { VCAP::CloudController::App.make(space: space) }
+    let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      @request.env.merge!(headers_for(VCAP::CloudController::User.make))
-      allow(VCAP::CloudController::Membership).to receive(:new).and_return(membership)
-      allow(membership).to receive(:has_any_roles?).and_return(true)
+      allow_user_read_access(user, space: space)
+      allow_user_secret_access(user, space: space)
     end
 
     it 'returns 200 OK with process' do
@@ -148,22 +179,8 @@ describe ProcessesController, type: :controller do
       expect(parsed_body['guid']).to eq(process_type.guid)
     end
 
-    context 'admin' do
-      before do
-        @request.env.merge!(json_headers(admin_headers))
-        allow(membership).to receive(:has_any_roles?).and_return(false)
-      end
-
-      it 'returns 200 OK with process' do
-        get :show, { process_guid: process_type.guid }
-
-        expect(response.status).to eq(200)
-        expect(parsed_body['guid']).to eq(process_type.guid)
-      end
-    end
-
     context 'accessed as an app sub resource' do
-      let(:app) { VCAP::CloudController::AppModel.make }
+      let(:app) { VCAP::CloudController::AppModel.make(space: space) }
       let(:process_type) { VCAP::CloudController::App.make(app_guid: app.guid, type: 'web') }
       let!(:process_type2) { VCAP::CloudController::App.make(app_guid: app.guid, type: 'worker') }
 
@@ -199,7 +216,7 @@ describe ProcessesController, type: :controller do
 
       context 'when the user cannot read the app due to membership' do
         before do
-          allow(membership).to receive(:has_any_roles?).and_return(false)
+          disallow_user_read_access(user, space: space)
         end
 
         it 'returns a 404' do
@@ -209,17 +226,6 @@ describe ProcessesController, type: :controller do
           expect(response.body).to include 'ResourceNotFound'
           expect(response.body).to include 'App not found'
         end
-      end
-    end
-
-    context 'when the user does not have read permissions' do
-      before { @request.env.merge!(headers_for(VCAP::CloudController::User.make, scopes: ['cloud_controller.write'])) }
-
-      it 'raises an ApiError with a 403 code' do
-        get :show, { process_guid: process_type.guid }
-
-        expect(response.status).to eq(403)
-        expect(response.body).to include('NotAuthorized')
       end
     end
 
@@ -233,85 +239,74 @@ describe ProcessesController, type: :controller do
       end
     end
 
-    context 'when the user cannot read the process due to roles' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(false)
+    context 'permissions' do
+      context 'when the user does not have read scope' do
+        before { set_current_user(user, scopes: []) }
+
+        it 'raises an ApiError with a 403 code' do
+          get :show, { process_guid: process_type.guid }
+
+          expect(response.status).to eq(403)
+          expect(response.body).to include('NotAuthorized')
+        end
       end
 
-      it 'raises 404' do
-        get :show, { process_guid: process_type.guid }
+      context 'when the user cannot read the process' do
+        before do
+          disallow_user_read_access(user, space: space)
+        end
 
-        expect(response.status).to eq(404)
-        expect(response.body).to include('ResourceNotFound')
-        expect(response.body).to include('Process not found')
+        it 'raises 404' do
+          get :show, { process_guid: process_type.guid }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-           VCAP::CloudController::Membership::SPACE_MANAGER,
-           VCAP::CloudController::Membership::SPACE_AUDITOR,
-           VCAP::CloudController::Membership::ORG_MANAGER], process_type.space.guid, process_type.space.organization.guid)
+          expect(response.status).to eq(404)
+          expect(response.body).to include('ResourceNotFound')
+          expect(response.body).to include('Process not found')
+        end
       end
     end
   end
 
   describe '#update' do
-    let(:process_type) { VCAP::CloudController::App.make }
+    let(:process_type) { VCAP::CloudController::App.make(:process, space: space) }
     let(:req_body) do
       {
           'command' => 'new command',
       }
     end
+    let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make)))
-      allow(VCAP::CloudController::Membership).to receive(:new).and_return(membership)
-      allow(membership).to receive(:has_any_roles?).and_return(true)
+      allow_user_read_access(user, space: space)
+      allow_user_write_access(user, space: space)
     end
 
     it 'updates the process and returns the correct things' do
       expect(process_type.command).not_to eq('new command')
 
-      patch :update, { process_guid: process_type.guid, body: req_body }
+      patch :update, req_body.to_json, { process_guid: process_type.guid }
 
       expect(process_type.reload.command).to eq('new command')
       expect(response.status).to eq(200)
       expect(parsed_body['guid']).to eq(process_type.guid)
     end
 
-    context 'admin' do
-      before do
-        @request.env.merge!(json_headers(admin_headers))
-        allow(membership).to receive(:has_any_roles?).and_return(false)
-      end
+    context 'when the provided request to update the port is an empty array' do
+      it 'update the model successfully' do
+        patch :update, { ports: [], health_check: { type: 'process' } }.to_json, { process_guid: process_type.guid, type: :json }
 
-      it 'updates the process and returns the correct things' do
-        expect(process_type.command).not_to eq('new command')
-
-        patch :update, { process_guid: process_type.guid, body: req_body }
-
-        expect(process_type.reload.command).to eq('new command')
+        expect(parsed_body['ports']).to eq([])
+        expect(process_type.reload.ports).to eq([])
         expect(response.status).to eq(200)
-        expect(parsed_body['guid']).to eq(process_type.guid)
       end
     end
 
     context 'when the process does not exist' do
       it 'raises an ApiError with a 404 code' do
-        patch :update, { process_guid: 'made-up-guid', body: req_body }
+        patch :update, req_body.to_json, { process_guid: 'made-up-guid' }
 
         expect(response.status).to eq(404)
         expect(response.body).to include('ResourceNotFound')
-      end
-    end
-
-    context 'when the user does not have write permissions' do
-      before { @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make, scopes: ['cloud_controller.read']))) }
-
-      it 'raises an ApiError with a 403 code' do
-        patch :update, { process_guid: process_type.guid, body: req_body }
-
-        expect(response.body).to include('NotAuthorized')
-        expect(response.status).to eq(403)
       end
     end
 
@@ -321,7 +316,7 @@ describe ProcessesController, type: :controller do
       end
 
       it 'returns 422' do
-        patch :update, { process_guid: process_type.guid, body: req_body }
+        patch :update, req_body.to_json, { process_guid: process_type.guid }
 
         expect(response.status).to eq(422)
         expect(response.body).to include('UnprocessableEntity')
@@ -333,7 +328,7 @@ describe ProcessesController, type: :controller do
       let(:req_body) { { command: false } }
 
       it 'returns 422' do
-        patch :update, { process_guid: process_type.guid, body: req_body }
+        patch :update, req_body.to_json, { process_guid: process_type.guid }
 
         expect(response.status).to eq(422)
         expect(response.body).to include('UnprocessableEntity')
@@ -341,52 +336,58 @@ describe ProcessesController, type: :controller do
       end
     end
 
-    context 'when the user cannot read the process' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(false)
+    context 'permissions' do
+      context 'when the user cannot read the process' do
+        before do
+          disallow_user_read_access(user, space: space)
+        end
+
+        it 'raises 404' do
+          patch :update, req_body.to_json, { process_guid: process_type.guid }
+
+          expect(response.status).to eq(404)
+          expect(response.body).to include('ResourceNotFound')
+        end
       end
 
-      it 'raises 404' do
-        patch :update, { process_guid: process_type.guid, body: req_body }
+      context 'when the user can read but not write to the process due to membership' do
+        before do
+          allow_user_read_access(user, space: space)
+          disallow_user_write_access(user, space: space)
+        end
 
-        expect(response.status).to eq(404)
-        expect(response.body).to include('ResourceNotFound')
+        it 'raises an ApiError with a 403 code' do
+          patch :update, req_body.to_json, { process_guid: process_type.guid }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-           VCAP::CloudController::Membership::SPACE_MANAGER,
-           VCAP::CloudController::Membership::SPACE_AUDITOR,
-           VCAP::CloudController::Membership::ORG_MANAGER], process_type.space.guid, process_type.space.organization.guid)
-      end
-    end
-
-    context 'when the user cannot update the process due to membership' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(true, false)
+          expect(response.status).to eq 403
+          expect(response.body).to include('NotAuthorized')
+        end
       end
 
-      it 'raises an ApiError with a 403 code' do
-        patch :update, { process_guid: process_type.guid, body: req_body }
+      context 'when the user does not have write permissions' do
+        before { set_current_user(VCAP::CloudController::User.make, scopes: ['cloud_controller.read']) }
 
-        expect(response.status).to eq 403
-        expect(response.body).to include('NotAuthorized')
+        it 'raises an ApiError with a 403 code' do
+          patch :update, req_body.to_json, { process_guid: process_type.guid }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER], process_type.space.guid)
+          expect(response.body).to include('NotAuthorized')
+          expect(response.status).to eq(403)
+        end
       end
     end
   end
 
   describe '#terminate' do
-    let(:process_type) { VCAP::CloudController::AppFactory.make }
+    let(:app) { VCAP::CloudController::AppModel.make(space: space) }
+    let(:process_type) { VCAP::CloudController::AppFactory.make(app: app, space: space) }
     let(:index_stopper) { instance_double(VCAP::CloudController::IndexStopper) }
+    let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make)))
       allow(index_stopper).to receive(:stop_index)
-      allow_any_instance_of(ProcessesController).to receive(:index_stopper).and_return(index_stopper)
-      allow(VCAP::CloudController::Membership).to receive(:new).and_return(membership)
-      allow(membership).to receive(:has_any_roles?).and_return(true)
+      allow(CloudController::DependencyLocator.instance).to receive(:index_stopper).and_return(index_stopper)
+      allow_user_read_access(user, space: space)
+      allow_user_write_access(user, space: space)
     end
 
     it 'terminates the process instance' do
@@ -399,27 +400,7 @@ describe ProcessesController, type: :controller do
       expect(index_stopper).to have_received(:stop_index).with(process_type, 0)
     end
 
-    context 'admin' do
-      before do
-        @request.env.merge!(json_headers(admin_headers))
-        allow(membership).to receive(:has_any_roles?).and_return(false)
-      end
-
-      it 'terminates the lone process' do
-        expect(process_type.instances).to eq(1)
-
-        delete :terminate, { process_guid: process_type.guid, index: 0 }
-        expect(response.status).to eq(204)
-
-        process_type.reload
-        expect(index_stopper).to have_received(:stop_index).with(process_type, 0)
-      end
-    end
-
     context 'accessed as an app subresource' do
-      let(:app) { VCAP::CloudController::AppModel.make }
-      let(:process_type) { VCAP::CloudController::App.make(app_guid: app.guid) }
-
       it 'terminates the process instance' do
         expect(process_type.instances).to eq(1)
 
@@ -447,11 +428,7 @@ describe ProcessesController, type: :controller do
 
       context 'when the user cannot read the app' do
         before do
-          allow(membership).to receive(:has_any_roles?).with(
-            [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-             VCAP::CloudController::Membership::SPACE_MANAGER,
-             VCAP::CloudController::Membership::SPACE_AUDITOR,
-             VCAP::CloudController::Membership::ORG_MANAGER], app.space.guid, app.organization.guid).and_return(false)
+          disallow_user_read_access(user, space: space)
         end
 
         it 'raises 404' do
@@ -480,61 +457,56 @@ describe ProcessesController, type: :controller do
       expect(response.body).to include('Instance not found')
     end
 
-    context 'when the user does not have write permissions' do
-      before { @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make, scopes: ['cloud_controller.read']))) }
+    context 'permissions' do
+      context 'when the user does not have write permissions' do
+        before { set_current_user(user, scopes: ['cloud_controller.read']) }
 
-      it 'raises an ApiError with a 403 code' do
-        delete :terminate, { process_guid: process_type.guid, index: 0 }
+        it 'raises an ApiError with a 403 code' do
+          delete :terminate, { process_guid: process_type.guid, index: 0 }
 
-        expect(response.status).to eq(403)
-        expect(response.body).to include('NotAuthorized')
-      end
-    end
-
-    context 'when the user cannot read the process' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(false)
+          expect(response.status).to eq(403)
+          expect(response.body).to include('NotAuthorized')
+        end
       end
 
-      it 'raises 404' do
-        delete :terminate, { process_guid: process_type.guid, index: 0 }
+      context 'when the user cannot read the process' do
+        before do
+          disallow_user_read_access(user, space: space)
+        end
 
-        expect(response.status).to eq(404)
-        expect(response.body).to include('ResourceNotFound')
+        it 'raises 404' do
+          delete :terminate, { process_guid: process_type.guid, index: 0 }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-           VCAP::CloudController::Membership::SPACE_MANAGER,
-           VCAP::CloudController::Membership::SPACE_AUDITOR,
-           VCAP::CloudController::Membership::ORG_MANAGER], process_type.space.guid, process_type.space.organization.guid)
-      end
-    end
-
-    context 'when the user cannot update the process due to membership' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(true, false)
+          expect(response.status).to eq(404)
+          expect(response.body).to include('ResourceNotFound')
+        end
       end
 
-      it 'raises an ApiError with a 403 code' do
-        delete :terminate, { process_guid: process_type.guid, index: 0 }
+      context 'when the user can read but not write to the process due to membership' do
+        before do
+          allow_user_read_access(user, space: space)
+          disallow_user_write_access(user, space: space)
+        end
 
-        expect(response.status).to eq(403)
-        expect(response.body).to include('NotAuthorized')
+        it 'raises an ApiError with a 403 code' do
+          delete :terminate, { process_guid: process_type.guid, index: 0 }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER], process_type.space.guid)
+          expect(response.status).to eq(403)
+          expect(response.body).to include('NotAuthorized')
+        end
       end
     end
   end
 
   describe '#scale' do
     let(:req_body) { { instances: 2, memory_in_mb: 100, disk_in_mb: 200 } }
-    let(:process_type) { VCAP::CloudController::App.make }
+    let(:app) { VCAP::CloudController::AppModel.make(space: space) }
+    let(:process_type) { VCAP::CloudController::App.make(app: app, space: space) }
+    let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      allow(VCAP::CloudController::Membership).to receive(:new).and_return(membership)
-      @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make)))
-      allow(membership).to receive(:has_any_roles?).and_return(true)
+      allow_user_read_access(user, space: space)
+      allow_user_write_access(user, space: space)
     end
 
     it 'scales the process and returns the correct things' do
@@ -552,32 +524,7 @@ describe ProcessesController, type: :controller do
       expect(parsed_body['guid']).to eq(process_type.guid)
     end
 
-    context 'admin' do
-      before do
-        @request.env.merge!(json_headers(admin_headers))
-        allow(membership).to receive(:has_any_roles?).and_return(false)
-      end
-
-      it 'scales the process and returns the correct things' do
-        expect(process_type.instances).not_to eq(2)
-        expect(process_type.memory).not_to eq(100)
-        expect(process_type.disk_quota).not_to eq(200)
-
-        put :scale, { process_guid: process_type.guid, body: req_body }
-
-        process_type.reload
-        expect(process_type.instances).to eq(2)
-        expect(process_type.memory).to eq(100)
-        expect(process_type.disk_quota).to eq(200)
-        expect(response.status).to eq(202)
-        expect(parsed_body['guid']).to eq(process_type.guid)
-      end
-    end
-
     context 'accessed as app subresource' do
-      let(:app) { VCAP::CloudController::AppModel.make }
-      let(:process_type) { VCAP::CloudController::App.make(app_guid: app.guid) }
-
       it 'scales the process and returns the correct things' do
         expect(process_type.instances).not_to eq(2)
         expect(process_type.memory).not_to eq(100)
@@ -616,11 +563,7 @@ describe ProcessesController, type: :controller do
 
       context 'when the user cannot read the app' do
         before do
-          allow(membership).to receive(:has_any_roles?).with(
-            [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-             VCAP::CloudController::Membership::SPACE_MANAGER,
-             VCAP::CloudController::Membership::SPACE_AUDITOR,
-             VCAP::CloudController::Membership::ORG_MANAGER], app.space.guid, app.organization.guid).and_return(false)
+          disallow_user_read_access(user, space: space)
         end
 
         it 'raises 404' do
@@ -632,15 +575,10 @@ describe ProcessesController, type: :controller do
         end
       end
 
-      context 'when the user cannot scale the process due to membership' do
+      context 'when the user can read but not write to the process due to membership' do
         before do
-          allow(membership).to receive(:has_any_roles?).with(
-            [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-             VCAP::CloudController::Membership::SPACE_MANAGER,
-             VCAP::CloudController::Membership::SPACE_AUDITOR,
-             VCAP::CloudController::Membership::ORG_MANAGER], app.space.guid, app.organization.guid).and_return(true)
-          allow(membership).to receive(:has_any_roles?).with(
-            [VCAP::CloudController::Membership::SPACE_DEVELOPER], app.space.guid).and_return(false)
+          allow_user_read_access(user, space: space)
+          disallow_user_write_access(user, space: space)
         end
 
         it 'raises an ApiError with a 403 code' do
@@ -678,29 +616,10 @@ describe ProcessesController, type: :controller do
           expect(response.body).to include('app_scaling')
         end
       end
-
-      context 'admin user' do
-        before { @request.env.merge!(json_headers(admin_headers)) }
-
-        it 'scales the process and returns the correct things' do
-          expect(process_type.instances).not_to eq(2)
-          expect(process_type.memory).not_to eq(100)
-          expect(process_type.disk_quota).not_to eq(200)
-
-          put :scale, { process_guid: process_type.guid, body: req_body }
-
-          process_type.reload
-          expect(process_type.instances).to eq(2)
-          expect(process_type.memory).to eq(100)
-          expect(process_type.disk_quota).to eq(200)
-          expect(response.status).to eq(202)
-          expect(parsed_body['guid']).to eq(process_type.guid)
-        end
-      end
     end
 
     context 'when the user does not have write permissions' do
-      before { @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make, scopes: ['cloud_controller.read']))) }
+      before { set_current_user(user, scopes: ['cloud_controller.read']) }
 
       it 'raises an ApiError with a 403 code' do
         put :scale, { process_guid: process_type.guid, body: req_body }
@@ -731,54 +650,58 @@ describe ProcessesController, type: :controller do
       end
     end
 
-    context 'when the user cannot read the process' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(false)
+    context 'permissions' do
+      context 'when the user cannot read the process' do
+        before do
+          disallow_user_read_access(user, space: space)
+        end
+
+        it 'raises 404' do
+          put :scale, { process_guid: process_type.guid, body: req_body }
+
+          expect(response.status).to eq(404)
+          expect(response.body).to include('ResourceNotFound')
+        end
       end
 
-      it 'raises 404' do
-        put :scale, { process_guid: process_type.guid, body: req_body }
+      context 'when the user can read but cannot write to the process' do
+        before do
+          allow_user_read_access(user, space: space)
+          disallow_user_write_access(user, space: space)
+        end
 
-        expect(response.status).to eq(404)
-        expect(response.body).to include('ResourceNotFound')
+        it 'raises an ApiError with a 403 code' do
+          put :scale, { process_guid: process_type.guid, body: req_body }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-           VCAP::CloudController::Membership::SPACE_MANAGER,
-           VCAP::CloudController::Membership::SPACE_AUDITOR,
-           VCAP::CloudController::Membership::ORG_MANAGER], process_type.space.guid, process_type.space.organization.guid)
-      end
-    end
-
-    context 'when the user cannot scale the process due to membership' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(true, false)
+          expect(response.status).to eq(403)
+          expect(response.body).to include('NotAuthorized')
+        end
       end
 
-      it 'raises an ApiError with a 403 code' do
-        put :scale, { process_guid: process_type.guid, body: req_body }
+      context 'when the user does not have write permissions' do
+        before { set_current_user(user, scopes: ['cloud_controller.read']) }
 
-        expect(response.status).to eq(403)
-        expect(response.body).to include('NotAuthorized')
+        it 'raises an ApiError with a 403 code' do
+          put :scale, { process_guid: process_type.guid, body: req_body }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER], process_type.space.guid)
+          expect(response.status).to eq 403
+          expect(response.body).to include('NotAuthorized')
+        end
       end
     end
   end
 
   describe '#stats' do
-    let(:process_type) { VCAP::CloudController::AppFactory.make(diego: true, type: 'potato') }
-    let(:space) { process_type.space }
-    let(:stats) { { 0 => { 'stats' => { 'usage' => {} } } } }
+    let(:app) { VCAP::CloudController::AppModel.make(space: space) }
+    let(:process_type) { VCAP::CloudController::AppFactory.make(diego: true, type: 'potato', app_guid: app.guid, space: space) }
+    let(:stats) { { 0 => { stats: { usage: {}, net_info: { ports: [] } } } } }
     let(:instances_reporters) { double(:instances_reporters) }
+    let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      allow(VCAP::CloudController::Membership).to receive(:new).and_return(membership)
-      allow(membership).to receive(:has_any_roles?).and_return(true)
+      allow_user_read_access(user, space: space)
       CloudController::DependencyLocator.instance.register(:instances_reporters, instances_reporters)
       allow(instances_reporters).to receive(:stats_for_app).and_return(stats)
-      @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make)))
     end
 
     it 'returns the stats for all instances for the process' do
@@ -788,24 +711,7 @@ describe ProcessesController, type: :controller do
       expect(parsed_body['resources'][0]['type']).to eq('potato')
     end
 
-    context 'admin' do
-      before do
-        @request.env.merge!(json_headers(admin_headers))
-        allow(membership).to receive(:has_any_roles?).and_return(false)
-      end
-
-      it 'returns the stats for all instances for the process' do
-        put :stats, { process_guid: process_type.guid }
-
-        expect(response.status).to eq(200)
-        expect(parsed_body['resources'][0]['type']).to eq('potato')
-      end
-    end
-
     context 'accessed as app subresource' do
-      let(:app) { VCAP::CloudController::AppModel.make }
-      let(:process_type) { VCAP::CloudController::App.make(diego: true, type: 'potato', app_guid: app.guid) }
-
       it 'returns the stats for all instances of specified type for all processes of an app' do
         put :stats, { app_guid: app.guid, type: process_type.type }
 
@@ -813,28 +719,9 @@ describe ProcessesController, type: :controller do
         expect(parsed_body['resources'][0]['type']).to eq('potato')
       end
 
-      it 'provides the correct base url in the pagination links' do
-        put :stats, { app_guid: app.guid, type: process_type.type }
-        expect(parsed_body['pagination']['first']['href']).to include("/v3/apps/#{app.guid}/processes/#{process_type.type}/stats")
-      end
-
-      context 'admin' do
-        before do
-          @request.env.merge!(json_headers(admin_headers))
-          allow(membership).to receive(:has_any_roles?).and_return(false)
-        end
-
-        it 'returns 200 OK with process' do
-          put :stats, { app_guid: app.guid, type: process_type.type }
-
-          expect(response.status).to eq(200)
-          expect(parsed_body['resources'][0]['type']).to eq('potato')
-        end
-      end
-
       context 'when the user cannot read the app' do
         before do
-          allow(membership).to receive(:has_any_roles?).and_return(false)
+          disallow_user_read_access(user, space: space)
         end
 
         it 'raises 404 error' do
@@ -843,13 +730,6 @@ describe ProcessesController, type: :controller do
           expect(response.status).to eq(404)
           expect(response.body).to include('ResourceNotFound')
           expect(response.body).to include('App')
-
-          expect(membership).to have_received(:has_any_roles?).with(
-            [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-             VCAP::CloudController::Membership::SPACE_MANAGER,
-             VCAP::CloudController::Membership::SPACE_AUDITOR,
-             VCAP::CloudController::Membership::ORG_MANAGER],
-            app.space.guid, app.organization.guid)
         end
       end
 
@@ -874,17 +754,6 @@ describe ProcessesController, type: :controller do
       end
     end
 
-    context 'when the user does not have read scope' do
-      before { @request.env.merge!(json_headers(headers_for(VCAP::CloudController::User.make, scopes: ['cloud_controller.write']))) }
-
-      it 'raises an ApiError with a 403 code' do
-        put :stats, { process_guid: process_type.guid }
-
-        expect(response.status).to eq(403)
-        expect(response.body).to include('NotAuthorized')
-      end
-    end
-
     context 'when the process does not exist' do
       it 'raises 404' do
         get :stats, { process_guid: 'fake-guid' }
@@ -894,23 +763,29 @@ describe ProcessesController, type: :controller do
       end
     end
 
-    context 'when the user cannot read the process' do
-      before do
-        allow(membership).to receive(:has_any_roles?).and_return(false)
+    context 'permissions' do
+      context 'when the user does not have read scope' do
+        before { set_current_user(user, scopes: ['cloud_controller.write']) }
+
+        it 'raises an ApiError with a 403 code' do
+          put :stats, { process_guid: process_type.guid }
+
+          expect(response.status).to eq(403)
+          expect(response.body).to include('NotAuthorized')
+        end
       end
 
-      it 'raises 404' do
-        put :stats, { process_guid: process_type.guid }
+      context 'when the user cannot read the process' do
+        before do
+          disallow_user_read_access(user, space: space)
+        end
 
-        expect(response.status).to eq(404)
-        expect(response.body).to include('ResourceNotFound')
+        it 'raises 404' do
+          put :stats, { process_guid: process_type.guid }
 
-        expect(membership).to have_received(:has_any_roles?).with(
-          [VCAP::CloudController::Membership::SPACE_DEVELOPER,
-           VCAP::CloudController::Membership::SPACE_MANAGER,
-           VCAP::CloudController::Membership::SPACE_AUDITOR,
-           VCAP::CloudController::Membership::ORG_MANAGER],
-          space.guid, space.organization.guid)
+          expect(response.status).to eq(404)
+          expect(response.body).to include('ResourceNotFound')
+        end
       end
     end
   end

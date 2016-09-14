@@ -36,7 +36,7 @@ module VCAP::CloudController
     end
 
     def app_summary(space)
-      instances = instances_reporters.number_of_starting_and_running_instances_for_apps(space.apps)
+      instances = instances_reporters.number_of_starting_and_running_instances_for_processes(space.apps)
       space.apps.collect do |app|
         {
           guid:              app.guid,
@@ -47,8 +47,8 @@ module VCAP::CloudController
           running_instances: instances[app.guid],
         }.merge(app.to_hash)
       end
-    rescue Errors::InstancesUnavailable => e
-      raise VCAP::Errors::ApiError.new_from_details('InstancesUnavailable', e.to_s)
+    rescue CloudController::Errors::InstancesUnavailable => e
+      raise CloudController::Errors::ApiError.new_from_details('InstancesUnavailable', e.to_s)
     end
 
     def services_summary(space)

@@ -1,52 +1,73 @@
 require 'presenters/v3/droplet_presenter'
+require 'presenters/v3/paginated_list_presenter'
 require 'queries/droplet_delete_fetcher'
 require 'queries/droplet_list_fetcher'
 require 'actions/droplet_delete'
+require 'actions/droplet_copy'
 require 'actions/droplet_create'
 require 'messages/droplet_create_message'
 require 'messages/droplets_list_message'
+require 'messages/droplet_copy_message'
 require 'cloud_controller/membership'
-require 'controllers/v3/mixins/app_subresource'
+require 'controllers/v3/mixins/sub_resource'
 
 class DropletsController < ApplicationController
-  include AppSubresource
+  include SubResource
 
   def index
-    message = DropletsListMessage.from_params(app_subresource_query_params)
+    message = DropletsListMessage.from_params(subresource_query_params)
     invalid_param!(message.errors.full_messages) unless message.valid?
 
-    pagination_options = PaginationOptions.from_params(query_params)
-    invalid_param!(pagination_options.errors.full_messages) unless pagination_options.valid?
-
     if app_nested?
-      app, paginated_result = list_fetcher.fetch_for_app(app_guid: params[:app_guid], pagination_options: pagination_options, message: message)
+      app, dataset = DropletListFetcher.new(message: message).fetch_for_app
       app_not_found! unless app && can_read?(app.space.guid, app.organization.guid)
+    elsif package_nested?
+      package, dataset = DropletListFetcher.new(message: message).fetch_for_package
+      package_not_found! unless package && can_read?(package.space.guid, package.space.organization.guid)
     else
-      paginated_result = if roles.admin?
-                           list_fetcher.fetch_all(pagination_options: pagination_options, message: message)
-                         else
-                           list_fetcher.fetch_for_spaces(space_guids: readable_space_guids, pagination_options: pagination_options, message: message)
-                         end
+      dataset = if roles.admin? || roles.admin_read_only?
+                  DropletListFetcher.new(message: message).fetch_all
+                else
+                  DropletListFetcher.new(message: message).fetch_for_spaces(space_guids: readable_space_guids)
+                end
     end
 
-    render status: :ok, json: droplet_presenter.present_json_list(paginated_result, base_url(resource: 'droplets'), message)
+    render status: :ok, json: Presenters::V3::PaginatedListPresenter.new(dataset, base_url(resource: 'droplets'), message)
   end
 
   def show
     droplet = DropletModel.where(guid: params[:guid]).eager(:space, space: :organization).all.first
     droplet_not_found! unless droplet && can_read?(droplet.space.guid, droplet.space.organization.guid)
-    render status: :ok, json: droplet_presenter.present_json(droplet)
+    render status: :ok, json: Presenters::V3::DropletPresenter.new(droplet, show_secrets: can_see_secrets?(droplet.space))
   end
 
   def destroy
     droplet, space, org = DropletDeleteFetcher.new.fetch(params[:guid])
     droplet_not_found! unless droplet && can_read?(space.guid, org.guid)
 
-    unauthorized! unless can_delete?(space.guid)
+    unauthorized! unless can_write?(space.guid)
 
-    DropletDelete.new.delete(droplet)
+    droplet_deletor = DropletDelete.new(current_user.guid, current_user_email)
+    droplet_deletor.delete(droplet)
 
     head :no_content
+  end
+
+  def copy
+    message = DropletCopyMessage.create_from_http_request(params[:body])
+    unprocessable!(message.errors.full_messages) unless message.valid?
+
+    source_droplet = DropletModel.where(guid: params[:guid]).eager(:space, space: :organization).all.first
+    droplet_not_found! unless source_droplet && can_read?(source_droplet.space.guid, source_droplet.space.organization.guid)
+    unable_to_perform!('Droplet copy', 'source droplet is not staged') unless source_droplet.staged?
+
+    destination_app = AppModel.where(guid: message.app_guid).eager(:space, :organization).all.first
+    app_not_found! unless destination_app && can_read?(destination_app.space.guid, destination_app.organization.guid)
+    unauthorized! unless can_write?(destination_app.space.guid)
+
+    droplet = DropletCopy.new(source_droplet).copy(destination_app, current_user.guid, current_user_email)
+
+    render status: :created, json: Presenters::V3::DropletPresenter.new(droplet)
   end
 
   def create
@@ -57,18 +78,20 @@ class DropletsController < ApplicationController
     package_not_found! unless package && can_read?(package.space.guid, package.space.organization.guid)
     staging_in_progress! if package.app.staging_in_progress?
 
-    if package.type == VCAP::CloudController::PackageModel::DOCKER_TYPE && !roles.admin?
-      FeatureFlag.raise_unless_enabled!('diego_docker')
+    if package.type == VCAP::CloudController::PackageModel::DOCKER_TYPE
+      FeatureFlag.raise_unless_enabled!(:diego_docker)
     end
 
-    unauthorized! unless can_create?(package.space.guid)
+    unauthorized! unless can_write?(package.space.guid)
 
     lifecycle = LifecycleProvider.provide(package, staging_message)
     unprocessable!(lifecycle.errors.full_messages) unless lifecycle.valid?
 
-    droplet = DropletCreate.new.create_and_stage(package, lifecycle, stagers)
+    droplet_creator = DropletCreate.new(actor: current_user,
+                                        actor_email: current_user_email)
+    droplet = droplet_creator.create_and_stage(package, lifecycle, staging_message)
 
-    render status: :created, json: droplet_presenter.present_json(droplet)
+    render status: :created, json: Presenters::V3::DropletPresenter.new(droplet)
   rescue DropletCreate::InvalidPackage => e
     invalid_request!(e.message)
   rescue DropletCreate::SpaceQuotaExceeded
@@ -81,11 +104,6 @@ class DropletsController < ApplicationController
 
   private
 
-  def can_create?(space_guid)
-    roles.admin? || membership.has_any_roles?([Membership::SPACE_DEVELOPER], space_guid)
-  end
-  alias_method :can_delete?, :can_create?
-
   def droplet_not_found!
     resource_not_found!(:droplet)
   end
@@ -95,22 +113,10 @@ class DropletsController < ApplicationController
   end
 
   def staging_in_progress!
-    raise VCAP::Errors::ApiError.new_from_details('StagingInProgress')
+    raise CloudController::Errors::ApiError.new_from_details('StagingInProgress')
   end
 
   def unable_to_perform!(operation, message)
-    raise VCAP::Errors::ApiError.new_from_details('UnableToPerform', operation, message)
-  end
-
-  def droplet_presenter
-    @droplet_presenter ||= DropletPresenter.new
-  end
-
-  def list_fetcher
-    DropletListFetcher.new
-  end
-
-  def stagers
-    CloudController::DependencyLocator.instance.stagers
+    raise CloudController::Errors::ApiError.new_from_details('UnableToPerform', operation, message)
   end
 end

@@ -14,13 +14,20 @@ module CloudController
     class FogClient < BaseClient
       DEFAULT_BATCH_SIZE = 1000
 
-      def initialize(connection_config, directory_key, cdn=nil, root_dir=nil, min_size=nil, max_size=nil)
+      def initialize(connection_config:,
+                     directory_key:,
+                     cdn: nil,
+                     root_dir: nil,
+                     min_size: nil,
+                     max_size: nil,
+                     encryption: nil)
         @root_dir = root_dir
         @connection_config = connection_config
         @directory_key = directory_key
         @cdn = cdn
         @min_size = min_size || 0
         @max_size = max_size
+        @encryption = encryption
       end
 
       def local?
@@ -41,7 +48,7 @@ module CloudController
         end
       end
 
-      def cp_to_blobstore(source_path, destination_key, retries=2)
+      def cp_to_blobstore(source_path, destination_key)
         start = Time.now.utc
         logger.info('blobstore.cp-start', destination_key: destination_key, source_path: source_path, bucket: @directory_key)
         size = -1
@@ -51,27 +58,18 @@ module CloudController
           size = file.size
           next unless within_limits?(size)
 
-          begin
-            mime_type = MIME::Types.of(source_path).first.try(:content_type)
+          mime_type = MIME::Types.of(source_path).first.try(:content_type)
 
-            files.create(
-              key: partitioned_key(destination_key),
-              body: file,
-              content_type: mime_type || 'application/zip',
-              public: local?,
-            )
-          # work around https://github.com/fog/fog/issues/3137
-          # and Fog raising an EOFError SocketError intermittently
-          rescue SystemCallError, Excon::Errors::SocketError, Excon::Errors::BadRequest => e
-            logger.debug('blobstore.cp-retry',
-                         error: e,
-                         destination_key: destination_key,
-                         remaining_retries: retries
-                        )
-            retries -= 1
-            retry unless retries < 0
-            raise e
-          end
+          options = {
+            key: partitioned_key(destination_key),
+            body: file,
+            content_type: mime_type || 'application/zip',
+            public: local?
+          }
+
+          options[:encryption] = @encryption if @encryption
+
+          files.create(options)
 
           log_entry = 'blobstore.cp-finish'
         end
@@ -87,14 +85,15 @@ module CloudController
       def cp_file_between_keys(source_key, destination_key)
         source_file = file(source_key)
         raise FileNotFound if source_file.nil?
-        source_file.copy(@directory_key, partitioned_key(destination_key))
 
-        dest_file = file(destination_key)
+        options = @encryption ? { 'x-amz-server-side-encryption' => @encryption } : {}
+        source_file.copy(@directory_key, partitioned_key(destination_key), options)
 
         if local?
+          dest_file = file(destination_key)
           dest_file.public = 'public-read'
+          dest_file.save
         end
-        dest_file.save
       end
 
       def delete_all(page_size=DEFAULT_BATCH_SIZE)
@@ -185,7 +184,10 @@ module CloudController
 
       def connection
         options = @connection_config
+        blobstore_timeout = options.delete(:blobstore_timeout)
         options = options.merge(endpoint: '') if local?
+        options = options.merge({ connection_options: { read_timeout: blobstore_timeout,
+                                                        write_timeout: blobstore_timeout } })
         @connection ||= Fog::Storage.new(options)
       end
 

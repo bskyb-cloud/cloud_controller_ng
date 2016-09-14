@@ -37,7 +37,7 @@ module VCAP::CloudController::Validators
       if !value.is_a?(Hash)
         record.errors.add(attribute, 'must be a hash')
       else
-        value.keys.each do |key|
+        value.each_key do |key|
           if key =~ /^CF_/i
             record.errors.add(attribute, 'cannot start with CF_')
           elsif key =~ /^VCAP_/i
@@ -114,7 +114,7 @@ module VCAP::CloudController::Validators
     end
 
     def has_correct_structure?(value)
-      (value.is_a?(Hash) && (value.keys.map(&:to_sym) == [:guid]))
+      (value.is_a?(Hash) && (value.keys.map(&:to_s) == ['guid']))
     end
   end
 
@@ -144,7 +144,7 @@ module VCAP::CloudController::Validators
     end
 
     def is_a_guid_hash?(hsh)
-      (hsh.keys.map(&:to_sym) == [:guid])
+      (hsh.keys.map(&:to_s) == ['guid'])
     end
   end
 end
