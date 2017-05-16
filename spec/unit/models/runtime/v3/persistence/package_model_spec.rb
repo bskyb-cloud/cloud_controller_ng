@@ -7,52 +7,42 @@ module VCAP::CloudController
       it { is_expected.to validates_includes PackageModel::PACKAGE_STATES, :state, allow_missing: true }
 
       it 'cannot have docker data if it is a bits package' do
-        package = PackageModel.make(type: 'bits')
-        package.docker_data = PackageDockerDataModel.new
+        package = PackageModel.new(type: 'bits', docker_image: 'some-image')
         expect(package.valid?).to eq(false)
 
         expect(package.errors.full_messages).to include('type cannot have docker data if type is bits')
       end
     end
 
-    describe '.user_visible' do
-      let(:app_model) { AppModel.make(space_guid: space.guid) }
-      let(:package_model) { PackageModel.make(app_guid: app_model.guid) }
-      let(:space) { Space.make }
+    describe 'checksum_info' do
+      let(:package) { PackageModel.new(state: PackageModel::READY_STATE) }
+      context 'when the package has a sha1 hash and not a sha256 hash' do
+        before do
+          package.update(package_hash: 'sha1-hash', sha256_checksum: nil)
+        end
 
-      it 'shows the developer packages' do
-        developer = User.make
-        space.organization.add_user developer
-        space.add_developer developer
-        expect(PackageModel.user_visible(developer)).to include(package_model)
+        it 'displays the sha1' do
+          expect(package.checksum_info).to eq({ type: 'sha1', value: 'sha1-hash' })
+        end
       end
 
-      it 'shows the space manager packages' do
-        space_manager = User.make
-        space.organization.add_user space_manager
-        space.add_manager space_manager
+      context 'when the package has no checksums' do
+        before do
+          package.update(package_hash: nil, sha256_checksum: nil)
+        end
 
-        expect(PackageModel.user_visible(space_manager)).to include(package_model)
+        it 'displays the sha256 with null value' do
+          expect(package.checksum_info).to eq({ type: 'sha256', value: nil })
+        end
       end
+    end
 
-      it 'shows the auditor packages' do
-        auditor = User.make
-        space.organization.add_user auditor
-        space.add_auditor auditor
-
-        expect(PackageModel.user_visible(auditor)).to include(package_model)
-      end
-
-      it 'shows the org manager packages' do
-        org_manager = User.make
-        space.organization.add_manager org_manager
-
-        expect(PackageModel.user_visible(org_manager)).to include(package_model)
-      end
-
-      it 'hides everything from a regular user' do
-        evil_hacker = User.make
-        expect(PackageModel.user_visible(evil_hacker)).to_not include(package_model)
+    describe 'docker credentials' do
+      it_behaves_like 'a model with an encrypted attribute' do
+        let(:value_to_encrypt) { 'password' }
+        let(:encrypted_attr) { :docker_password }
+        let(:storage_column) { :encrypted_docker_password }
+        let(:attr_salt) { :docker_password_salt }
       end
     end
   end

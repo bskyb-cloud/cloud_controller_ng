@@ -27,6 +27,16 @@ RSpec.describe ApplicationController, type: :controller do
       head 200
     end
 
+    def read_globally_access
+      can_read_globally?
+      head 200
+    end
+
+    def isolation_segment_read_access
+      can_read_from_isolation_segment?(VCAP::CloudController::IsolationSegmentModel.find(guid: params[:iso_seg]))
+      head 200
+    end
+
     def write_access
       can_write?(params[:space_guid])
       head 200
@@ -39,6 +49,10 @@ RSpec.describe ApplicationController, type: :controller do
     def blobstore_error
       raise CloudController::Blobstore::BlobstoreError.new('it broke!')
     end
+
+    def not_found
+      raise CloudController::Errors::NotFound.new_from_details('NotFound')
+    end
   end
 
   describe '#check_read_permissions' do
@@ -50,14 +64,14 @@ RSpec.describe ApplicationController, type: :controller do
       get :index
 
       expect(response.status).to eq(403)
-      expect(parsed_body['description']).to eq('You are not authorized to perform the requested action')
+      expect(parsed_body['errors'].first['detail']).to eq('You are not authorized to perform the requested action')
     end
 
     it 'is required on show' do
       get :show, id: 1
 
       expect(response.status).to eq(403)
-      expect(parsed_body['description']).to eq('You are not authorized to perform the requested action')
+      expect(parsed_body['errors'].first['detail']).to eq('You are not authorized to perform the requested action')
     end
 
     context 'cloud_controller.read' do
@@ -79,6 +93,22 @@ RSpec.describe ApplicationController, type: :controller do
     context 'cloud_controller.admin_read_only' do
       before do
         set_current_user(VCAP::CloudController::User.new(guid: 'some-guid'), scopes: ['cloud_controller.admin_read_only'])
+      end
+
+      it 'grants reading access' do
+        get :index
+        expect(response.status).to eq(200)
+      end
+
+      it 'should show a specific item' do
+        get :show, id: 1
+        expect(response.status).to eq(204)
+      end
+    end
+
+    context 'cloud_controller.global_auditor' do
+      before do
+        set_current_user_as_global_auditor
       end
 
       it 'grants reading access' do
@@ -133,7 +163,7 @@ RSpec.describe ApplicationController, type: :controller do
     it 'is required on other actions' do
       post :create
       expect(response.status).to eq(403)
-      expect(parsed_body['description']).to eq('You are not authorized to perform the requested action')
+      expect(parsed_body['errors'].first['detail']).to eq('You are not authorized to perform the requested action')
     end
 
     it 'is not required for admin' do
@@ -141,25 +171,6 @@ RSpec.describe ApplicationController, type: :controller do
 
       post :create
       expect(response.status).to eq(201)
-    end
-  end
-
-  describe 'request id' do
-    before do
-      set_current_user_as_admin
-      @request.env.merge!('cf.request_id' => 'expected-request-id')
-    end
-
-    it 'sets the vcap request current_id from the passed in rack request during request handling' do
-      get :index
-
-      # finding request id inside the controller action and returning on the body
-      expect(parsed_body['request_id']).to eq('expected-request-id')
-    end
-
-    it 'unsets the vcap request current_id after the request completes' do
-      get :index
-      expect(VCAP::Request.current_id).to be_nil
     end
   end
 
@@ -177,7 +188,7 @@ RSpec.describe ApplicationController, type: :controller do
       it 'raises an error' do
         get :index
         expect(response.status).to eq(403)
-        expect(parsed_body['description']).to eq('You are not authorized to perform the requested action')
+        expect(parsed_body['errors'].first['detail']).to eq('You are not authorized to perform the requested action')
       end
     end
 
@@ -209,7 +220,7 @@ RSpec.describe ApplicationController, type: :controller do
       it 'raises NotAuthenticated' do
         get :index
         expect(response.status).to eq(401)
-        expect(parsed_body['description']).to eq('Authentication error')
+        expect(parsed_body['errors'].first['detail']).to eq('Authentication error')
       end
     end
 
@@ -221,7 +232,7 @@ RSpec.describe ApplicationController, type: :controller do
       it 'raises InvalidAuthToken' do
         get :index
         expect(response.status).to eq(401)
-        expect(parsed_body['description']).to eq('Invalid Auth Token')
+        expect(parsed_body['errors'].first['detail']).to eq('Invalid Auth Token')
       end
     end
 
@@ -234,7 +245,7 @@ RSpec.describe ApplicationController, type: :controller do
       it 'raises InvalidAuthToken' do
         get :index
         expect(response.status).to eq(401)
-        expect(parsed_body['description']).to eq('Invalid Auth Token')
+        expect(parsed_body['errors'].first['detail']).to eq('Invalid Auth Token')
       end
     end
   end
@@ -270,6 +281,37 @@ RSpec.describe ApplicationController, type: :controller do
     end
   end
 
+  describe '#can_read_globally?' do
+    let!(:user) { set_current_user(VCAP::CloudController::User.make) }
+
+    it 'asks for #can_read_globally? on behalf of the current user' do
+      routes.draw { get 'read_globally_access' => 'anonymous#read_globally_access' }
+
+      permissions = instance_double(VCAP::CloudController::Permissions, can_read_globally?: true)
+      allow(VCAP::CloudController::Permissions).to receive(:new).and_return(permissions)
+
+      get :read_globally_access
+
+      expect(permissions).to have_received(:can_read_globally?)
+    end
+  end
+
+  describe '#can_read_from_isolation_segment?' do
+    let!(:user) { set_current_user(VCAP::CloudController::User.make) }
+
+    it 'asks for #can_read_from_isolation_segment? on behalf of the current user' do
+      routes.draw { get 'isolation_segment_read_access' => 'anonymous#isolation_segment_read_access' }
+
+      iso_seg = VCAP::CloudController::IsolationSegmentModel.make
+      permissions = instance_double(VCAP::CloudController::Permissions, can_read_from_isolation_segment?: true)
+      allow(VCAP::CloudController::Permissions).to receive(:new).and_return(permissions)
+
+      get :isolation_segment_read_access, iso_seg: iso_seg.guid
+
+      expect(permissions).to have_received(:can_read_from_isolation_segment?).with(iso_seg)
+    end
+  end
+
   describe '#can_write?' do
     let!(:user) { set_current_user(VCAP::CloudController::User.make) }
 
@@ -292,7 +334,7 @@ RSpec.describe ApplicationController, type: :controller do
       routes.draw { get 'blobstore_error' => 'anonymous#blobstore_error' }
       get :blobstore_error
       expect(response.status).to eq(500)
-      expect(parsed_body['description']).to match /three retries/
+      expect(parsed_body['errors'].first['detail']).to match /three retries/
     end
   end
 
@@ -303,7 +345,18 @@ RSpec.describe ApplicationController, type: :controller do
       routes.draw { get 'api_explode' => 'anonymous#api_explode' }
       get :api_explode
       expect(response.status).to eq(400)
-      expect(parsed_body['description']).to eq('The request is invalid')
+      expect(parsed_body['errors'].first['detail']).to eq('The request is invalid')
+    end
+  end
+
+  describe '#handle_not_found' do
+    let!(:user) { set_current_user(VCAP::CloudController::User.make) }
+
+    it 'rescues from NotFound error and renders an error presenter' do
+      routes.draw { get 'not_found' => 'anonymous#not_found' }
+      get :not_found
+      expect(response.status).to eq(404)
+      expect(parsed_body['errors'].first['detail']).to eq('Unknown request')
     end
   end
 end

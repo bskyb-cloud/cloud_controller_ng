@@ -287,11 +287,6 @@ module VCAP::CloudController
         expect(Locking[name: 'buildpacks']).to have_received(:lock!)
       end
 
-      it 'has to do a SELECT FOR UPDATE' do
-        expect(Buildpack).to receive(:for_update).exactly(1).and_call_original
-        buildpacks[3].update(position: 2)
-      end
-
       it "does not update the position if it isn't specified" do
         expect {
           buildpacks.first.update(key: 'abcdef')
@@ -387,6 +382,14 @@ module VCAP::CloudController
         ).to(
           [['second_buildpack', 1]]
         )
+      end
+
+      it 'grabs a lock while destroying a buildpack', isolation: :truncation do
+        buildpacks_lock = double(:buildpacks_lock)
+        allow(Locking).to receive(:[]) { buildpacks_lock }
+        allow(Locking[name: 'buildpacks']).to receive(:lock!)
+        buildpack1.destroy
+        expect(Locking[name: 'buildpacks']).to have_received(:lock!)
       end
 
       it "doesn't shift when the last position is deleted" do

@@ -91,6 +91,33 @@ module VCAP::CloudController
         end
       end
 
+      describe 'sequence_id' do
+        it 'can be set to an integer' do
+          task.sequence_id = 1
+          expect(task).to be_valid
+        end
+
+        it 'is unique per app' do
+          task.sequence_id = 0
+          task.save
+
+          expect {
+            TaskModel.make app: task.app, sequence_id: 0
+          }.to raise_exception Sequel::UniqueConstraintViolation
+        end
+
+        it 'is NOT unique across different apps' do
+          task.sequence_id = 0
+          task.save
+
+          other_app = AppModel.make space_guid: space.guid
+
+          expect {
+            TaskModel.make app: other_app, sequence_id: 0
+          }.to_not raise_exception
+        end
+      end
+
       describe 'environment_variables' do
         it 'validates them' do
           expect {
@@ -181,6 +208,14 @@ module VCAP::CloudController
                   app: app,
                 )
               }.to raise_error Sequel::ValidationFailed, 'memory_in_mb exceeds space memory quota'
+            end
+
+            it 'does not raise errors when canceling task above quota' do
+              task = TaskModel.make(memory_in_mb: 10, app: app)
+              space.update(space_quota_definition: SpaceQuotaDefinition.make(memory_limit: 5, organization: org))
+
+              task.update(state: TaskModel::CANCELING_STATE)
+              expect(task.reload).to be_valid
             end
           end
 
@@ -281,6 +316,14 @@ module VCAP::CloudController
                   app: app,
                 )
               }.to raise_error Sequel::ValidationFailed, 'memory_in_mb exceeds organization memory quota'
+            end
+
+            it 'does not raise errors when canceling task above quota' do
+              task = TaskModel.make(memory_in_mb: 10, app: app)
+              org.update(quota_definition: QuotaDefinition.make(memory_limit: 5))
+
+              task.update(state: TaskModel::CANCELING_STATE)
+              expect(task.reload).to be_valid
             end
           end
 

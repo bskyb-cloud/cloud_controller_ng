@@ -24,7 +24,7 @@ RSpec.describe ServiceBindingsController, type: :controller do
       }.to_json
     end
     let(:service_binding_url_pattern) { %r{/v2/service_instances/#{service_instance.guid}/service_bindings/} }
-    let(:fake_service_binding) { VCAP::CloudController::ServiceBindingModel.new(service_instance: service_instance, guid: '') }
+    let(:fake_service_binding) { VCAP::CloudController::ServiceBinding.new(service_instance: service_instance, guid: '') }
     let(:opts) do
       {
         fake_service_binding: fake_service_binding,
@@ -34,7 +34,7 @@ RSpec.describe ServiceBindingsController, type: :controller do
     let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      allow_user_read_access(user, space: space)
+      allow_user_read_access_for(user, spaces: [space])
       allow_user_write_access(user, space: space)
       stub_bind(service_instance, opts)
       service_instance.service.requires = ['syslog_drain']
@@ -56,7 +56,7 @@ RSpec.describe ServiceBindingsController, type: :controller do
     context 'permissions' do
       context 'when the user has read, but not write permissions to the space' do
         before do
-          allow_user_read_access(user, space: space)
+          allow_user_read_access_for(user, spaces: [space])
           disallow_user_write_access(user, space: space)
         end
 
@@ -273,7 +273,7 @@ RSpec.describe ServiceBindingsController, type: :controller do
 
       context 'when attempting to bind and the service binding already exists' do
         before do
-          VCAP::CloudController::ServiceBindingModel.make(
+          VCAP::CloudController::ServiceBinding.make(
             service_instance: service_instance,
             app: app_model
           )
@@ -305,12 +305,12 @@ RSpec.describe ServiceBindingsController, type: :controller do
   end
 
   describe '#show' do
-    let(:service_binding) { VCAP::CloudController::ServiceBindingModel.make(syslog_drain_url: 'syslog://syslog-drain.com') }
+    let(:service_binding) { VCAP::CloudController::ServiceBinding.make(syslog_drain_url: 'syslog://syslog-drain.com') }
     let(:space) { service_binding.space }
     let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      allow_user_read_access(user, space: space)
+      allow_user_read_access_for(user, spaces: [space])
       allow_user_secret_access(user, space: space)
     end
 
@@ -327,7 +327,7 @@ RSpec.describe ServiceBindingsController, type: :controller do
     context 'permissions' do
       context 'when the user has read-only permissions' do
         before do
-          allow_user_read_access(user, space: space)
+          allow_user_read_access_for(user, spaces: [space])
           allow_user_secret_access(user, space: space)
           disallow_user_write_access(user, space: space)
         end
@@ -379,17 +379,17 @@ RSpec.describe ServiceBindingsController, type: :controller do
   end
 
   describe '#index' do
-    let!(:allowed_binding_1) { VCAP::CloudController::ServiceBindingModel.make(syslog_drain_url: 'syslog://syslog-drain.com') }
-    let!(:allowed_binding_2) { VCAP::CloudController::ServiceBindingModel.make(syslog_drain_url: 'syslog://syslog-drain.com', service_instance: service_instance) }
-    let!(:allowed_binding_3) { VCAP::CloudController::ServiceBindingModel.make(syslog_drain_url: 'syslog://syslog-drain.com', service_instance: service_instance) }
-    let!(:binding_in_unauthorized_space) { VCAP::CloudController::ServiceBindingModel.make(syslog_drain_url: 'syslog://syslog-drain.com') }
+    let!(:allowed_binding_1) { VCAP::CloudController::ServiceBinding.make(syslog_drain_url: 'syslog://syslog-drain.com') }
+    let!(:allowed_binding_2) { VCAP::CloudController::ServiceBinding.make(syslog_drain_url: 'syslog://syslog-drain.com', service_instance: service_instance) }
+    let!(:allowed_binding_3) { VCAP::CloudController::ServiceBinding.make(syslog_drain_url: 'syslog://syslog-drain.com', service_instance: service_instance) }
+    let!(:binding_in_unauthorized_space) { VCAP::CloudController::ServiceBinding.make(syslog_drain_url: 'syslog://syslog-drain.com') }
     let(:service_instance) { VCAP::CloudController::ManagedServiceInstance.make(space: allowed_space) }
     let(:allowed_space) { allowed_binding_1.space }
     let(:unauthorized_space) { binding_in_unauthorized_space.space }
     let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      stub_readable_space_guids_for(user, allowed_space)
+      stub_readable_space_guids_for(user, [allowed_space])
     end
 
     it 'returns a 200 and all service bindings the user is allowed to see' do
@@ -400,31 +400,13 @@ RSpec.describe ServiceBindingsController, type: :controller do
       expect(response_guids).to match_array([allowed_binding_1, allowed_binding_2, allowed_binding_3].map(&:guid))
     end
 
-    context 'admin' do
+    context 'when the user has global read access' do
       let(:expected_service_binding_guids) do
         [allowed_binding_1, allowed_binding_2, allowed_binding_3, binding_in_unauthorized_space].map(&:guid)
       end
 
       before do
-        set_current_user_as_admin
-      end
-
-      it 'returns all service bindings' do
-        get :index
-
-        expect(response.status).to eq 200
-        response_guids = parsed_body['resources'].map { |r| r['guid'] }
-        expect(response_guids).to match_array(expected_service_binding_guids)
-      end
-    end
-
-    context 'admin read only' do
-      let(:expected_service_binding_guids) do
-        [allowed_binding_1, allowed_binding_2, allowed_binding_3, binding_in_unauthorized_space].map(&:guid)
-      end
-
-      before do
-        set_current_user_as_admin_read_only
+        allow_user_global_read_access(user)
       end
 
       it 'returns all service bindings' do
@@ -492,12 +474,12 @@ RSpec.describe ServiceBindingsController, type: :controller do
   end
 
   describe '#destroy' do
-    let(:service_binding) { VCAP::CloudController::ServiceBindingModel.make(syslog_drain_url: 'syslog://syslog-drain.com') }
+    let(:service_binding) { VCAP::CloudController::ServiceBinding.make(syslog_drain_url: 'syslog://syslog-drain.com') }
     let(:space) { service_binding.space }
     let(:user) { set_current_user(VCAP::CloudController::User.make) }
 
     before do
-      allow_user_read_access(user, space: space)
+      allow_user_read_access_for(user, spaces: [space])
       allow_user_write_access(user, space: space)
       stub_unbind(service_binding)
     end
@@ -519,7 +501,7 @@ RSpec.describe ServiceBindingsController, type: :controller do
 
       context 'when the user has read, but not write persimmons on the space' do
         before do
-          allow_user_read_access(user, space: space)
+          allow_user_read_access_for(user, spaces: [space])
           disallow_user_write_access(user, space: space)
         end
 

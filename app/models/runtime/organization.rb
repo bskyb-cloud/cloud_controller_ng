@@ -5,6 +5,23 @@ module VCAP::CloudController
 
     one_to_many :spaces
 
+    many_to_one :default_isolation_segment_model,
+      class: 'VCAP::CloudController::IsolationSegmentModel',
+      primary_key: :guid,
+      key: :default_isolation_segment_guid
+
+    many_to_many :isolation_segment_models,
+      left_key: :organization_guid,
+      left_primary_key: :guid,
+      right_key: :isolation_segment_guid,
+      right_primary_key: :guid,
+      join_table: :organizations_isolation_segments,
+      # These are needed because we do not set the default isolation segment
+      # for an organization. This happens as part of the action on an
+      # Isolation Segment.
+      before_add: proc { cannot_create! },
+      before_remove: proc { cannot_update! }
+
     one_to_many :service_instances,
                 dataset: -> { VCAP::CloudController::ServiceInstance.filter(space: spaces) }
 
@@ -12,6 +29,9 @@ module VCAP::CloudController
                 dataset: -> { VCAP::CloudController::ServiceInstance.filter(space: spaces, is_gateway_service: true) }
 
     one_to_many :apps,
+                dataset: -> { App.filter(space: spaces, type: 'web') }
+
+    one_to_many :processes,
                 dataset: -> { App.filter(space: spaces) }
 
     one_to_many :app_models,
@@ -92,7 +112,7 @@ module VCAP::CloudController
     export_attributes :name, :billing_enabled, :quota_definition_guid, :status
     import_attributes :name, :billing_enabled,
                       :user_guids, :manager_guids, :billing_manager_guids,
-                      :auditor_guids, :quota_definition_guid, :status
+                      :auditor_guids, :quota_definition_guid, :status, :default_isolation_segment_guid
 
     def remove_user(user)
       can_remove = ([user.spaces, user.audited_spaces, user.managed_spaces].flatten & spaces).empty?
@@ -104,6 +124,11 @@ module VCAP::CloudController
       ([user.spaces, user.audited_spaces, user.managed_spaces].flatten & spaces).each do |space|
         user.remove_spaces space
       end
+
+      remove_user(user)
+      remove_manager(user)
+      remove_billing_manager(user)
+      remove_auditor(user)
     end
 
     def self.user_visibility_filter(user)
@@ -116,6 +141,31 @@ module VCAP::CloudController
             dataset.join_table(:inner, :organizations_auditors, organization_id: :id, user_id: user.id).select(:organizations__id)
           ).select(:id)
       }
+    end
+
+    def self.cannot_create!
+      raise CloudController::Errors::ApiError.new_from_details(
+        'UnprocessableEntity',
+        'Cannot create Organization<->Isolation Segment relationships via the Organizations endpoint'
+      )
+    end
+
+    def self.cannot_update!
+      raise CloudController::Errors::ApiError.new_from_details(
+        'UnprocessableEntity',
+        'Cannot delete Organization<->Isolation Segment relationships via the Organizations endpoint'
+      )
+    end
+
+    def before_destroy
+      @destroying = true
+
+      # This is a Database.update(default_isolation_segment_guid), not a
+      # Model.update(default_isolation_segment_model). This way our model guards
+      # do not block us from removing the default_isolation_segment.
+      update(default_isolation_segment_guid: nil)
+      remove_all_isolation_segment_models
+      super
     end
 
     def before_save
@@ -133,6 +183,10 @@ module VCAP::CloudController
       validates_unique :name
       validates_format ORG_NAME_REGEX, :name
       validates_includes ORG_STATUS_VALUES, :status, allow_missing: true
+
+      if column_changed?(:default_isolation_segment_guid)
+        validate_default_isolation_segment
+      end
     end
 
     def has_remaining_memory(mem)
@@ -163,7 +217,25 @@ module VCAP::CloudController
       billing_enabled
     end
 
+    def isolation_segment_guids
+      isolation_segment_models.map(&:guid)
+    end
+
     private
+
+    def validate_default_isolation_segment
+      return if @destroying
+      return if default_isolation_segment_model.nil?
+
+      validate_default_isolation_segment_exists
+    end
+
+    def validate_default_isolation_segment_exists
+      unless isolation_segment_guids.include?(default_isolation_segment_model.guid)
+        raise CloudController::Errors::ApiError.new_from_details('InvalidRelation',
+                                                                 "Could not find Isolation Segment with guid: #{default_isolation_segment_model.guid}")
+      end
+    end
 
     def validate_quota_on_create
       return if quota_definition
@@ -187,8 +259,16 @@ module VCAP::CloudController
     end
 
     def memory_remaining
-      memory_used = apps_dataset.where(state: 'STARTED').sum(Sequel.*(:memory, :instances)) || 0
+      memory_used = started_app_memory + running_task_memory
       quota_definition.memory_limit - memory_used
+    end
+
+    def running_task_memory
+      tasks_dataset.where(state: TaskModel::RUNNING_STATE).sum(:memory_in_mb) || 0
+    end
+
+    def started_app_memory
+      processes_dataset.where(state: ProcessModel::STARTED).sum(Sequel.*(:memory, :instances)) || 0
     end
 
     def running_and_pending_tasks_count

@@ -4,7 +4,7 @@ module VCAP::CloudController
   RSpec.describe VCAP::CloudController::StatsController do
     describe 'GET /v2/apps/:id/stats' do
       before :each do
-        @app = AppFactory.make(package_hash: 'abc', package_state: 'STAGED')
+        @app = AppFactory.make
         @user = make_user_for_space(@app.space)
         @developer = make_developer_for_space(@app.space)
         @auditor = make_auditor_for_space(@app.space)
@@ -93,28 +93,21 @@ module VCAP::CloudController
           end
         end
 
-        context 'when instance reporter is unavailable' do
+        context 'when instance reporter raises an ApiError' do
           before do
             allow(instances_reporters).to receive(:stats_for_app).and_raise(
-              CloudController::Errors::InstancesUnavailable.new(
-                Net::HTTPError.new('Error: Could not connect to the remote server', nil)))
+              CloudController::Errors::ApiError.new_from_details('ServerError')
+            )
             set_current_user(@developer)
           end
 
-          it 'returns 503' do
+          it 'does not re-raise as a StatsError' do
             @app.update(state: 'STARTED')
 
             get "/v2/apps/#{@app.guid}/stats"
 
-            expect(last_response.status).to eq(503)
-            expect(last_response.body).to match('Stats unavailable: Stats server temporarily unavailable.')
-          end
-          it 'Includes the underlying error' do
-            @app.update(state: 'STARTED')
-
-            get "/v2/apps/#{@app.guid}/stats"
-
-            expect(last_response.body).to match('Could not connect to the remote server')
+            expect(last_response.status).to eq(500)
+            expect(last_response.body).to match('Server error')
           end
         end
 
@@ -137,7 +130,7 @@ module VCAP::CloudController
         context 'when the app is stopped' do
           before do
             set_current_user(@developer)
-            @app.stop!
+            @app.update(state: 'STOPPED')
           end
 
           it 'raises an error' do
@@ -172,6 +165,51 @@ module VCAP::CloudController
                 }
               }
             }
+          end
+
+          describe 'isolation segments' do
+            context 'when using local tps and the app is running in an isolation segment' do
+              let(:stats) do
+                {
+                  '0' => {
+                    state: 'RUNNING',
+                    isolation_segment: 'isolation-segment-name',
+                    stats: {
+                      name: 'foo',
+                      uris: 'some-uris',
+                      host: 'my-host',
+                      port: 1234,
+                      net_info: { 'foo' => 'bar' },
+                      uptime: 1,
+                      mem_quota: 1,
+                      disk_quota: 2,
+                      fds_quota: 3,
+                      usage: {
+                        time: 4,
+                        cpu: 5,
+                        mem: 6,
+                        disk: 7,
+                      }
+                    }
+                  }
+                }
+              end
+
+              it 'should include the isolation segment name for the app' do
+                set_current_user(@developer)
+
+                @app.state = 'STARTED'
+                @app.instances = 1
+                @app.save
+
+                @app.refresh
+
+                get "/v2/apps/#{@app.guid}/stats"
+
+                expect(last_response.status).to eq(200)
+                expect(MultiJson.load(last_response.body)['0']['isolation_segment']).to eq('isolation-segment-name')
+              end
+            end
           end
 
           it 'should return the stats without the net_info field' do

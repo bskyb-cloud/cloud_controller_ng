@@ -22,7 +22,7 @@ module VCAP::CloudController
       it { is_expected.to have_associated :space }
       it do
         is_expected.to have_associated :service_bindings, associated_instance: ->(service_instance) {
-          app = VCAP::CloudController::App.make(space: service_instance.space)
+          app = VCAP::CloudController::AppModel.make(space: service_instance.space)
           ServiceBinding.make(app: app, service_instance: service_instance, credentials: Sham.service_credentials)
         }
       end
@@ -110,6 +110,12 @@ module VCAP::CloudController
         expect(ServiceUsageEvent.count).to eq(1)
         expect(event.state).to eq(Repositories::ServiceUsageEventRepository::CREATED_EVENT_STATE)
         expect(event).to match_service_instance(instance)
+      end
+
+      it 'allows really long dashboard urls' do
+        instance = ManagedServiceInstance.make
+        instance.update dashboard_url: 'a' * 1024
+        expect(instance.guid).to be
       end
     end
 
@@ -449,7 +455,7 @@ module VCAP::CloudController
       context 'when the instance has bindings' do
         before do
           ServiceBinding.make(
-            app: AppFactory.make(space: service_instance.space),
+            app: AppModel.make(space: service_instance.space),
             service_instance: service_instance
           )
         end
@@ -481,17 +487,16 @@ module VCAP::CloudController
     end
 
     describe '#bindable?' do
-      let(:service_instance) { ManagedServiceInstance.make(service_plan: service_plan) }
-      let(:service_plan) { ServicePlan.make(service: service) }
+      let(:service_instance) { ManagedServiceInstance.make }
 
-      context 'when the service is bindable' do
-        let(:service) { Service.make(bindable: true) }
+      context 'when the service plan is bindable' do
+        before { expect(service_instance.service_plan).to receive(:bindable?).and_return(true) }
 
         specify { expect(service_instance).to be_bindable }
       end
 
-      context 'when the service is not bindable' do
-        let(:service) { Service.make(bindable: false) }
+      context 'when the service plan is not bindable' do
+        before { expect(service_instance.service_plan).to receive(:bindable?).and_return(false) }
 
         specify { expect(service_instance).not_to be_bindable }
       end

@@ -15,6 +15,10 @@ module VCAP::CloudController
     describe '.merge_defaults' do
       context 'when no config values are provided' do
         let(:config) { Config.from_file(File.join(Paths::FIXTURES, 'config/minimal_config.yml')) }
+        it 'sets the default isolation segment name' do
+          expect(config[:shared_isolation_segment_name]).to eq('shared')
+        end
+
         it 'sets default stacks_file' do
           expect(config[:stacks_file]).to eq(File.join(Config.config_dir, 'stacks.yml'))
         end
@@ -57,10 +61,6 @@ module VCAP::CloudController
 
         it 'sets a default value for min staging memory' do
           expect(config[:staging][:minimum_staging_memory_mb]).to eq(1024)
-        end
-
-        it 'sets a default value for min staging disk' do
-          expect(config[:staging][:minimum_staging_disk_mb]).to eq(4096)
         end
 
         it 'sets a default value for min staging file descriptor limit' do
@@ -246,6 +246,7 @@ module VCAP::CloudController
             config_hash['staging']['auth']['user'] = 'f@t:%a'
             config_hash['staging']['auth']['password'] = 'm@/n!'
             config_hash['minimum_candidate_stagers'] = 0
+            config_hash['diego']['pid_limit'] = -5
 
             File.open(File.join(tmpdir, 'incorrect_overridden_config.yml'), 'w') do |f|
               YAML.dump(config_hash, f)
@@ -264,7 +265,11 @@ module VCAP::CloudController
             expect(config_from_file[:app_bits_upload_grace_period_in_seconds]).to eq(0)
           end
 
-          it 'URL-encodes staging auth as neccesary' do
+          it 'sets a negative "pid_limit" to 0' do
+            expect(config_from_file[:diego][:pid_limit]).to eq(0)
+          end
+
+          it 'URL-encodes staging auth as necessary' do
             expect(config_from_file[:staging][:auth][:user]).to eq('f%40t%3A%25a')
             expect(config_from_file[:staging][:auth][:password]).to eq('m%40%2Fn!')
           end
@@ -308,9 +313,9 @@ module VCAP::CloudController
               password: 'password',
             },
           },
-
           bits_service: { enabled: false },
           reserved_private_domains: File.join(Paths::FIXTURES, 'config/reserved_private_domains.dat'),
+          diego: {},
         }
       end
 

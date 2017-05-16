@@ -1,12 +1,12 @@
-<% content_for :single_pending_buildpack_droplet do %>
+<% content_for :single_staging_buildpack_droplet do %>
 {
   "guid": "585bc3c1-3743-497d-88b0-403ad6b56d16",
-  "state": "PENDING",
+  "state": "STAGING",
   "error": null,
   "lifecycle": {
     "type": "buildpack",
     "data": {
-      "buildpack": null,
+      "buildpacks": [ "ruby_buildpack" ],
       "stack": null
     }
   },
@@ -25,14 +25,14 @@
       "application_version": "d5985d64-c455-44d0-99a5-285b6521f84c",
       "application_name": "my_app",
       "application_uris": [
-        "my_app.example.com"
+        "my_app.example.org"
       ],
       "version": "d5985d64-c455-44d0-99a5-285b6521f84c",
       "name": "my_app",
       "space_name": "my_space",
       "space_id": "2f35885d-0c9d-4423-83ad-fd05066f8576",
       "uris": [
-        "my_app.example.com"
+        "my_app.example.org"
       ],
       "users": null
     },
@@ -40,34 +40,34 @@
     "VCAP_SERVICES": {}
   },
   "created_at": "2016-03-28T23:39:34Z",
-  "updated_at": null,
+  "updated_at": "2016-06-08T16:41:26Z",
   "links": {
     "self": {
-      "href": "/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
+      "href": "https://api.example.org/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
     },
     "package": {
-      "href": "/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
+      "href": "https://api.example.org/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
     },
     "app": {
-      "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
+      "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
     },
     "assign_current_droplet": {
-      "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/droplets/current",
-      "method": "PUT"
+      "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/relationships/current_droplet",
+      "method": "PATCH"
     }
   }
 }
 <% end %>
 
-<% content_for :single_copied_pending_buildpack_droplet do %>
+<% content_for :single_copied_staging_buildpack_droplet do %>
 {
   "guid": "585bc3c1-3743-497d-88b0-403ad6b56d16",
-  "state": "PENDING",
+  "state": "COPYING",
   "error": null,
   "lifecycle": {
     "type": "buildpack",
     "data": {
-      "buildpack": null,
+      "buildpacks": [ "ruby_buildpack" ],
       "stack": null
     }
   },
@@ -76,20 +76,20 @@
   "result": null,
   "environment_variables": {},
   "created_at": "2016-03-28T23:39:34Z",
-  "updated_at": null,
+  "updated_at": "2016-06-08T16:41:26Z",
   "links": {
     "self": {
-      "href": "/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
+      "href": "https://api.example.org/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
     },
     "package": {
-      "href": "/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
+      "href": "https://api.example.org/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
     },
     "app": {
-      "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
+      "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
     },
     "assign_current_droplet": {
-      "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/droplets/current",
-      "method": "PUT"
+      "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/relationships/current_droplet",
+      "method": "PATCH"
     }
   }
 }
@@ -103,7 +103,7 @@
   "lifecycle": {
     "type": "buildpack",
     "data": {
-      "buildpack": null,
+      "buildpacks": [ "ruby_buildpack" ],
       "stack": null
     }
   },
@@ -115,11 +115,16 @@
       "rake": "bundle exec rake",
       "web": "bundle exec rackup config.ru -p $PORT"
     },
-    "hash": {
-      "type": "sha1",
-      "value": "0cd90dd63dd9f42db25340445d203fba25c69cf6"
+    "checksum": {
+      "type": "sha256",
+      "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },
-    "buildpack": "ruby 1.6.14",
+    "buildpacks": [
+      {
+        "name": "ruby_buildpack",
+        "detect_output": "ruby 1.6.14"
+      }
+    ],
     "stack": "cflinuxfs2"
   },
   "environment_variables": {
@@ -134,14 +139,14 @@
       "application_version": "d5985d64-c455-44d0-99a5-285b6521f84c",
       "application_name": "my_app",
       "application_uris": [
-        "my_app.example.com"
+        "my_app.example.org"
       ],
       "version": "d5985d64-c455-44d0-99a5-285b6521f84c",
       "name": "my_app",
       "space_name": "my_space",
       "space_id": "2f35885d-0c9d-4423-83ad-fd05066f8576",
       "uris": [
-        "my_app.example.com"
+        "my_app.example.org"
       ],
       "users": null
     },
@@ -152,17 +157,17 @@
   "updated_at": "2016-03-28T23:39:47Z",
   "links": {
     "self": {
-      "href": "/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
+      "href": "https://api.example.org/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
     },
     "package": {
-      "href": "/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
+      "href": "https://api.example.org/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
     },
     "app": {
-      "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
+      "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
     },
     "assign_current_droplet": {
-      "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/droplets/current",
-      "method": "PUT"
+      "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/relationships/current_droplet",
+      "method": "PATCH"
     }
   }
 }
@@ -174,10 +179,10 @@
     "total_results": 2,
     "total_pages": 1,
     "first": {
-      "href": "<%= base_url %>?page=1&per_page=50"
+      "href": "https://api.example.org<%= base_url %>?page=1&per_page=50"
     },
     "last": {
-      "href": "<%= base_url %>?page=1&per_page=50"
+      "href": "https://api.example.org<%= base_url %>?page=1&per_page=50"
     },
     "next": null,
     "previous": null
@@ -190,7 +195,7 @@
       "lifecycle": {
         "type": "buildpack",
         "data": {
-          "buildpack": null,
+          "buildpacks": [ "ruby_buildpack" ],
           "stack": null
         }
       },
@@ -201,11 +206,16 @@
         "process_types": {
           "redacted_message": "[PRIVATE DATA HIDDEN IN LISTS]"
         },
-        "hash": {
-          "type": "sha1",
-          "value": "0cd90dd63dd9f42db25340445d203fba25c69cf6"
+        "checksum": {
+          "type": "sha256",
+          "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         },
-        "buildpack": "ruby 1.6.14",
+        "buildpacks": [
+          {
+            "name": "ruby_buildpack",
+            "detect_output": "ruby 1.6.14"
+          }
+        ],
         "stack": "cflinuxfs2"
       },
       "environment_variables": {
@@ -215,17 +225,17 @@
       "updated_at": "2016-03-28T23:39:47Z",
       "links": {
         "self": {
-          "href": "/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
+          "href": "https://api.example.org/v3/droplets/585bc3c1-3743-497d-88b0-403ad6b56d16"
         },
         "package": {
-          "href": "/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
+          "href": "https://api.example.org/v3/packages/8222f76a-9e09-4360-b3aa-1ed329945e92"
         },
         "app": {
-          "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
+          "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
         },
         "assign_current_droplet": {
-          "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/droplets/current",
-          "method": "PUT"
+          "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/relationships/current_droplet",
+          "method": "PATCH"
         }
       }
     },
@@ -247,17 +257,17 @@
       "updated_at": "2016-03-17T21:41:32Z",
       "links": {
         "self": {
-          "href": "/v3/droplets/fdf3851c-def8-4de1-87f1-6d4543189e22"
+          "href": "https://api.example.org/v3/droplets/fdf3851c-def8-4de1-87f1-6d4543189e22"
         },
         "package": {
-          "href": "/v3/packages/c5725684-a02f-4e59-bc67-8f36ae944688"
+          "href": "https://api.example.org/v3/packages/c5725684-a02f-4e59-bc67-8f36ae944688"
         },
         "app": {
-          "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
+          "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396"
         },
         "assign_current_droplet": {
-          "href": "/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/droplets/current",
-          "method": "PUT"
+          "href": "https://api.example.org/v3/apps/7b34f1cf-7e73-428a-bb5a-8a17a8058396/relationships/current_droplet",
+          "method": "PATCH"
         }
       }
     }

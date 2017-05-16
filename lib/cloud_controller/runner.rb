@@ -2,8 +2,8 @@ require 'steno'
 require 'optparse'
 require 'i18n'
 require 'i18n/backend/fallbacks'
-require 'vcap/uaa_token_decoder'
-require 'vcap/uaa_verification_key'
+require 'cloud_controller/uaa/uaa_token_decoder'
+require 'cloud_controller/uaa/uaa_verification_keys'
 require 'cf_message_bus/message_bus'
 require 'loggregator_emitter'
 require 'loggregator'
@@ -162,7 +162,6 @@ module VCAP::CloudController
     end
 
     def setup_db
-      logger.info "db config #{@config[:db]}"
       db_logger = Steno.logger('cc.db')
       DB.load_models(@config[:db], db_logger)
     end
@@ -214,6 +213,7 @@ module VCAP::CloudController
       @periodic_updater ||= VCAP::CloudController::Metrics::PeriodicUpdater.new(
         ::VCAP::Component.varz.synchronize { ::VCAP::Component.varz[:start] }, # this can become Time.now.utc after we remove varz
         @log_counter,
+        Steno.logger('cc.api'),
         [
           VCAP::CloudController::Metrics::VarzUpdater.new,
           VCAP::CloudController::Metrics::StatsdUpdater.new(statsd_client)

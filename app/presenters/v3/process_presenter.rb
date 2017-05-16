@@ -13,7 +13,6 @@ module VCAP::CloudController
             instances:    process.instances,
             memory_in_mb: process.memory,
             disk_in_mb:   process.disk_quota,
-            ports:        VCAP::CloudController::Diego::Protocol::OpenProcessPorts.new(process).to_a,
             health_check: {
               type: process.health_check_type,
               data: {
@@ -33,12 +32,13 @@ module VCAP::CloudController
         end
 
         def build_links
+          url_builder = VCAP::CloudController::Presenters::ApiUrlBuilder.new
           {
-            self:  { href: "/v3/processes/#{process.guid}" },
-            scale: { href: "/v3/processes/#{process.guid}/scale", method: 'PUT', },
-            app:   { href: "/v3/apps/#{process.app_guid}" },
-            space: { href: "/v2/spaces/#{process.space_guid}" },
-            stats: { href: "/v3/processes/#{process.guid}/stats" }
+            self:  { href: url_builder.build_url(path: "/v3/processes/#{process.guid}") },
+            scale: { href: url_builder.build_url(path: "/v3/processes/#{process.guid}/scale"), method: 'PUT', },
+            app:   { href: url_builder.build_url(path: "/v3/apps/#{process.app_guid}") },
+            space: { href: url_builder.build_url(path: "/v2/spaces/#{process.space_guid}") },
+            stats: { href: url_builder.build_url(path: "/v3/processes/#{process.guid}/stats") }
           }
         end
       end

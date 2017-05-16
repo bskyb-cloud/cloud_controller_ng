@@ -5,17 +5,30 @@ module VCAP::CloudController
     class InvalidManagerRelation < CloudController::Errors::InvalidRelation; end
     class InvalidSpaceQuotaRelation < CloudController::Errors::InvalidRelation; end
     class UnauthorizedAccessToPrivateDomain < RuntimeError; end
-    class OrganizationAlreadySet < RuntimeError; end
 
     SPACE_NAME_REGEX = /\A[[:alnum:][:punct:][:print:]]+\Z/
+
+    plugin :many_through_many
+
+    many_to_one :isolation_segment_model,
+       primary_key: :guid,
+       key: :isolation_segment_guid
 
     define_user_group :developers, reciprocal: :spaces, before_add: :validate_developer
     define_user_group :managers, reciprocal: :managed_spaces, before_add: :validate_manager
     define_user_group :auditors, reciprocal: :audited_spaces, before_add: :validate_auditor
 
     many_to_one :organization, before_set: :validate_change_organization
-    one_to_many :apps
+
     one_to_many :app_models, primary_key: :guid, key: :space_guid
+
+    one_to_many :processes, class: 'VCAP::CloudController::App', dataset: -> { App.filter(app: app_models) }
+
+    many_through_many :apps, [
+      [:spaces, :id, :guid],
+      [:apps, :space_guid, :guid]
+    ], class: 'VCAP::CloudController::App', right_primary_key: :app_guid, conditions: { type: 'web' }
+
     one_to_many :events, primary_key: :guid, key: :space_guid
     one_to_many :service_instances
     one_to_many :managed_service_instances
@@ -43,6 +56,33 @@ module VCAP::CloudController
       spaces_map[:rows].each do |space|
         space.associations[:security_groups] += default_security_groups
         space.associations[:security_groups].uniq!
+      end
+    }
+
+    many_to_many :staging_security_groups,
+    class: 'VCAP::CloudController::SecurityGroup',
+    join_table: 'staging_security_groups_spaces',
+    left_key: :staging_space_id,
+    right_key: :staging_security_group_id,
+    dataset: -> {
+      SecurityGroup.left_join(:staging_security_groups_spaces, staging_security_group_id: :id).
+        where(Sequel.or(staging_security_groups_spaces__staging_space_id: id, security_groups__staging_default: true))
+    },
+    eager_loader: ->(spaces_map) {
+      space_ids = spaces_map[:id_map].keys
+      # Set all associations to nil so if no records are found, we don't do another query when somebody tries to load the association
+      spaces_map[:rows].each { |space| space.associations[:staging_security_groups] = [] }
+
+      default_security_groups = SecurityGroup.where(staging_default: true).all
+
+      StagingSecurityGroupsSpace.where(staging_space_id: space_ids).eager(:security_group).all do |security_group_space|
+        space = spaces_map[:id_map][security_group_space.staging_space_id].first
+        space.associations[:staging_security_groups] << security_group_space.security_group
+      end
+
+      spaces_map[:rows].each do |space|
+        space.associations[:staging_security_groups] += default_security_groups
+        space.associations[:staging_security_groups].uniq!
       end
     }
 
@@ -79,14 +119,15 @@ module VCAP::CloudController
 
     add_association_dependencies(
       default_users: :nullify,
-      apps: :destroy,
+      processes: :destroy,
       routes: :destroy,
       security_groups: :nullify,
+      staging_security_groups: :nullify,
     )
 
     export_attributes :name, :organization_guid, :space_quota_definition_guid, :allow_ssh
 
-    import_attributes :name, :organization_guid, :developer_guids, :allow_ssh,
+    import_attributes :name, :organization_guid, :developer_guids, :allow_ssh, :isolation_segment_guid,
       :manager_guids, :auditor_guids, :security_group_guids, :space_quota_definition_guid
 
     strip_attributes :name
@@ -120,6 +161,14 @@ module VCAP::CloudController
       if space_quota_definition && space_quota_definition.organization.guid != organization.guid
         errors.add(:space_quota_definition, :invalid_organization)
       end
+
+      if column_changed?(:isolation_segment_guid)
+        validate_isolation_segment(isolation_segment_model)
+      end
+    end
+
+    def validate_isolation_segment(isolation_segment_model)
+      validate_isolation_segment_set(isolation_segment_model) if isolation_segment_model
     end
 
     def validate_developer(user)
@@ -135,18 +184,16 @@ module VCAP::CloudController
     end
 
     def validate_change_organization(new_org)
-      raise OrganizationAlreadySet unless organization.nil? || organization.guid == new_org.guid
+      raise CloudController::Errors::ApiError.new_from_details('OrganizationAlreadySet') unless organization.nil? || organization.guid == new_org.guid
     end
 
     def self.user_visibility_filter(user)
       {
-        id: Space.dataset.join_table(:inner, :spaces_developers, space_id: :id, user_id: user.id).select(:spaces__id).union(
-          Space.dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)
-          ).union(
-            Space.dataset.join_table(:inner, :spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__id)
-          ).union(
-            Space.dataset.join_table(:inner, :organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__id)
-          ).select(:id)
+        spaces__id: dataset.join_table(:inner, :spaces_developers, space_id: :id, user_id: user.id).select(:spaces__id).
+          union(dataset.join_table(:inner, :spaces_managers, space_id: :id, user_id: user.id).select(:spaces__id)).
+          union(dataset.join_table(:inner, :spaces_auditors, space_id: :id, user_id: user.id).select(:spaces__id)).
+          union(dataset.join_table(:inner, :organizations_managers, organization_id: :organization_id, user_id: user.id).select(:spaces__id)).
+          select(:id)
       }
     end
 
@@ -187,17 +234,24 @@ module VCAP::CloudController
     end
 
     def running_task_memory
-      TaskModel.join(:apps_v3, id: :app_id).
-        where(state: TaskModel::RUNNING_STATE, apps_v3__space_guid: guid).
-        sum(:memory_in_mb) || 0
+      tasks_dataset.where(state: TaskModel::RUNNING_STATE).sum(:memory_in_mb) || 0
     end
 
     def started_app_memory
-      apps_dataset.where(state: 'STARTED').sum(Sequel.*(:memory, :instances)) || 0
+      processes_dataset.where(state: ProcessModel::STARTED).sum(Sequel.*(:memory, :instances)) || 0
     end
 
     def running_and_pending_tasks_count
       tasks_dataset.where(state: [TaskModel::PENDING_STATE, TaskModel::RUNNING_STATE]).count
+    end
+
+    def validate_isolation_segment_set(isolation_segment_model)
+      isolation_segment_guids = organization.isolation_segment_models.map(&:guid)
+      unless isolation_segment_guids.include?(isolation_segment_model.guid)
+        raise CloudController::Errors::ApiError.new_from_details('UnableToPerform',
+                                                                 'Adding the Isolation Segment to the Space',
+                                                                 "Only Isolation Segments in the Organization's allowed list can be used.")
+      end
     end
   end
 end

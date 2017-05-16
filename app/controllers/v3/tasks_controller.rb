@@ -1,11 +1,11 @@
-require 'queries/app_fetcher'
-require 'queries/task_list_fetcher'
-require 'queries/task_create_fetcher'
-require 'queries/task_fetcher'
+require 'fetchers/app_fetcher'
+require 'fetchers/task_list_fetcher'
+require 'fetchers/task_create_fetcher'
+require 'fetchers/task_fetcher'
 require 'actions/task_create'
 require 'actions/task_cancel'
-require 'messages/task_create_message'
-require 'messages/tasks_list_message'
+require 'messages/tasks/task_create_message'
+require 'messages/tasks/tasks_list_message'
 require 'presenters/v3/task_presenter'
 require 'controllers/v3/mixins/sub_resource'
 
@@ -16,18 +16,26 @@ class TasksController < ApplicationController
     message = TasksListMessage.from_params(subresource_query_params)
     invalid_param!(message.errors.full_messages) unless message.valid?
 
+    show_secrets = false
+
     if app_nested?
       app, dataset = TaskListFetcher.new.fetch_for_app(message: message)
       app_not_found! unless app && can_read?(app.space.guid, app.organization.guid)
+      show_secrets = can_see_secrets?(app.space)
     else
-      dataset = if roles.admin? || roles.admin_read_only?
+      dataset = if can_read_globally?
                   TaskListFetcher.new.fetch_all(message: message)
                 else
                   TaskListFetcher.new.fetch_for_spaces(message: message, space_guids: readable_space_guids)
                 end
     end
 
-    render :ok, json: Presenters::V3::PaginatedListPresenter.new(dataset, base_url(resource: 'tasks'), message)
+    render :ok, json: Presenters::V3::PaginatedListPresenter.new(
+      dataset:      dataset,
+      path:     base_url(resource: 'tasks'),
+      message:      message,
+      show_secrets: show_secrets
+    )
   end
 
   def create
@@ -42,7 +50,7 @@ class TasksController < ApplicationController
     unauthorized! unless can_write?(space.guid)
     droplet_not_found! if message.requested?(:droplet_guid) && droplet.nil?
 
-    task = TaskCreate.new(configuration).create(app, message, current_user.guid, current_user_email, droplet: droplet)
+    task = TaskCreate.new(configuration).create(app, message, user_audit_info, droplet: droplet)
 
     render status: :accepted, json: Presenters::V3::TaskPresenter.new(task)
   rescue TaskCreate::InvalidTask, TaskCreate::TaskCreateError => e
@@ -54,8 +62,7 @@ class TasksController < ApplicationController
     task_not_found! unless task && can_read?(space.guid, org.guid)
 
     unauthorized! unless can_write?(space.guid)
-
-    TaskCancel.new.cancel(task: task, user: current_user, email: current_user_email)
+    TaskCancel.new(configuration).cancel(task: task, user_audit_info: user_audit_info)
 
     render status: :accepted, json: Presenters::V3::TaskPresenter.new(task.reload)
   rescue TaskCancel::InvalidCancel => e

@@ -3,11 +3,12 @@ require 'spec_helper'
 RSpec.describe 'Route Mappings' do
   let(:space) { VCAP::CloudController::Space.make }
   let(:app_model) { VCAP::CloudController::AppModel.make(space: space) }
-  let(:process) { VCAP::CloudController::App.make(:process, space: space, app: app_model, type: 'worker', ports: [8888]) }
+  let(:process) { VCAP::CloudController::App.make(:process, app: app_model, type: 'worker', ports: [8080]) }
   let(:route) { VCAP::CloudController::Route.make(space: space) }
   let(:developer) { make_developer_for_space(space) }
+  let(:user_name) { 'roto' }
   let(:developer_headers) do
-    headers_for(developer)
+    headers_for(developer, user_name: user_name)
   end
 
   before do
@@ -17,7 +18,6 @@ RSpec.describe 'Route Mappings' do
   describe 'POST /v3/route_mappings' do
     it 'creates a route mapping for a specific process on an app on a specific port' do
       body = {
-        app_port:      8888,
         relationships: {
           app:     { guid: app_model.guid },
           route:   { guid: route.guid },
@@ -31,15 +31,14 @@ RSpec.describe 'Route Mappings' do
 
       expected_response = {
         'guid'       => route_mapping.guid,
-        'app_port'   => 8888,
         'created_at' => iso8601,
-        'updated_at' => nil,
+        'updated_at' => iso8601,
 
         'links'      => {
-          'self'    => { 'href' => "/v3/route_mappings/#{route_mapping.guid}" },
-          'app'     => { 'href' => "/v3/apps/#{app_model.guid}" },
-          'route'   => { 'href' => "/v2/routes/#{route.guid}" },
-          'process' => { 'href' => "/v3/apps/#{app_model.guid}/processes/worker" }
+          'self'    => { 'href' => "#{link_prefix}/v3/route_mappings/#{route_mapping.guid}" },
+          'app'     => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
+          'route'   => { 'href' => "#{link_prefix}/v2/routes/#{route.guid}" },
+          'process' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/processes/worker" }
         }
       }
 
@@ -55,21 +54,22 @@ RSpec.describe 'Route Mappings' do
       expect(route_mapping.app_guid).to eq(app_model.guid)
       expect(route_mapping.route_guid).to eq(route.guid)
       expect(route_mapping.process_type).to eq('worker')
-      expect(route_mapping.app_port).to eq(8888)
+      expect(route_mapping.app_port).to eq(8080)
 
       # verify audit event
       event = VCAP::CloudController::Event.last
       expect(event.values).to include({
         type:              'audit.app.map-route',
         actee:             app_model.guid,
-        actee_type:        'v3-app',
+        actee_type:        'app',
         actee_name:        app_model.name,
         actor:             developer.guid,
         actor_type:        'user',
+        actor_username:    user_name,
         space_guid:        space.guid,
         metadata:          {
                              route_guid:         route.guid,
-                             app_port:           8888,
+                             app_port:           8080,
                              route_mapping_guid: route_mapping.guid,
                              process_type:       'worker'
                            }.to_json,
@@ -91,36 +91,34 @@ RSpec.describe 'Route Mappings' do
         'pagination' => {
           'total_results' => 3,
           'total_pages'   => 2,
-          'first'         => { 'href' => '/v3/route_mappings?page=1&per_page=2' },
-          'last'          => { 'href' => '/v3/route_mappings?page=2&per_page=2' },
-          'next'          => { 'href' => '/v3/route_mappings?page=2&per_page=2' },
+          'first'         => { 'href' => "#{link_prefix}/v3/route_mappings?page=1&per_page=2" },
+          'last'          => { 'href' => "#{link_prefix}/v3/route_mappings?page=2&per_page=2" },
+          'next'          => { 'href' => "#{link_prefix}/v3/route_mappings?page=2&per_page=2" },
           'previous'      => nil
         },
         'resources' => [
           {
             'guid'       => route_mapping1.guid,
-            'app_port'   => 8080,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
 
             'links'      => {
-              'self'    => { 'href' => "/v3/route_mappings/#{route_mapping1.guid}" },
-              'app'     => { 'href' => "/v3/apps/#{app_model.guid}" },
-              'route'   => { 'href' => "/v2/routes/#{route.guid}" },
-              'process' => { 'href' => "/v3/apps/#{app_model.guid}/processes/web" }
+              'self'    => { 'href' => "#{link_prefix}/v3/route_mappings/#{route_mapping1.guid}" },
+              'app'     => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
+              'route'   => { 'href' => "#{link_prefix}/v2/routes/#{route.guid}" },
+              'process' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/processes/web" }
             }
           },
           {
             'guid'       => route_mapping2.guid,
-            'app_port'   => 8080,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
 
             'links'      => {
-              'self'    => { 'href' => "/v3/route_mappings/#{route_mapping2.guid}" },
-              'app'     => { 'href' => "/v3/apps/#{app_model.guid}" },
-              'route'   => { 'href' => "/v2/routes/#{route.guid}" },
-              'process' => { 'href' => "/v3/apps/#{app_model.guid}/processes/worker" }
+              'self'    => { 'href' => "#{link_prefix}/v3/route_mappings/#{route_mapping2.guid}" },
+              'app'     => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
+              'route'   => { 'href' => "#{link_prefix}/v2/routes/#{route.guid}" },
+              'process' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/processes/worker" }
             }
           }
         ]
@@ -144,8 +142,8 @@ RSpec.describe 'Route Mappings' do
           expected_pagination = {
             'total_results' => 4,
             'total_pages'   => 1,
-            'first'         => { 'href' => "/v3/route_mappings?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
-            'last'          => { 'href' => "/v3/route_mappings?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
+            'first'         => { 'href' => "#{link_prefix}/v3/route_mappings?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
+            'last'          => { 'href' => "#{link_prefix}/v3/route_mappings?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
             'next'          => nil,
             'previous'      => nil
           }
@@ -170,8 +168,8 @@ RSpec.describe 'Route Mappings' do
           expected_pagination = {
             'total_results' => 4,
             'total_pages'   => 1,
-            'first'         => { 'href' => "/v3/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
-            'last'          => { 'href' => "/v3/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
+            'first'         => { 'href' => "#{link_prefix}/v3/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
+            'last'          => { 'href' => "#{link_prefix}/v3/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
             'next'          => nil,
             'previous'      => nil
           }
@@ -189,22 +187,21 @@ RSpec.describe 'Route Mappings' do
   end
 
   describe 'GET /v3/route_mappings/:route_mapping_guid' do
-    let(:route_mapping) { VCAP::CloudController::RouteMappingModel.make(app: app_model, route: route, process_type: 'worker') }
+    let(:route_mapping) { VCAP::CloudController::RouteMappingModel.make(app: app_model, route: route, process_type: 'worker', app_port: 8080) }
 
     it 'retrieves the requests route mapping' do
       get "/v3/route_mappings/#{route_mapping.guid}", nil, developer_headers
 
       expected_response = {
         'guid'       => route_mapping.guid,
-        'app_port'   => 8080,
         'created_at' => iso8601,
-        'updated_at' => nil,
+        'updated_at' => iso8601,
 
         'links'      => {
-          'self'    => { 'href' => "/v3/route_mappings/#{route_mapping.guid}" },
-          'app'     => { 'href' => "/v3/apps/#{app_model.guid}" },
-          'route'   => { 'href' => "/v2/routes/#{route.guid}" },
-          'process' => { 'href' => "/v3/apps/#{app_model.guid}/processes/#{process.type}" }
+          'self'    => { 'href' => "#{link_prefix}/v3/route_mappings/#{route_mapping.guid}" },
+          'app'     => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
+          'route'   => { 'href' => "#{link_prefix}/v2/routes/#{route.guid}" },
+          'process' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/processes/#{process.type}" }
         }
       }
 
@@ -231,10 +228,11 @@ RSpec.describe 'Route Mappings' do
       expect(event.values).to include({
         type:              'audit.app.unmap-route',
         actee:             app_model.guid,
-        actee_type:        'v3-app',
+        actee_type:        'app',
         actee_name:        app_model.name,
         actor:             developer.guid,
         actor_type:        'user',
+        actor_username:    user_name,
         space_guid:        space.guid,
         metadata:          {
                              route_guid:         route.guid,
@@ -258,36 +256,34 @@ RSpec.describe 'Route Mappings' do
         'pagination' => {
           'total_results' => 3,
           'total_pages'   => 2,
-          'first'         => { 'href' => "/v3/apps/#{app_model.guid}/route_mappings?page=1&per_page=2" },
-          'last'          => { 'href' => "/v3/apps/#{app_model.guid}/route_mappings?page=2&per_page=2" },
-          'next'          => { 'href' => "/v3/apps/#{app_model.guid}/route_mappings?page=2&per_page=2" },
+          'first'         => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/route_mappings?page=1&per_page=2" },
+          'last'          => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/route_mappings?page=2&per_page=2" },
+          'next'          => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/route_mappings?page=2&per_page=2" },
           'previous'      => nil
         },
         'resources' => [
           {
             'guid'       => route_mapping1.guid,
-            'app_port'   => 8080,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
 
             'links'      => {
-              'self'    => { 'href' => "/v3/route_mappings/#{route_mapping1.guid}" },
-              'app'     => { 'href' => "/v3/apps/#{app_model.guid}" },
-              'route'   => { 'href' => "/v2/routes/#{route.guid}" },
-              'process' => { 'href' => "/v3/apps/#{app_model.guid}/processes/web" }
+              'self'    => { 'href' => "#{link_prefix}/v3/route_mappings/#{route_mapping1.guid}" },
+              'app'     => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
+              'route'   => { 'href' => "#{link_prefix}/v2/routes/#{route.guid}" },
+              'process' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/processes/web" }
             }
           },
           {
             'guid'       => route_mapping2.guid,
-            'app_port'   => 8080,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
 
             'links'      => {
-              'self'    => { 'href' => "/v3/route_mappings/#{route_mapping2.guid}" },
-              'app'     => { 'href' => "/v3/apps/#{app_model.guid}" },
-              'route'   => { 'href' => "/v2/routes/#{route.guid}" },
-              'process' => { 'href' => "/v3/apps/#{app_model.guid}/processes/worker" }
+              'self'    => { 'href' => "#{link_prefix}/v3/route_mappings/#{route_mapping2.guid}" },
+              'app'     => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
+              'route'   => { 'href' => "#{link_prefix}/v2/routes/#{route.guid}" },
+              'process' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/processes/worker" }
             }
           }
         ]
@@ -312,8 +308,8 @@ RSpec.describe 'Route Mappings' do
           expected_pagination = {
             'total_results' => 4,
             'total_pages'   => 1,
-            'first'         => { 'href' => "/v3/apps/#{app_model.guid}/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
-            'last'          => { 'href' => "/v3/apps/#{app_model.guid}/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
+            'first'         => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
+            'last'          => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/route_mappings?page=1&per_page=50&route_guids=#{route.guid}%2C#{route2.guid}" },
             'next'          => nil,
             'previous'      => nil
           }

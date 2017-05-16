@@ -4,11 +4,16 @@ module VCAP::CloudController
   module Diego
     RSpec.describe Runner do
       let(:messenger) { instance_double(Messenger) }
-      let(:app) { AppFactory.make(state: 'STARTED') }
+      let(:process) { AppFactory.make(state: 'STARTED') }
       let(:protocol) { instance_double(Diego::Protocol, desire_app_message: {}) }
       let(:default_health_check_timeout) { 9999 }
+      let(:config) do
+        {
+          default_health_check_timeout: default_health_check_timeout,
+        }
+      end
 
-      subject(:runner) { Runner.new(app, default_health_check_timeout) }
+      subject(:runner) { Runner.new(process, config) }
 
       before do
         runner.messenger = messenger
@@ -18,17 +23,28 @@ module VCAP::CloudController
       describe '#scale' do
         context 'when the app is started' do
           it 'desires an app, relying on its state to convey the change' do
-            expect(messenger).to receive(:send_desire_request).with(default_health_check_timeout)
+            expect(messenger).to receive(:send_desire_request).with(process, config)
             runner.scale
           end
         end
 
         context 'when the app has not been started' do
-          let(:app) { AppFactory.make(state: 'STOPPED') }
+          let(:process) { AppFactory.make(state: 'STOPPED') }
 
           it 'does not desire an app and raises an exception' do
             expect(messenger).to_not receive(:send_desire_request)
             expect { runner.scale }.to raise_error(CloudController::Errors::ApiError, /App not started/)
+          end
+        end
+
+        context 'when the app has no droplet' do
+          before do
+            process.app.update(droplet_guid: nil)
+          end
+
+          it 'does not send the desired LRP request' do
+            expect(messenger).to_not receive(:send_desire_request)
+            expect { runner.scale }.to_not raise_error
           end
         end
       end
@@ -39,7 +55,7 @@ module VCAP::CloudController
         end
 
         it 'desires an app, relying on its state to convey the change' do
-          expect(messenger).to have_received(:send_desire_request).with(default_health_check_timeout)
+          expect(messenger).to have_received(:send_desire_request).with(process, config)
         end
       end
 
@@ -63,20 +79,25 @@ module VCAP::CloudController
         end
 
         it 'stops the application instance with the specified index' do
-          expect(messenger).to have_received(:send_stop_index_request).with(index)
+          expect(messenger).to have_received(:send_stop_index_request).with(process, index)
         end
       end
 
       describe '#update_routes' do
         context 'when the app is started' do
           it 'desires an app, relying on its state to convey the change' do
-            expect(messenger).to receive(:send_desire_request).with(default_health_check_timeout)
+            expect(messenger).to receive(:send_desire_request).with(process, config)
             runner.update_routes
           end
         end
 
         context 'when an app is in staging status' do
-          let(:app) { AppFactory.make(state: 'STARTED', package_state: 'PENDING', staging_task_id: 'some-id') }
+          let(:process) { AppFactory.make(state: 'STARTED') }
+
+          before do
+            DropletModel.make(app: process.app, package: process.latest_package, state: DropletModel::STAGING_STATE)
+            process.reload
+          end
 
           it 'should not update routes' do
             allow(messenger).to receive(:send_desire_request)
@@ -88,7 +109,7 @@ module VCAP::CloudController
         end
 
         context 'when the app has not been started' do
-          let(:app) { AppFactory.make(state: 'STOPPED') }
+          let(:process) { AppFactory.make(state: 'STOPPED') }
 
           it 'does not desire an app and raises an exception' do
             expect(messenger).to_not receive(:send_desire_request)
@@ -99,12 +120,12 @@ module VCAP::CloudController
 
       describe '#desire_app_message' do
         before do
-          expect(Protocol).to receive(:new).with(app).and_return(protocol)
+          expect(Protocol).to receive(:new).and_return(protocol)
         end
 
         it "gets the procotol's desire_app_message" do
           expect(runner.desire_app_message).to eq({})
-          expect(protocol).to have_received(:desire_app_message).with(default_health_check_timeout)
+          expect(protocol).to have_received(:desire_app_message).with(process, default_health_check_timeout)
         end
       end
 
@@ -126,7 +147,7 @@ module VCAP::CloudController
         it 'creates a Diego::Messenger if not set' do
           runner.messenger = nil
           expected_messenger = double
-          allow(Diego::Messenger).to receive(:new).with(app).and_return(expected_messenger)
+          allow(Diego::Messenger).to receive(:new).and_return(expected_messenger)
           expect(runner.messenger).to eq(expected_messenger)
         end
       end

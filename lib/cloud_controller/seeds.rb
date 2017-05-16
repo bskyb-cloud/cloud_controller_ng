@@ -9,6 +9,19 @@ module VCAP::CloudController
         create_seed_domains(config, system_org)
         create_seed_lockings
         create_seed_environment_variable_groups
+        create_seed_shared_isolation_segment(config)
+      end
+
+      def create_seed_shared_isolation_segment(config)
+        shared_isolation_segment_model = IsolationSegmentModel.first(guid: IsolationSegmentModel::SHARED_ISOLATION_SEGMENT_GUID)
+
+        if shared_isolation_segment_model
+          if !shared_isolation_segment_model.name.eql?(config[:shared_isolation_segment_name])
+            shared_isolation_segment_model.update(name: config[:shared_isolation_segment_name])
+          end
+        else
+          IsolationSegmentModel.create(name: config[:shared_isolation_segment_name], guid: IsolationSegmentModel::SHARED_ISOLATION_SEGMENT_GUID)
+        end
       end
 
       def create_seed_quota_definitions(config)
@@ -58,22 +71,22 @@ module VCAP::CloudController
 
         domains.each do |domain|
           domain_name = domain['name']
-          router_group_guid = nil
 
-          if domain.key?('router_group_name')
-            router_group_name = domain['router_group_name']
-            router_group_guid = routing_api_client.router_group_guid(router_group_name)
-            raise "Unknown router_group_name specified: #{router_group_name}" if router_group_guid.nil?
-          end
+          router_group_guid = find_routing_guid(domain)
 
-          shared_domain = SharedDomain.find_or_create(domain_name, router_group_guid)
-
-          if domain_name == system_domain
-            shared_domain.save
-          end
+          SharedDomain.find_or_create(domain_name, router_group_guid)
         end
 
-        unless domain_overlap(domains, system_domain)
+        if CloudController::DomainHelper.is_sub_domain?(domain: system_domain, test_domains: domains.map { |domain_hash| domain_hash['name'] })
+          Config.config[:system_hostnames].each do |hostnames|
+            domains.each do |app_domain|
+              raise 'App domain cannot overlap with reserved system hostnames' if hostnames + '.' + system_domain == app_domain['name']
+            end
+          end
+
+          router_group_guid = find_routing_guid({ 'name' => system_domain })
+          SharedDomain.find_or_create(system_domain, router_group_guid)
+        else
           raise 'A system_domain_organization must be provided if the system_domain is not shared with (in the list of) app_domains' unless system_org
 
           domain = Domain.find(name: system_domain)
@@ -85,6 +98,15 @@ module VCAP::CloudController
           else
             PrivateDomain.create({ owning_organization: system_org, name: system_domain })
           end
+        end
+      end
+
+      def find_routing_guid(domain)
+        if domain.key?('router_group_name')
+          router_group_name = domain['router_group_name']
+          router_group_guid = routing_api_client.router_group_guid(router_group_name)
+          raise "Unknown router_group_name specified: #{router_group_name}" if router_group_guid.nil?
+          router_group_guid
         end
       end
 
@@ -108,6 +130,8 @@ module VCAP::CloudController
 
       def create_seed_lockings
         Locking.find_or_create(name: 'buildpacks')
+        Locking.find_or_create(name: 'clock')
+        Locking.find_or_create(name: 'diego-sync')
       end
 
       def create_seed_environment_variable_groups

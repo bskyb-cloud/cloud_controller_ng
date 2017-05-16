@@ -3,10 +3,9 @@ require 'actions/process_create'
 
 module VCAP::CloudController
   RSpec.describe ProcessCreate do
-    subject(:process_create) { described_class.new(user_guid, user_email) }
+    subject(:process_create) { described_class.new(user_audit_info) }
     let(:app) { AppModel.make }
-    let(:user_guid) { 'user-guid' }
-    let(:user_email) { 'user@example.com' }
+    let(:user_audit_info) { instance_double(UserAuditInfo).as_null_object }
 
     describe '#create' do
       let(:message) do
@@ -59,6 +58,11 @@ module VCAP::CloudController
           expect(process.ports).to eq(nil)
           expect(process.diego).to be_truthy
         end
+
+        it 'sets process guid to the app guid' do
+          process = process_create.create(app, message)
+          expect(process.guid).to eq(app.guid)
+        end
       end
 
       describe 'default values for non-web processes' do
@@ -68,6 +72,7 @@ module VCAP::CloudController
             command: 'gogogadget'
           }
         end
+
         it '0 instances, process health_check_type, nil ports' do
           process = process_create.create(app, message)
 

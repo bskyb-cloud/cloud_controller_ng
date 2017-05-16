@@ -19,58 +19,66 @@ module CloudController::Presenters::V2
       let(:space) { VCAP::CloudController::Space.make }
       let(:stack) { VCAP::CloudController::Stack.make }
       let(:app) do
-        VCAP::CloudController::AppFactory.make(name: 'utako',
-                                               space: space,
-                                               stack: stack,
-                                               environment_json: { 'UNICORNS': 'RAINBOWS' },
-                                               buildpack: buildpack,
-                                               detected_buildpack: 'detected buildpack',
-                                               detected_buildpack_guid: 'i am a buildpack guid',
-                                               memory: 1024,
-                                               disk_quota: 1024,
-                                               state: 'STOPPED',
-                                               command: 'start',
-                                               staging_task_id: 'im a staging task id',
-                                               staging_failed_description: 'because',
-                                               enable_ssh: true,
-                                               diego: diego,
-                                              )
+        VCAP::CloudController::AppFactory.make(
+          name: 'utako',
+          space: space,
+          stack: stack,
+          environment_json: { 'UNICORNS': 'RAINBOWS' },
+          memory: 1024,
+          disk_quota: 1024,
+          state: 'STOPPED',
+          command: 'start',
+          enable_ssh: true,
+          diego: diego,
+        )
       end
       let(:diego) { true }
       let(:buildpack) { 'https://github.com/custombuildpack' }
 
+      before do
+        app.app.lifecycle_data.update(
+          buildpack: buildpack
+        )
+        app.current_droplet.update(
+          buildpack_receipt_detect_output: 'detected buildpack',
+          buildpack_receipt_buildpack_guid: 'i am a buildpack guid',
+        )
+        VCAP::CloudController::DropletModel.make(app: app.app, package: app.latest_package, error_description: 'because')
+      end
+
       it 'returns the app entity and associated urls' do
         expected_entity_hash = {
-          'name'                        => 'utako',
-          'production'                  => anything,
-          'space_guid'                  => space.guid,
-          'stack_guid'                  => stack.guid,
-          'buildpack'                   => 'https://github.com/custombuildpack',
-          'detected_buildpack'          => 'detected buildpack',
-          'detected_buildpack_guid'     => 'i am a buildpack guid',
-          'environment_json'            => { 'redacted_message' => '[PRIVATE DATA HIDDEN]' },
-          'memory'                      => 1024,
-          'instances'                   => 1,
-          'disk_quota'                  => 1024,
-          'state'                       => 'STOPPED',
-          'version'                     => app.version,
-          'command'                     => 'start',
-          'console'                     => anything,
-          'debug'                       => anything,
-          'staging_task_id'             => 'im a staging task id',
-          'package_state'               => 'PENDING',
-          'health_check_type'           => 'port',
-          'health_check_timeout'        => nil,
-          'staging_failed_reason'       => anything,
-          'staging_failed_description'  => 'because',
-          'diego'                       => true,
-          'docker_image'                => anything,
-          'package_updated_at'          => anything,
-          'detected_start_command'      => anything,
-          'enable_ssh'                  => true,
-          'docker_credentials_json'     => anything,
-          'ports'                       => [],
-          'relationship_key'            => 'relationship_value'
+          'name' => 'utako',
+          'production' => anything,
+          'space_guid' => space.guid,
+          'stack_guid' => stack.guid,
+          'buildpack' => 'https://github.com/custombuildpack',
+          'detected_buildpack' => 'detected buildpack',
+          'detected_buildpack_guid' => 'i am a buildpack guid',
+          'environment_json' => { 'redacted_message' => '[PRIVATE DATA HIDDEN]' },
+          'memory' => 1024,
+          'instances' => 1,
+          'disk_quota' => 1024,
+          'state' => 'STOPPED',
+          'version' => app.version,
+          'command' => 'start',
+          'console' => anything,
+          'debug' => anything,
+          'staging_task_id' => app.latest_droplet.guid,
+          'package_state' => 'PENDING',
+          'health_check_type' => 'port',
+          'health_check_timeout' => nil,
+          'health_check_http_endpoint' => nil,
+          'staging_failed_reason' => anything,
+          'staging_failed_description' => 'because',
+          'diego' => true,
+          'docker_image' => anything,
+          'package_updated_at' => anything,
+          'detected_start_command' => anything,
+          'enable_ssh' => true,
+          'docker_credentials_json' => anything,
+          'ports' => [8080],
+          'relationship_key' => 'relationship_value'
         }
 
         actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)
@@ -79,7 +87,24 @@ module CloudController::Presenters::V2
         expect(relations_presenter).to have_received(:to_hash).with(controller, app, opts, depth, parents, orphans)
       end
 
-      context 'buildpacks' do
+      describe 'nil associated objects' do
+        context 'when an associated object is not present' do
+          before do
+            parent_app = app.app
+            app.destroy
+            parent_app.packages.map(&:destroy)
+            parent_app.droplets.map(&:destroy)
+            parent_app.destroy
+          end
+
+          it 'returns nil' do
+            actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)
+            expect(actual_entity_hash).to be_nil
+          end
+        end
+      end
+
+      describe 'buildpacks' do
         context 'with a custom buildpack' do
           it 'displays the correct url' do
             actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)
@@ -111,29 +136,21 @@ module CloudController::Presenters::V2
         end
       end
 
-      context 'when ports are empty' do
-        context 'when diego is false' do
-          let(:diego) { false }
-
-          it 'displays ports as nil' do
-            actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)
-
-            expect(actual_entity_hash['ports']).to be_nil
-          end
+      describe 'ports' do
+        before do
+          allow_any_instance_of(VCAP::CloudController::Diego::Protocol::OpenProcessPorts).to receive(:to_a).and_return('expected-ports')
         end
 
-        context 'when diego is true' do
-          it 'displays ports as []' do
-            actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)
+        it 'delegates to OpenProcessPorts' do
+          actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)
 
-            expect(actual_entity_hash['ports']).to eq []
-          end
+          expect(actual_entity_hash['ports']).to eq('expected-ports')
         end
       end
 
       context 'redacting' do
         context 'when the user is an admin' do
-          before { allow(VCAP::CloudController::SecurityContext).to receive(:admin?).and_return(true) }
+          before { set_current_user_as_admin }
 
           it 'only redacts the docker credentials' do
             actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)
@@ -144,7 +161,7 @@ module CloudController::Presenters::V2
         end
 
         context 'when the user is an admin-read-only' do
-          before { allow(VCAP::CloudController::SecurityContext).to receive(:admin_read_only?).and_return(true) }
+          before { set_current_user_as_admin_read_only }
 
           it 'only redacts the docker credentials' do
             actual_entity_hash = app_presenter.entity_hash(controller, app, opts, depth, parents, orphans)

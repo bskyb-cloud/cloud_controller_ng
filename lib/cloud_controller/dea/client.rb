@@ -222,7 +222,6 @@ module VCAP::CloudController
           return unless app.staged?
           message = dea_update_message(app)
           dea_publish_update(message)
-          app.routes_changed = false
         end
 
         def find_stats(app)
@@ -267,7 +266,8 @@ module VCAP::CloudController
             connection = @http_client.post_async("#{url}/v1/apps", header: { 'Content-Type' => 'application/json' }, body: MultiJson.dump(message))
             return lambda do
               begin
-                connection.pop
+                conn = connection.pop
+                return conn.status
               rescue => e
                 logger.warn 'start failed', dea_id: dea_id, url: url, error: e.to_s
               end

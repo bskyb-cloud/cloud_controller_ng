@@ -1,11 +1,14 @@
+require:
+- ./spec/linters/migration/add_constraint_name.rb
+
 AllCops:
-  TargetRubyVersion: 2.2
+  TargetRubyVersion: 2.3
   Include:
     - '**/Gemfile'
     - '**/Rakefile'
   Exclude:
     - vendor/**/*
-    - db/migrations/**/*
+    - lib/diego/bbs/models/**/*
 
 Lint/AmbiguousRegexpLiteral:
   Enabled: false
@@ -83,6 +86,9 @@ Style/EachWithObject:
 Style/FormatString:
   EnforcedStyle: sprintf
 
+Style/FrozenStringLiteralComment:
+  Enabled: false
+
 Style/GuardClause:
   Enabled: false
 
@@ -98,10 +104,22 @@ Style/IndentHash:
 Style/Lambda:
   Enabled: false
 
+Style/MultilineArrayBraceLayout:
+  Enabled: false
+
 Style/MultilineBlockChain:
   Enabled: false
 
 Style/MultilineBlockLayout:
+  Enabled: false
+
+Style/MultilineHashBraceLayout:
+  Enabled: false
+
+Style/MultilineMethodCallBraceLayout:
+  Enabled: false
+
+Style/MultilineMethodDefinitionBraceLayout:
   Enabled: false
 
 Style/MultilineOperationIndentation:
@@ -111,6 +129,9 @@ Style/NegatedIf:
   Enabled: false
 
 Style/Next:
+  Enabled: false
+
+Style/NumericLiteralPrefix:
   Enabled: false
 
 Style/NumericLiterals:

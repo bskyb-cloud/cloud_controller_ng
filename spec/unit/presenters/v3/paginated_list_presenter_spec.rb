@@ -3,7 +3,7 @@ require 'presenters/v3/paginated_list_presenter'
 
 module VCAP::CloudController::Presenters::V3
   RSpec.describe PaginatedListPresenter do
-    subject(:presenter) { described_class.new(dataset, base_url, message) }
+    subject(:presenter) { described_class.new(dataset: dataset, path: path, message: message) }
     let(:set) { [Monkey.new('bobo'), Monkey.new('george')] }
     let(:dataset) { double('sequel dataset') }
     let(:message) { double('message', pagination_options: pagination_options, to_param_hash: {}) }
@@ -33,15 +33,15 @@ module VCAP::CloudController::Presenters::V3
     end
 
     describe '#to_hash' do
-      let(:base_url) { '/some/path' }
+      let(:path) { '/some/path' }
 
-      it 'returns a paginated response for the set, with base_url only used in pagination' do
+      it 'returns a paginated response for the set, with path only used in pagination' do
         expect(presenter.to_hash).to eq({
           pagination: {
             total_results: 2,
             total_pages:   1,
-            first:         { href: '/some/path?order_by=%2Bmonkeys&page=1&per_page=50' },
-            last:          { href: '/some/path?order_by=%2Bmonkeys&page=1&per_page=50' },
+            first:         { href: "#{link_prefix}/some/path?order_by=%2Bmonkeys&page=1&per_page=50" },
+            last:          { href: "#{link_prefix}/some/path?order_by=%2Bmonkeys&page=1&per_page=50" },
             next:          nil,
             previous:      nil
           },
@@ -57,6 +57,17 @@ module VCAP::CloudController::Presenters::V3
         presenter.to_hash
         expect(MonkeyPresenter).to have_received(:new).
           with(anything, show_secrets: false, censored_message: BasePresenter::REDACTED_LIST_MESSAGE).exactly(set.count).times
+      end
+
+      context 'when show_secrets is true' do
+        subject(:presenter) { described_class.new(dataset: dataset, path: path, message: message, show_secrets: true) }
+
+        it 'sends true for show_secrets' do
+          allow(MonkeyPresenter).to receive(:new).and_call_original
+          presenter.to_hash
+          expect(MonkeyPresenter).to have_received(:new).
+            with(anything, show_secrets: true, censored_message: BasePresenter::REDACTED_LIST_MESSAGE).exactly(set.count).times
+        end
       end
     end
   end

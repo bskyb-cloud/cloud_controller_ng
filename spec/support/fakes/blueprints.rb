@@ -25,23 +25,28 @@ Sham.define do
   unique_id           { |index| "unique-id-#{index}" }
   status              { |_| %w(active suspended cancelled).sample(1).first }
   error_message       { |index| "error-message-#{index}" }
+  sequence_id         { |index| index }
 end
 
 module VCAP::CloudController
-  AppModel.blueprint do
-    guid       { Sham.guid }
-    name       { Sham.name }
-    space      { Space.make }
+  IsolationSegmentModel.blueprint do
+    guid { Sham.guid }
+    name { Sham.name }
   end
 
-  AppModel.blueprint(:buildpack) do
-    guid       { Sham.guid }
+  AppModel.blueprint do
     name       { Sham.name }
-    space { Space.make }
+    space      { Space.make }
     buildpack_lifecycle_data { BuildpackLifecycleDataModel.make(app: object.save) }
   end
 
   AppModel.blueprint(:docker) do
+    name { Sham.name }
+    space { Space.make }
+    buildpack_lifecycle_data { nil.tap { |_| object.save } }
+  end
+
+  AppModel.blueprint(:buildpack) do
   end
 
   PackageModel.blueprint do
@@ -53,10 +58,10 @@ module VCAP::CloudController
 
   PackageModel.blueprint(:docker) do
     guid     { Sham.guid }
-    state    { VCAP::CloudController::PackageModel::CREATED_STATE }
+    state    { VCAP::CloudController::PackageModel::READY_STATE }
     type     { 'docker' }
     app { AppModel.make }
-    docker_data { PackageDockerDataModel.create(package: object.save, image: "org/image-#{Sham.guid}:latest") }
+    docker_image { "org/image-#{Sham.guid}:latest" }
   end
 
   DropletModel.blueprint do
@@ -64,6 +69,16 @@ module VCAP::CloudController
     state    { VCAP::CloudController::DropletModel::STAGING_STATE }
     app { AppModel.make }
     staging_memory_in_mb { 123 }
+    buildpack_lifecycle_data { BuildpackLifecycleDataModel.make(droplet: object.save) }
+  end
+
+  DropletModel.blueprint(:staged) do
+    guid     { Sham.guid }
+    state    { VCAP::CloudController::DropletModel::STAGED_STATE }
+    app { AppModel.make }
+    staging_memory_in_mb { 123 }
+    droplet_hash { Sham.guid }
+    sha256_checksum { Sham.guid }
     buildpack_lifecycle_data { BuildpackLifecycleDataModel.make(droplet: object.save) }
   end
 
@@ -79,10 +94,55 @@ module VCAP::CloudController
     guid { Sham.guid }
     app { AppModel.make }
     name { Sham.name }
-    droplet { DropletModel.make(app_guid: app.guid) }
+    droplet { DropletModel.make(:staged, app: app) }
     command { 'bundle exec rake' }
     state { VCAP::CloudController::TaskModel::RUNNING_STATE }
     memory_in_mb { 256 }
+    sequence_id { Sham.sequence_id }
+  end
+
+  TaskModel.blueprint(:running) do
+    guid { Sham.guid }
+    app { AppModel.make }
+    name { Sham.name }
+    droplet { DropletModel.make(:staged, app: app) }
+    command { 'bundle exec rake' }
+    state { VCAP::CloudController::TaskModel::RUNNING_STATE }
+    memory_in_mb { 256 }
+    sequence_id { Sham.sequence_id }
+  end
+
+  TaskModel.blueprint(:canceling) do
+    guid { Sham.guid }
+    app { AppModel.make }
+    name { Sham.name }
+    droplet { DropletModel.make(:staged, app: app) }
+    command { 'bundle exec rake' }
+    state { VCAP::CloudController::TaskModel::CANCELING_STATE }
+    memory_in_mb { 256 }
+    sequence_id { Sham.sequence_id }
+  end
+
+  TaskModel.blueprint(:succeeded) do
+    guid { Sham.guid }
+    app { AppModel.make }
+    name { Sham.name }
+    droplet { DropletModel.make(:staged, app: app) }
+    command { 'bundle exec rake' }
+    state { VCAP::CloudController::TaskModel::SUCCEEDED_STATE }
+    memory_in_mb { 256 }
+    sequence_id { Sham.sequence_id }
+  end
+
+  TaskModel.blueprint(:pending) do
+    guid { Sham.guid }
+    app { AppModel.make }
+    name { Sham.name }
+    droplet { DropletModel.make(:staged, app: app) }
+    command { 'bundle exec rake' }
+    state { VCAP::CloudController::TaskModel::PENDING_STATE }
+    memory_in_mb { 256 }
+    sequence_id { Sham.sequence_id }
   end
 
   User.blueprint do
@@ -97,11 +157,6 @@ module VCAP::CloudController
 
   Domain.blueprint do
     name { Sham.domain }
-  end
-
-  Droplet.blueprint do
-    app { App.make }
-    droplet_hash { Sham.guid }
   end
 
   PrivateDomain.blueprint do
@@ -202,19 +257,40 @@ module VCAP::CloudController
   # if you want to create an app with droplet, use AppFactory.make
   # This is because the lack of factory hooks in Machinist.
   App.blueprint do
-    name              { Sham.name }
-    space             { Space.make }
-    stack             { Stack.make }
-    instances         { 1 }
-    type              { Sham.name }
+    instances { 1 }
+    type { 'web' }
+    app { AppModel.make }
   end
 
   App.blueprint(:process) do
     app { AppModel.make }
     diego { true }
-    name { Sham.name }
-    space { app.space }
-    stack { Stack.make }
+    instances { 1 }
+    type { Sham.name }
+    metadata { {} }
+  end
+
+  App.blueprint(:diego_runnable) do
+    app { AppModel.make(droplet: DropletModel.make(:staged)) }
+    diego { true }
+    instances { 1 }
+    type { Sham.name }
+    metadata { {} }
+    state { 'STARTED' }
+  end
+
+  App.blueprint(:dea_runnable) do
+    app { AppModel.make(droplet: DropletModel.make(:staged)) }
+    diego { false }
+    instances { 1 }
+    type { Sham.name }
+    metadata { {} }
+    state { 'STARTED' }
+  end
+
+  App.blueprint(:docker) do
+    app { AppModel.make(:docker) }
+    diego { true }
     instances { 1 }
     type { Sham.name }
     metadata { {} }
@@ -226,22 +302,11 @@ module VCAP::CloudController
     route_service_url { Sham.url }
   end
 
-  RouteMapping.blueprint do
-    app { AppFactory.make }
-    route { Route.make(space: app.space) }
-  end
-
   ServiceBinding.blueprint do
-    credentials       { Sham.service_credentials }
-    service_instance  { ManagedServiceInstance.make }
-    app               { AppFactory.make(space: service_instance.space) }
-    syslog_drain_url  { nil }
-  end
-
-  ServiceBindingModel.blueprint do
-    credentials       { Sham.service_credentials }
-    service_instance  { ManagedServiceInstance.make }
-    app { AppModel.make(space_guid: service_instance.space.guid) }
+    credentials { Sham.service_credentials }
+    service_instance { ManagedServiceInstance.make }
+    app { AppModel.make(space: service_instance.space) }
+    syslog_drain_url { nil }
     type { 'app' }
   end
 
@@ -325,8 +390,8 @@ module VCAP::CloudController
   end
 
   BuildpackLifecycleDataModel.blueprint do
-    buildpack { Sham.name }
-    stack { Sham.name }
+    buildpack { nil }
+    stack { Stack.make.name }
   end
 
   AppUsageEvent.blueprint do

@@ -3,18 +3,33 @@ require 'cloud_controller/procfile'
 module VCAP::CloudController
   class SetCurrentDroplet
     class InvalidApp < StandardError; end
+    class Error < StandardError; end
 
-    def initialize(user, user_email)
-      @user = user
-      @user_email = user_email
+    def initialize(user_audit_info)
+      @user_audit_info = user_audit_info
       @logger = Steno.logger('cc.action.procfile_parse')
     end
 
     def update_to(app, droplet)
+      unable_to_assign! unless droplet.present? && droplet_associated?(app, droplet)
+      app_started! if app.desired_state != ProcessModel::STOPPED
+
+      assign_droplet = { droplet_guid: droplet.guid }
+
       app.db.transaction do
         app.lock!
-        update_app(app, { droplet_guid: droplet.guid })
-        current_process_types.process_current_droplet(app)
+
+        app.update(assign_droplet)
+
+        Repositories::AppEventRepository.new.record_app_map_droplet(
+          app,
+          app.space,
+          @user_audit_info,
+          assign_droplet
+        )
+
+        setup_processes(app)
+
         app.save
       end
 
@@ -25,19 +40,20 @@ module VCAP::CloudController
 
     private
 
-    def current_process_types
-      CurrentProcessTypes.new(@user.guid, @user_email)
+    def setup_processes(app)
+      CurrentProcessTypes.new(@user_audit_info).process_current_droplet(app)
     end
 
-    def update_app(app, fields)
-      app.update(fields)
-      Repositories::AppEventRepository.new.record_app_map_droplet(
-        app,
-        app.space,
-        @user.guid,
-        @user_email,
-        fields
-      )
+    def droplet_associated?(app, droplet)
+      droplet.app.pk == app.pk
+    end
+
+    def unable_to_assign!
+      raise Error.new('Unable to assign current droplet. Ensure the droplet exists and belongs to this app.')
+    end
+
+    def app_started!
+      raise Error.new('Stop the app before changing droplet')
     end
   end
 end

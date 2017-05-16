@@ -19,7 +19,7 @@ module VCAP::CloudController
     end
 
     describe 'query by org_guid' do
-      let(:app_obj) { AppFactory.make(detected_buildpack: 'buildpack-name', environment_json: { env_var: 'env_val' }) }
+      let(:app_obj) { AppFactory.make }
       it 'filters apps by org_guid' do
         set_current_user_as_admin
         get "/v2/apps?q=organization_guid:#{app_obj.organization.guid}"
@@ -31,8 +31,13 @@ module VCAP::CloudController
     describe 'querying by stack guid' do
       let(:stack1) { Stack.make }
       let(:stack2) { Stack.make }
-      let!(:app1) { App.make(stack_id: stack1.id) }
-      let!(:app2) { App.make(stack_id: stack2.id) }
+      let(:app1) { App.make }
+      let(:app2) { App.make }
+
+      before do
+        app1.app.lifecycle_data.update(stack: stack1.name)
+        app2.app.lifecycle_data.update(stack: stack2.name)
+      end
 
       it 'filters apps by stack guid' do
         set_current_user_as_admin
@@ -54,6 +59,7 @@ module VCAP::CloudController
             debug:                   { type: 'string' },
             disk_quota:              { type: 'integer' },
             environment_json:        { type: 'hash', default: {} },
+            health_check_http_endpoint: { type: 'string' },
             health_check_timeout:    { type: 'integer' },
             health_check_type:       { type: 'string', default: 'port' },
             instances:               { type: 'integer', default: 1 },
@@ -61,8 +67,6 @@ module VCAP::CloudController
             name:                    { type: 'string', required: true },
             production:              { type: 'bool', default: false },
             state:                   { type: 'string', default: 'STOPPED' },
-            event_guids:             { type: '[string]' },
-            route_guids:             { type: '[string]' },
             space_guid:              { type: 'string', required: true },
             stack_guid:              { type: 'string' },
             diego:                   { type: 'bool' },
@@ -82,6 +86,7 @@ module VCAP::CloudController
             debug:                   { type: 'string' },
             disk_quota:              { type: 'integer' },
             environment_json:        { type: 'hash' },
+            health_check_http_endpoint: { type: 'string' },
             health_check_timeout:    { type: 'integer' },
             health_check_type:       { type: 'string' },
             instances:               { type: 'integer' },
@@ -89,9 +94,6 @@ module VCAP::CloudController
             name:                    { type: 'string' },
             production:              { type: 'bool' },
             state:                   { type: 'string' },
-            event_guids:             { type: '[string]' },
-            route_guids:             { type: '[string]' },
-            service_binding_guids:   { type: '[string]' },
             space_guid:              { type: 'string' },
             stack_guid:              { type: 'string' },
             diego:                   { type: 'bool' },
@@ -108,8 +110,8 @@ module VCAP::CloudController
         expect(described_class).to have_nested_routes(
           {
             events:           [:get, :put, :delete],
-            service_bindings: [:get, :put, :delete],
-            routes:           [:get, :put, :delete],
+            service_bindings: [:get],
+            routes:           [:get],
             route_mappings:   [:get],
           })
       end
@@ -138,14 +140,18 @@ module VCAP::CloudController
       let(:space_guid) { space.guid.to_s }
       let(:initial_hash) do
         {
-          name: 'maria',
+          name:       'maria',
           space_guid: space_guid
         }
       end
 
       let(:decoded_response) { MultiJson.load(last_response.body) }
+      let(:user_audit_info) { UserAuditInfo.from_context(SecurityContext) }
 
       describe 'events' do
+        before do
+          allow(UserAuditInfo).to receive(:from_context).and_return(user_audit_info)
+        end
         it 'records app create' do
           set_current_user(admin_user, admin: true)
 
@@ -155,7 +161,7 @@ module VCAP::CloudController
           post '/v2/apps', MultiJson.dump(initial_hash)
 
           app = App.last
-          expect(app_event_repository).to have_received(:record_app_create).with(app, app.space, admin_user.guid, SecurityContext.current_user_email, expected_attrs)
+          expect(app_event_repository).to have_received(:record_app_create).with(app, app.space, user_audit_info, expected_attrs)
         end
       end
 
@@ -316,6 +322,172 @@ module VCAP::CloudController
           end
         end
       end
+
+      it 'creates the app' do
+        request = {
+          name:             'maria',
+          space_guid:       space.guid,
+          environment_json: { 'KEY' => 'val' },
+          buildpack:        'http://example.com/buildpack',
+          health_check_http_endpoint: '/healthz',
+          health_check_type: 'http',
+        }
+
+        set_current_user(admin_user, admin: true)
+
+        post '/v2/apps', MultiJson.dump(request)
+
+        v2_app = App.last
+        expect(v2_app.health_check_type).to eq('http')
+        expect(v2_app.health_check_http_endpoint).to eq('/healthz')
+      end
+
+      it 'creates the app' do
+        request = {
+          name:             'maria',
+          space_guid:       space.guid,
+          environment_json: { 'KEY' => 'val' },
+          buildpack:        'http://example.com/buildpack'
+        }
+
+        set_current_user(admin_user, admin: true)
+
+        post '/v2/apps', MultiJson.dump(request)
+
+        v2_app = App.last
+        expect(v2_app.name).to eq('maria')
+        expect(v2_app.space).to eq(space)
+        expect(v2_app.environment_json).to eq({ 'KEY' => 'val' })
+        expect(v2_app.stack).to eq(Stack.default)
+        expect(v2_app.buildpack.url).to eq('http://example.com/buildpack')
+
+        v3_app = v2_app.app
+        expect(v3_app.name).to eq('maria')
+        expect(v3_app.space).to eq(space)
+        expect(v3_app.environment_variables).to eq({ 'KEY' => 'val' })
+        expect(v3_app.lifecycle_type).to eq(BuildpackLifecycleDataModel::LIFECYCLE_TYPE)
+        expect(v3_app.lifecycle_data.stack).to eq(Stack.default.name)
+        expect(v3_app.lifecycle_data.buildpack).to eq('http://example.com/buildpack')
+        expect(v3_app.desired_state).to eq(v2_app.state)
+
+        expect(v3_app.guid).to eq(v2_app.guid)
+      end
+
+      context 'creating a buildpack app' do
+        it 'creates the app correctly' do
+          stack   = Stack.make(name: 'stack-name')
+          request = {
+            name:       'maria',
+            space_guid: space.guid,
+            stack_guid: stack.guid,
+            buildpack:  'http://example.com/buildpack'
+          }
+
+          set_current_user(admin_user, admin: true)
+
+          post '/v2/apps', MultiJson.dump(request)
+
+          v2_app = App.last
+          expect(v2_app.stack).to eq(stack)
+          expect(v2_app.buildpack.url).to eq('http://example.com/buildpack')
+        end
+
+        context 'when custom buildpacks are disabled and the buildpack attribute is being changed' do
+          before do
+            TestConfig.override({ disable_custom_buildpacks: true })
+            set_current_user(admin_user, admin: true)
+          end
+
+          let(:request) do
+            {
+              name:       'maria',
+              space_guid: space.guid,
+            }
+          end
+
+          it 'does NOT allow a public git url' do
+            post '/v2/apps', MultiJson.dump(request.merge(buildpack: 'http://example.com/buildpack'))
+
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('custom buildpacks are disabled')
+          end
+
+          it 'does NOT allow a public http url' do
+            post '/v2/apps', MultiJson.dump(request.merge(buildpack: 'http://example.com/foo'))
+
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('custom buildpacks are disabled')
+          end
+
+          it 'does allow a buildpack name' do
+            admin_buildpack = Buildpack.make
+            post '/v2/apps', MultiJson.dump(request.merge(buildpack: admin_buildpack.name))
+
+            expect(last_response.status).to eq(201)
+          end
+
+          it 'does not allow a private git url' do
+            post '/v2/apps', MultiJson.dump(request.merge(buildpack: 'git@example.com:foo.git'))
+
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('custom buildpacks are disabled')
+          end
+
+          it 'does not allow a private git url with ssh schema' do
+            post '/v2/apps', MultiJson.dump(request.merge(buildpack: 'ssh://git@example.com:foo.git'))
+
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('custom buildpacks are disabled')
+          end
+        end
+      end
+
+      context 'creating a docker app' do
+        it 'creates the app correctly' do
+          request = {
+            name:         'maria',
+            space_guid:   space.guid,
+            docker_image: 'some-image:latest',
+          }
+
+          set_current_user(admin_user, admin: true)
+
+          post '/v2/apps', MultiJson.dump(request)
+
+          v2_app = App.last
+          expect(v2_app.docker_image).to eq('some-image:latest')
+          expect(v2_app.package_hash).to eq('some-image:latest')
+
+          package = v2_app.latest_package
+          expect(package.image).to eq('some-image:latest')
+        end
+      end
+
+      context 'when starting an app without a package' do
+        it 'raises an error' do
+          request = {
+            name:       'maria',
+            space_guid: space.guid,
+            state:      'STARTED'
+          }
+
+          set_current_user(admin_user, admin: true)
+
+          post '/v2/apps', MultiJson.dump(request)
+          expect(last_response.status).to eq(400)
+          expect(last_response.body).to include('bits have not been uploaded')
+        end
+      end
+
+      context 'when the space does not exist' do
+        it 'returns 404' do
+          set_current_user(admin_user, admin: true)
+
+          post '/v2/apps', MultiJson.dump({ name: 'maria', space_guid: 'no-existy' })
+
+          expect(last_response.status).to eq(404)
+        end
+      end
     end
 
     describe 'docker image credentials' do
@@ -323,7 +495,7 @@ module VCAP::CloudController
       let(:space_guid) { space.guid.to_s }
       let(:initial_hash) do
         {
-          name: 'maria',
+          name:       'maria',
           space_guid: space_guid
         }
       end
@@ -336,9 +508,9 @@ module VCAP::CloudController
       let(:docker_credentials) do
         {
           docker_login_server: login_server,
-          docker_user: user,
-          docker_password: password,
-          docker_email: email
+          docker_user:         user,
+          docker_password:     password,
+          docker_email:        email
         }
       end
       let(:body) do
@@ -372,6 +544,7 @@ module VCAP::CloudController
           it 'redacts the credentials' do
             set_current_user_as_admin
             create_app
+            expect(decoded_response['entity']['docker_credentials_json']).to eq redacted_message
           end
         end
 
@@ -429,6 +602,7 @@ module VCAP::CloudController
 
       before do
         set_current_user(developer)
+        allow_any_instance_of(V2::AppStage).to receive(:stage).and_return(nil)
       end
 
       describe 'app_scaling feature flag' do
@@ -457,27 +631,14 @@ module VCAP::CloudController
         let(:app_obj) { AppFactory.make(instances: 1, diego: false, type: 'web') }
         let(:developer) { make_developer_for_space(app_obj.space) }
         let(:route) { Route.make(space: app_obj.space) }
-        let(:route_mapping) { RouteMapping.make(app_id: app_obj.id, route_id: route.id) }
+        let(:route_mapping) { RouteMappingModel.make(app: app_obj.app, route: route) }
 
-        context 'when user does not specify any ports' do
-          it 'sets ports to 8080' do
-            expect(route_mapping.app_port).to be_nil
-            put "/v2/apps/#{app_obj.guid}", '{ "diego": true }'
-            expect(last_response.status).to eq(201)
-            expect(decoded_response['entity']['ports']).to match([8080])
-            expect(decoded_response['entity']['diego']).to be true
-          end
-        end
-
-        context 'when user specifies ports' do
-          it 'sets ports to user specified values' do
-            expect(route_mapping.app_port).to be_nil
-            put "/v2/apps/#{app_obj.guid}", '{ "diego": true, "ports": [9090,5222] }'
-            expect(last_response.status).to eq(201)
-            expect(decoded_response['entity']['ports']).to match([9090, 5222])
-            expect(decoded_response['entity']['diego']).to be true
-            expect(route_mapping.reload.app_port).to eq(9090)
-          end
+        it 'sets ports to 8080' do
+          expect(app_obj.ports).to be_nil
+          put "/v2/apps/#{app_obj.guid}", '{ "diego": true }'
+          expect(last_response.status).to eq(201)
+          expect(decoded_response['entity']['ports']).to match([8080])
+          expect(decoded_response['entity']['diego']).to be true
         end
       end
 
@@ -503,7 +664,7 @@ module VCAP::CloudController
         context 'when the app has existing custom ports' do
           let(:app_obj) { AppFactory.make(instances: 1, diego: true, ports: [9090, 5222]) }
           let(:route) { Route.make(space: app_obj.space) }
-          let(:route_mapping) { RouteMapping.make(app_id: app_obj.id, route_id: route.id) }
+          let(:route_mapping) { RouteMappingModel.make(app: app_obj.app, route: route) }
 
           it 'removes the app ports from the route mapping' do
             put "/v2/apps/#{app_obj.guid}", '{ "diego": false }'
@@ -516,8 +677,8 @@ module VCAP::CloudController
         context 'when the app is mapped to multiple ports' do
           let(:app_obj) { AppFactory.make(instances: 1, diego: true, ports: [9090, 5222]) }
           let(:route) { Route.make(space: app_obj.space) }
-          let!(:route_mapping_1) { RouteMapping.make(app: app_obj, route: route, app_port: 9090) }
-          let!(:route_mapping_2) { RouteMapping.make(app: app_obj, route: route, app_port: 5222) }
+          let!(:route_mapping_1) { RouteMappingModel.make(app: app_obj.app, route: route, app_port: 9090) }
+          let!(:route_mapping_2) { RouteMappingModel.make(app: app_obj.app, route: route, app_port: 5222) }
           let(:error_message) do
             'Multiple ports are supported for Diego only'
           end
@@ -526,6 +687,24 @@ module VCAP::CloudController
             put "/v2/apps/#{app_obj.guid}", '{ "diego": false }'
             expect(last_response).to have_status_code(400)
             expect(decoded_response['error_code']).to eq('CF-MultipleAppPortsMappedDiegoToDea')
+            expect(decoded_response['description']).to include(error_message)
+          end
+        end
+
+        context 'when the app is a docker app' do
+          let(:app_obj) { AppFactory.make(instances: 1, diego: true) }
+          let(:error_message) do
+            'Docker apps cannot run on DEAs'
+          end
+
+          before do
+            app_obj.app.buildpack_lifecycle_data = nil
+          end
+
+          it 'returns an error' do
+            put "/v2/apps/#{app_obj.guid}", '{ "diego": false }'
+            expect(last_response).to have_status_code(400)
+            expect(decoded_response['error_code']).to eq('CF-DockerAppToDea')
             expect(decoded_response['description']).to include(error_message)
           end
         end
@@ -571,8 +750,8 @@ module VCAP::CloudController
 
         context 'when updating an app with existing route mapping' do
           let(:route) { Route.make(space: app_obj.space) }
-          let!(:route_mapping) { RouteMapping.make(id: 1, app_id: app_obj.id, route_id: route.id, app_port: 9090) }
-          let!(:route_mapping2) { RouteMapping.make(id: 2, app_id: app_obj.id, route_id: route.id, app_port: 5222) }
+          let!(:route_mapping) { RouteMappingModel.make(app: app_obj.app, route: route, app_port: 9090) }
+          let!(:route_mapping2) { RouteMappingModel.make(app: app_obj.app, route: route, app_port: 5222) }
 
           context 'when new app ports contains all existing route port mappings' do
             it 'updates the ports' do
@@ -607,11 +786,11 @@ module VCAP::CloudController
           it 'records app update with whitelisted attributes' do
             allow(app_event_repository).to receive(:record_app_update).and_call_original
 
-            expect(app_event_repository).to receive(:record_app_update) do |recorded_app, recorded_space, user_guid, user_name, attributes|
+            expect(app_event_repository).to receive(:record_app_update) do |recorded_app, recorded_space, user_audit_info, attributes|
               expect(recorded_app.guid).to eq(app_obj.guid)
               expect(recorded_app.instances).to eq(2)
-              expect(user_guid).to eq(admin_user.guid)
-              expect(user_name).to eq(SecurityContext.current_user_email)
+              expect(user_audit_info.user_guid).to eq(SecurityContext.current_user)
+              expect(user_audit_info.user_name).to eq(SecurityContext.current_user_email)
               expect(attributes).to eq({ 'instances' => 2 })
             end
 
@@ -621,7 +800,7 @@ module VCAP::CloudController
 
         context 'when the update fails' do
           before do
-            allow_any_instance_of(App).to receive(:update_from_hash).and_raise('Error saving')
+            allow_any_instance_of(App).to receive(:save).and_raise('Error saving')
             allow(app_event_repository).to receive(:record_app_update)
           end
 
@@ -634,32 +813,336 @@ module VCAP::CloudController
         end
       end
 
-      context 'when associating with route' do
-        let(:space_quota) { SpaceQuotaDefinition.make(organization: app_obj.space.organization) }
-        let(:domain) { SharedDomain.make(name: 'tcp.com', router_group_guid: 'guid_1') }
-        let(:route) { Route.make(space: app_obj.space, domain: domain, port: 9090, host: '') }
+      it 'updates the app' do
+        v2_app = App.make
+        v3_app = v2_app.app
+        stack  = Stack.make(name: 'stack-name')
 
+        request = {
+          name:             'maria',
+          environment_json: { 'KEY' => 'val' },
+          stack_guid:       stack.guid,
+          buildpack:        'http://example.com/buildpack',
+        }
+
+        set_current_user(admin_user, admin: true)
+
+        put "/v2/apps/#{v2_app.guid}", MultiJson.dump(request)
+        expect(last_response.status).to eq(201)
+
+        v2_app.reload
+        v3_app.reload
+
+        expect(v2_app.name).to eq('maria')
+        expect(v2_app.environment_json).to eq({ 'KEY' => 'val' })
+        expect(v2_app.stack).to eq(stack)
+        expect(v2_app.buildpack.url).to eq('http://example.com/buildpack')
+
+        expect(v3_app.name).to eq('maria')
+        expect(v3_app.environment_variables).to eq({ 'KEY' => 'val' })
+        expect(v3_app.lifecycle_type).to eq(BuildpackLifecycleDataModel::LIFECYCLE_TYPE)
+        expect(v3_app.lifecycle_data.stack).to eq('stack-name')
+        expect(v3_app.lifecycle_data.buildpack).to eq('http://example.com/buildpack')
+      end
+
+      context 'when custom buildpacks are disabled and the buildpack attribute is being changed' do
         before do
-          allow_any_instance_of(RouteValidator).to receive(:validate)
-          app_obj.space.space_quota_definition = space_quota
+          TestConfig.override({ disable_custom_buildpacks: true })
+          set_current_user(admin_user, admin: true)
+          app_obj.app.lifecycle_data.update(buildpack: Buildpack.make.name)
         end
 
-        it 'allows updating app' do
-          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+        let(:app_obj) { App.make }
 
-          expect(last_response).to have_status_code(201)
-          expect(app_obj.reload.routes.first).to eq(route)
+        it 'does NOT allow a public git url' do
+          put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ buildpack: 'http://example.com/buildpack' })
+
+          expect(last_response.status).to eq(400)
+          expect(last_response.body).to include('custom buildpacks are disabled')
         end
 
-        context 'when routing api is not enabled' do
-          before do
-            TestConfig.override(routing_api: nil)
+        it 'does NOT allow a public http url' do
+          put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ buildpack: 'http://example.com/foo' })
+
+          expect(last_response.status).to eq(400)
+          expect(last_response.body).to include('custom buildpacks are disabled')
+        end
+
+        it 'does allow a buildpack name' do
+          admin_buildpack = Buildpack.make
+          put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ buildpack: admin_buildpack.name })
+
+          expect(last_response.status).to eq(201)
+        end
+
+        it 'does not allow a private git url' do
+          put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ buildpack: 'git@example.com:foo.git' })
+
+          expect(last_response.status).to eq(400)
+          expect(last_response.body).to include('custom buildpacks are disabled')
+        end
+
+        it 'does not allow a private git url with ssh schema' do
+          put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ buildpack: 'ssh://git@example.com:foo.git' })
+
+          expect(last_response.status).to eq(400)
+          expect(last_response.body).to include('custom buildpacks are disabled')
+        end
+      end
+
+      describe 'setting stack' do
+        let(:new_stack) { Stack.make }
+
+        it 'changes the stack' do
+          set_current_user(admin_user, admin: true)
+
+          app_obj = AppFactory.make
+
+          expect(app_obj.stack).not_to eq(new_stack)
+
+          put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ stack_guid: new_stack.guid })
+
+          expect(last_response.status).to eq(201)
+          expect(app_obj.reload.stack).to eq(new_stack)
+        end
+
+        context 'when the app is already staged' do
+          let(:app_obj) do
+            AppFactory.make(
+              instances: 1,
+              state:     'STARTED')
           end
 
-          it 'returns 403' do
-            put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
-            expect(last_response).to have_status_code(403)
-            expect(decoded_response['description']).to include('Support for TCP routing is disabled')
+          it 'marks the app for re-staging' do
+            expect(app_obj.needs_staging?).to eq(false)
+
+            put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ stack_guid: new_stack.guid })
+            expect(last_response.status).to eq(201)
+            app_obj.reload
+
+            expect(app_obj.needs_staging?).to eq(true)
+            expect(app_obj.staged?).to eq(false)
+          end
+        end
+
+        context 'when the app needs staged' do
+          let(:app_obj) { AppFactory.make(state: 'STARTED') }
+
+          before do
+            PackageModel.make(app: app_obj.app, package_hash: 'some-hash', state: PackageModel::READY_STATE)
+            app_obj.reload
+          end
+
+          it 'keeps app as needs staging' do
+            expect(app_obj.staged?).to be false
+            expect(app_obj.needs_staging?).to be true
+
+            put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ stack_guid: new_stack.guid })
+            expect(last_response.status).to eq(201)
+            app_obj.reload
+
+            expect(app_obj.staged?).to be false
+            expect(app_obj.needs_staging?).to be true
+          end
+        end
+
+        context 'when the app was never staged' do
+          let(:app_obj) { App.make }
+
+          it 'does not mark the app for staging' do
+            expect(app_obj.staged?).to be_falsey
+            expect(app_obj.needs_staging?).to be_nil
+
+            put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ stack_guid: new_stack.guid })
+            expect(last_response.status).to eq(201)
+            app_obj.reload
+
+            expect(app_obj.staged?).to be_falsey
+            expect(app_obj.needs_staging?).to be_nil
+          end
+        end
+      end
+
+      describe 'changing lifecycle types' do
+        context 'when changing from docker to buildpack' do
+          let(:app_obj) { App.make(app: AppModel.make(:docker)) }
+
+          it 'raises an error setting buildpack' do
+            put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ buildpack: 'https://buildpack.example.com' })
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('Lifecycle type cannot be changed')
+          end
+
+          it 'raises an error setting stack' do
+            put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ stack_guid: 'phat-stackz' })
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('Lifecycle type cannot be changed')
+          end
+        end
+
+        context 'when changing from buildpack to docker' do
+          let(:app_obj) { App.make(app: AppModel.make(:buildpack)) }
+
+          it 'raises an error' do
+            put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ docker_image: 'repo/great-image' })
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('Lifecycle type cannot be changed')
+          end
+        end
+      end
+
+      describe 'updating docker_image' do
+        it 'creates a new docker package' do
+          app              = AppFactory.make(app: AppModel.make(:docker), docker_image: 'repo/original-image')
+          original_package = app.latest_package
+
+          expect(app.docker_image).not_to eq('repo/new-image')
+
+          set_current_user(admin_user, admin: true)
+
+          put "/v2/apps/#{app.guid}", MultiJson.dump({ docker_image: 'repo/new-image' })
+
+          expect(app.reload.docker_image).to eq('repo/new-image')
+          expect(app.latest_package).not_to eq(original_package)
+        end
+
+        context 'when the docker image is requested but is not a change' do
+          it 'does not create a new package' do
+            app              = AppFactory.make(app: AppModel.make(:docker), docker_image: 'repo/original-image')
+            original_package = app.latest_package
+
+            expect(app.docker_image).not_to eq('repo/new-image')
+
+            set_current_user(admin_user, admin: true)
+
+            put "/v2/apps/#{app.guid}", MultiJson.dump({ docker_image: 'REPO/ORIGINAL-IMAGE' })
+
+            expect(app.reload.docker_image).to eq('repo/original-image')
+            expect(app.latest_package).to eq(original_package)
+          end
+        end
+      end
+
+      describe 'staging' do
+        let(:app_stage) { instance_double(V2::AppStage, stage: nil) }
+        let(:app_obj) { AppFactory.make }
+
+        before do
+          allow(V2::AppStage).to receive(:new).and_return(app_stage)
+          app_obj.update(state: 'STARTED')
+        end
+
+        context 'when a state change is requested' do
+          let(:req) { '{ "state": "STARTED" }' }
+
+          context 'when the app needs staging' do
+            before do
+              app_obj.app.update(droplet: nil)
+              app_obj.reload
+            end
+
+            it 'requests to be staged' do
+              put "/v2/apps/#{app_obj.guid}", req
+              expect(last_response.status).to eq(201)
+
+              expect(app_stage).to have_received(:stage)
+            end
+          end
+
+          context 'when the app does not need staging' do
+            it 'does not request to be staged' do
+              put "/v2/apps/#{app_obj.guid}", req
+              expect(last_response.status).to eq(201)
+
+              expect(app_stage).not_to have_received(:stage)
+            end
+          end
+        end
+
+        context 'when a state change is NOT requested' do
+          let(:req) { '{ "name": "some-name" }' }
+
+          context 'when the app needs staging' do
+            before do
+              app_obj.app.update(droplet: nil)
+              app_obj.reload
+            end
+
+            it 'does not request to be staged' do
+              put "/v2/apps/#{app_obj.guid}", req
+              expect(last_response.status).to eq(201)
+
+              expect(app_stage).not_to have_received(:stage)
+            end
+          end
+
+          context 'when the app does not need staging' do
+            it 'does not request to be staged' do
+              put "/v2/apps/#{app_obj.guid}", req
+              expect(last_response.status).to eq(201)
+
+              expect(app_stage).not_to have_received(:stage)
+            end
+          end
+        end
+      end
+
+      context 'when starting an app without a package' do
+        let(:app_obj) { App.make(instances: 1) }
+
+        it 'raises an error' do
+          put "/v2/apps/#{app_obj.guid}", MultiJson.dump({ state: 'STARTED' })
+          expect(last_response.status).to eq(400)
+          expect(last_response.body).to include('bits have not been uploaded')
+        end
+      end
+
+      describe 'starting and stopping' do
+        let(:parent_app) { app_obj.app }
+        let(:app_obj) { AppFactory.make(instances: 1, state: state) }
+        let(:sibling) { App.make(instances: 1, state: state, app: parent_app, type: 'worker') }
+
+        context 'starting' do
+          let(:state) { 'STOPPED' }
+
+          it 'is reflected in the parent app and all sibling processes' do
+            expect(parent_app.desired_state).to eq('STOPPED')
+            expect(app_obj.state).to eq('STOPPED')
+            expect(sibling.state).to eq('STOPPED')
+
+            put "/v2/apps/#{app_obj.guid}", '{ "state": "STARTED" }'
+            expect(last_response.status).to eq(201)
+
+            expect(parent_app.reload.desired_state).to eq('STARTED')
+            expect(app_obj.reload.state).to eq('STARTED')
+            expect(sibling.reload.state).to eq('STARTED')
+          end
+        end
+
+        context 'stopping' do
+          let(:state) { 'STARTED' }
+
+          it 'is reflected in the parent app and all sibling processes' do
+            expect(parent_app.desired_state).to eq('STARTED')
+            expect(app_obj.state).to eq('STARTED')
+            expect(sibling.state).to eq('STARTED')
+
+            put "/v2/apps/#{app_obj.guid}", '{ "state": "STOPPED" }'
+            expect(last_response.status).to eq(201)
+
+            expect(parent_app.reload.desired_state).to eq('STOPPED')
+            expect(app_obj.reload.state).to eq('STOPPED')
+            expect(sibling.reload.state).to eq('STOPPED')
+          end
+        end
+
+        context 'invalid state' do
+          let(:state) { 'STOPPED' }
+
+          it 'raises an error' do
+            put "/v2/apps/#{app_obj.guid}", '{ "state": "ohio" }'
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('Invalid app state')
           end
         end
       end
@@ -669,6 +1152,7 @@ module VCAP::CloudController
       let(:app_obj) { AppFactory.make }
       let(:developer) { make_developer_for_space(app_obj.space) }
       let(:decoded_response) { MultiJson.load(last_response.body) }
+      let(:parent_app) { app_obj.app }
 
       before do
         set_current_user(developer)
@@ -679,22 +1163,27 @@ module VCAP::CloudController
       end
 
       it 'deletes the app' do
+        expect(app_obj.exists?).to be_truthy
+        expect(parent_app.exists?).to be_truthy
+
         delete_app
+
         expect(last_response.status).to eq(204)
-        expect(App.filter(id: app_obj.id)).to be_empty
+        expect(app_obj.exists?).to be_falsey
+        expect(parent_app.exists?).to be_falsey
       end
 
       context 'non recursive deletion' do
         context 'with NON-empty service_binding association' do
           let!(:svc_instance) { ManagedServiceInstance.make(space: app_obj.space) }
-          let!(:service_binding) { ServiceBinding.make(app: app_obj, service_instance: svc_instance) }
+          let!(:service_binding) { ServiceBinding.make(app: app_obj.app, service_instance: svc_instance) }
           let(:guid_pattern) { '[[:alnum:]-]+' }
 
           before do
             service_broker = svc_instance.service.service_broker
-            uri = URI(service_broker.broker_url)
-            broker_url = uri.host + uri.path
-            broker_auth = "#{service_broker.auth_username}:#{service_broker.auth_password}"
+            uri            = URI(service_broker.broker_url)
+            broker_url     = uri.host + uri.path
+            broker_auth    = "#{service_broker.auth_username}:#{service_broker.auth_password}"
             stub_request(
               :delete,
               %r{https://#{broker_auth}@#{broker_url}/v2/service_instances/#{guid_pattern}/service_bindings/#{guid_pattern}}).
@@ -718,27 +1207,35 @@ module VCAP::CloudController
 
       describe 'events' do
         it 'records an app delete-request' do
-          allow(app_event_repository).to receive(:record_app_delete_request).and_call_original
-
           delete_app
 
-          expect(app_event_repository).to have_received(:record_app_delete_request).with(app_obj, app_obj.space, developer.guid, SecurityContext.current_user_email, false)
+          event = Event.find(type: 'audit.app.delete-request', actee_type: 'app')
+          expect(event.type).to eq('audit.app.delete-request')
+          expect(event.metadata).to eq({ 'request' => { 'recursive' => false } })
+          expect(event.actor).to eq(developer.guid)
+          expect(event.actor_type).to eq('user')
+          expect(event.actee).to eq(app_obj.guid)
+          expect(event.actee_type).to eq('app')
         end
 
         it 'records the recursive query parameter when recursive' do
-          allow(app_event_repository).to receive(:record_app_delete_request).and_call_original
-
           delete "/v2/apps/#{app_obj.guid}?recursive=true"
 
-          expect(app_event_repository).to have_received(:record_app_delete_request).with(app_obj, app_obj.space, developer.guid, SecurityContext.current_user_email, true)
+          event = Event.find(type: 'audit.app.delete-request', actee_type: 'app')
+          expect(event.type).to eq('audit.app.delete-request')
+          expect(event.metadata).to eq({ 'request' => { 'recursive' => true } })
+          expect(event.actor).to eq(developer.guid)
+          expect(event.actor_type).to eq('user')
+          expect(event.actee).to eq(app_obj.guid)
+          expect(event.actee_type).to eq('app')
         end
 
         it 'does not record when the destroy fails' do
           allow_any_instance_of(App).to receive(:destroy).and_raise('Error saving')
-          allow(app_event_repository).to receive(:record_app_delete_request).and_call_original
 
           delete_app
-          expect(app_event_repository).not_to have_received(:record_app_delete_request)
+
+          expect(Event.where(type: 'audit.app.delete-request').count).to eq(0)
         end
       end
     end
@@ -747,7 +1244,7 @@ module VCAP::CloudController
       let!(:app_obj) { AppFactory.make(instances: 1, diego: true) }
       let!(:developer) { make_developer_for_space(app_obj.space) }
       let!(:route) { Route.make(space: app_obj.space) }
-      let!(:route_mapping) { RouteMapping.make(app_id: app_obj.id, route_id: route.id) }
+      let!(:route_mapping) { RouteMappingModel.make(app: app_obj.app, route: route, process_type: app_obj.type) }
 
       before do
         set_current_user(developer)
@@ -786,10 +1283,10 @@ module VCAP::CloudController
     end
 
     describe "read an app's env" do
-      let(:space)     { Space.make }
+      let(:space) { app_obj.space }
       let(:developer) { make_developer_for_space(space) }
-      let(:auditor)   { make_auditor_for_space(space) }
-      let(:app_obj)   { AppFactory.make(detected_buildpack: 'buildpack-name') }
+      let(:auditor) { make_auditor_for_space(space) }
+      let(:app_obj) { AppFactory.make(detected_buildpack: 'buildpack-name') }
       let(:decoded_response) { MultiJson.load(last_response.body) }
 
       before do
@@ -797,8 +1294,6 @@ module VCAP::CloudController
       end
 
       context 'when the user is a member of the space this app exists in' do
-        let(:app_obj) { AppFactory.make(detected_buildpack: 'buildpack-name', space: space) }
-
         context 'when the user is not a space developer' do
           before do
             set_current_user(User.make)
@@ -829,71 +1324,37 @@ module VCAP::CloudController
         end
 
         context 'environment variable' do
-          context 'when there is no v3 app associated' do
-            it 'returns v2 application environment with VCAP_APPLICATION' do
-              get "/v2/apps/#{app_obj.guid}/env"
-              expect(last_response.status).to eql(200)
+          it 'returns application environment with VCAP_APPLICATION' do
+            get "/v2/apps/#{app_obj.guid}/env"
+            expect(last_response.status).to eql(200)
 
-              expect(decoded_response['application_env_json']).to have_key('VCAP_APPLICATION')
-              expect(decoded_response['application_env_json']).to match({
-                  'VCAP_APPLICATION' => {
-                    'limits' => {
-                      'mem'  => app_obj.memory,
-                      'disk' => app_obj.disk_quota,
-                      'fds'  => 16384
-                    },
-                    'application_id'      => app_obj.guid,
-                    'application_name'    => app_obj.name,
-                    'name'                => app_obj.name,
-                    'application_uris'    => [],
-                    'uris'                => [],
-                    'application_version' => /^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/,
-                    'version'             => /^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/,
-                    'space_name'          => app_obj.space.name,
-                    'space_id'            => app_obj.space.guid,
-                    'users'               => nil
-                  }
-              })
-            end
-          end
-
-          context 'when a v3 app is associated' do
-            let!(:app_model) { AppModel.make(name: 'v3-parent-app', space: space) }
-            let!(:process) { AppFactory.make(memory: 259, disk_quota: 799, file_descriptors: 1234, name: 'process-name', space: space) }
-
-            it 'returns app environment variables with VCAP_APPLICATION with v3 app name' do
-              app_model.add_process(process)
-
-              get "/v2/apps/#{process.guid}/env"
-              expect(last_response.status).to eql(200)
-
-              expect(decoded_response['application_env_json']).to have_key('VCAP_APPLICATION')
-              expect(decoded_response['application_env_json']).to match({
-                  'VCAP_APPLICATION' => {
-                  'limits' => {
-                    'mem' => 259,
-                    'disk' => 799,
-                    'fds' => 1234,
-                  },
-                  'application_id' => process.guid,
-                  'application_version' => process.version,
-                  'application_name' => app_model.name,
-                  'application_uris' => process.uris,
-                  'version' => process.version,
-                  'name' => process.name,
-                  'space_name' => process.space.name,
-                  'space_id' => process.space.guid,
-                  'uris' => process.uris,
-                  'users' => nil
-                }
-              })
-            end
+            expect(decoded_response['application_env_json']).to have_key('VCAP_APPLICATION')
+            expect(decoded_response['application_env_json']).to match({
+              'VCAP_APPLICATION' => {
+                'cf_api'              => "#{TestConfig.config[:external_protocol]}://#{TestConfig.config[:external_domain]}",
+                'limits'              => {
+                  'mem'  => app_obj.memory,
+                  'disk' => app_obj.disk_quota,
+                  'fds'  => 16384
+                },
+                'application_id'      => app_obj.guid,
+                'application_name'    => app_obj.name,
+                'name'                => app_obj.name,
+                'application_uris'    => [],
+                'uris'                => [],
+                'application_version' => /^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/,
+                'version'             => /^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$/,
+                'space_name'          => app_obj.space.name,
+                'space_id'            => app_obj.space.guid,
+                'users'               => nil
+              }
+            })
           end
         end
 
         context 'when the user is space dev and has service instance bound to application' do
           let!(:service_instance) { ManagedServiceInstance.make(space: app_obj.space) }
-          let!(:service_binding) { ServiceBinding.make(app: app_obj, service_instance: service_instance) }
+          let!(:service_binding) { ServiceBinding.make(app: app_obj.app, service_instance: service_instance) }
 
           it 'returns system environment with VCAP_SERVICES' do
             get "/v2/apps/#{app_obj.guid}/env"
@@ -906,7 +1367,7 @@ module VCAP::CloudController
 
         context 'when the staging env variable group is set' do
           before do
-            staging_group = EnvironmentVariableGroup.staging
+            staging_group                  = EnvironmentVariableGroup.staging
             staging_group.environment_json = { POTATO: 'delicious' }
             staging_group.save
           end
@@ -923,7 +1384,7 @@ module VCAP::CloudController
 
         context 'when the running env variable group is set' do
           before do
-            running_group = EnvironmentVariableGroup.running
+            running_group                  = EnvironmentVariableGroup.running
             running_group.environment_json = { PIE: 'sweet' }
             running_group.save
           end
@@ -943,7 +1404,7 @@ module VCAP::CloudController
             set_current_user(developer, { scopes: ['cloud_controller.write'] })
           end
 
-          it 'returns InvalidAuthToken' do
+          it 'returns InsufficientScope' do
             get "/v2/apps/#{app_obj.guid}/env"
             expect(last_response.status).to eql(403)
             expect(JSON.parse(last_response.body)['description']).to eql('Your token lacks the necessary scopes to access this resource.')
@@ -951,17 +1412,29 @@ module VCAP::CloudController
         end
       end
 
+      context 'when the user is a global auditor' do
+        before do
+          set_current_user_as_global_auditor
+        end
+
+        it 'should not be able to read environment variables' do
+          get "/v2/apps/#{app_obj.guid}/env"
+          expect(last_response.status).to eql(403)
+          expect(JSON.parse(last_response.body)['description']).to eql('You are not authorized to perform the requested action')
+        end
+      end
+
       context 'when the user reads environment variables from the app endpoint using inline-relations-depth=2' do
         let!(:test_environment_json) { { 'environ_key' => 'value' } }
+        let(:parent_app) { AppModel.make(environment_variables: test_environment_json) }
         let!(:app_obj) do
           AppFactory.make(
             detected_buildpack: 'buildpack-name',
-            space:              space,
-            environment_json:   test_environment_json
+            app:                parent_app
           )
         end
         let!(:service_instance) { ManagedServiceInstance.make(space: app_obj.space) }
-        let!(:service_binding) { ServiceBinding.make(app: app_obj, service_instance: service_instance) }
+        let!(:service_binding) { ServiceBinding.make(app: app_obj.app, service_instance: service_instance) }
 
         context 'when the user is a space developer' do
           it 'returns non-redacted environment values' do
@@ -1018,8 +1491,6 @@ module VCAP::CloudController
       end
 
       context 'when the space_developer_env_var_visibility feature flag is disabled' do
-        let(:app_obj) { AppFactory.make(detected_buildpack: 'buildpack-name', space: space) }
-
         before do
           VCAP::CloudController::FeatureFlag.make(name: 'space_developer_env_var_visibility', enabled: false, error_message: nil)
         end
@@ -1060,8 +1531,6 @@ module VCAP::CloudController
       end
 
       context 'when the env_var_visibility feature flag is disabled' do
-        let(:app_obj) { AppFactory.make(detected_buildpack: 'buildpack-name', space: space) }
-
         before do
           VCAP::CloudController::FeatureFlag.make(name: 'env_var_visibility', enabled: false, error_message: nil)
         end
@@ -1090,8 +1559,6 @@ module VCAP::CloudController
       end
 
       context 'when the env_var_visibility feature flag is enabled' do
-        let(:app_obj) { AppFactory.make(detected_buildpack: 'buildpack-name', space: space) }
-
         before do
           VCAP::CloudController::FeatureFlag.make(name: 'env_var_visibility', enabled: true, error_message: nil)
         end
@@ -1111,7 +1578,8 @@ module VCAP::CloudController
           expect(last_response.status).to eq(200)
           expect(decoded_response['application_env_json']).to match({
             'VCAP_APPLICATION' => {
-              'limits' => {
+              'cf_api'              => "#{TestConfig.config[:external_protocol]}://#{TestConfig.config[:external_domain]}",
+              'limits'              => {
                 'mem'  => app_obj.memory,
                 'disk' => app_obj.disk_quota,
                 'fds'  => 16384
@@ -1156,9 +1624,9 @@ module VCAP::CloudController
 
       context 'when app will be staged', isolation: :truncation do
         let(:app_obj) do
-          AppFactory.make(package_hash: 'abc', state: 'STOPPED',
-                          droplet_hash: nil, package_state: 'PENDING',
-                          instances: 1)
+          a = AppFactory.make(state: 'STOPPED', instances: 1)
+          a.current_droplet.destroy
+          a.reload
         end
         let(:stager_response) do
           Dea::StagingResponse.new('task_streaming_log_url' => 'streaming-log-url')
@@ -1212,36 +1680,93 @@ module VCAP::CloudController
       end
 
       it 'should return an error for an app without a droplet' do
-        app_obj.droplet_hash = nil
-        app_obj.save
+        app_obj.current_droplet.destroy
 
         get "/v2/apps/#{app_obj.guid}/droplet/download", MultiJson.dump({})
         expect(last_response.status).to eq(404)
       end
     end
 
-    describe 'on route change' do
-      let(:space) { Space.make }
+    describe 'uploading the droplet' do
+      let(:app_obj) { App.make }
+
+      let(:tmpdir) { Dir.mktmpdir }
+      after { FileUtils.rm_rf(tmpdir) }
+
+      let(:valid_zip) do
+        zip_name = File.join(tmpdir, 'file.zip')
+        TestZip.create(zip_name, 1, 1024)
+        zip_file = File.new(zip_name)
+        Rack::Test::UploadedFile.new(zip_file)
+      end
+
+      context 'as an admin' do
+        let(:req_body) { { droplet: valid_zip } }
+
+        it 'is allowed' do
+          set_current_user(User.make, admin: true)
+          put "/v2/apps/#{app_obj.guid}/droplet/upload", req_body
+
+          expect(last_response.status).to eq(201)
+        end
+      end
+
+      context 'as a developer' do
+        let(:user) { make_developer_for_space(app_obj.space) }
+
+        context 'with an empty request' do
+          it 'fails to upload' do
+            set_current_user(user)
+            put "/v2/apps/#{app_obj.guid}/droplet/upload", {}
+
+            expect(last_response.status).to eq(400)
+            expect(JSON.parse(last_response.body)['description']).to include('missing :droplet_path')
+          end
+        end
+
+        context 'with valid request' do
+          let(:req_body) { { droplet: valid_zip } }
+
+          it 'creates a delayed job' do
+            set_current_user(user)
+            expect {
+              put "/v2/apps/#{app_obj.guid}/droplet/upload", req_body
+              expect(last_response.status).to eq 201
+            }.to change {
+              Delayed::Job.count
+            }.by(1)
+
+            job = Delayed::Job.last
+            expect(job.handler).to include('V2::UploadDropletFromUser')
+          end
+        end
+      end
+
+      context 'as a non-developer' do
+        let(:req_body) { { droplet: valid_zip } }
+
+        it 'returns 403' do
+          put "/v2/apps/#{app_obj.guid}/droplet/upload", req_body
+          expect(last_response.status).to eq(403)
+        end
+      end
+    end
+
+    describe 'on route change', isolation: :truncation do
+      let(:space) { app_obj.space }
       let(:domain) do
         PrivateDomain.make(name: 'jesse.cloud', owning_organization: space.organization)
       end
+      let(:app_obj) { AppFactory.make(state: 'STARTED') }
 
       before do
-        user = make_developer_for_space(space)
-        set_current_user(user)
-        @app = AppFactory.make(
-          space: space,
-          state: 'STARTED',
-          package_hash: 'abc',
-          droplet_hash: 'def',
-          package_state: 'STAGED',
-        )
-        @app_url = "/v2/apps/#{@app.guid}"
+        FeatureFlag.create(name: 'diego_docker', enabled: true)
+        set_current_user(make_developer_for_space(space))
       end
 
       it 'tells the dea client to update when we add one url through PUT /v2/apps/:guid' do
         route = domain.add_route(
-          host: 'app',
+          host:  'app',
           space: space,
         )
 
@@ -1249,30 +1774,25 @@ module VCAP::CloudController
           expect(app.uris).to include('app.jesse.cloud')
         end
 
-        put @app_url, MultiJson.dump({ route_guids: [route.guid] })
+        put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
         expect(last_response.status).to eq(201)
       end
 
       context 'with Docker app' do
+        let(:space) { docker_app.space }
         let(:route) { domain.add_route(host: 'app', space: space) }
         let(:pre_mapped_route) { domain.add_route(host: 'pre_mapped_route', space: space) }
         let(:docker_app) do
           AppFactory.make(
-            space: space,
-            state: 'STARTED',
-            package_hash: 'abc',
-            droplet_hash: 'def',
-            package_state: 'STAGED',
-            diego: true,
+            state:        'STARTED',
+            diego:        true,
             docker_image: 'some-image',
           )
         end
-        let(:developer) { make_developer_for_space(docker_app.space) }
 
         before do
-          FeatureFlag.create(name: 'diego_docker', enabled: true)
-          set_current_user(developer)
-          put "/v2/apps/#{docker_app.guid}/routes/#{pre_mapped_route.guid}", {}
+          allow_any_instance_of(Diego::NsyncClient).to receive(:desire_app).and_return(nil)
+          put "/v2/apps/#{docker_app.guid}/routes/#{pre_mapped_route.guid}", nil
         end
 
         context 'when Docker is disabled' do
@@ -1281,21 +1801,15 @@ module VCAP::CloudController
           end
 
           context 'and a route is mapped' do
-            before do
-              put "/v2/apps/#{docker_app.guid}/routes/#{route.guid}", nil
-            end
-
             it 'succeeds' do
+              put "/v2/apps/#{docker_app.guid}/routes/#{route.guid}", nil
               expect(last_response.status).to eq(201)
             end
           end
 
           context 'and a previously mapped route is unmapped' do
-            before do
-              delete "/v2/apps/#{docker_app.guid}/routes/#{pre_mapped_route.guid}", nil
-            end
-
             it 'succeeds' do
+              delete "/v2/apps/#{docker_app.guid}/routes/#{pre_mapped_route.guid}", nil
               expect(last_response.status).to eq(204)
             end
           end
@@ -1303,52 +1817,29 @@ module VCAP::CloudController
       end
 
       it 'tells the dea client to update when we remove a url through PUT /v2/apps/:guid' do
-        bar_route = @app.add_route(
-          host: 'bar',
-          space: space,
+        bar_route = Route.make(
+          host:   'bar',
+          space:  space,
           domain: domain,
         )
-        route = @app.add_route(
-          host: 'foo',
-          space: space,
+        RouteMappingModel.make(app: app_obj.app, route: bar_route, process_type: app_obj.type)
+        new_route = Route.make(
+          host:   'foo',
+          space:  space,
           domain: domain,
         )
-        get "#{@app_url}/routes"
+        get "/v2/apps/#{app_obj.guid}/routes"
         expect(decoded_response['resources'].map { |r|
           r['metadata']['guid']
-        }.sort).to eq([bar_route.guid, route.guid].sort)
+        }).to match_array([bar_route.guid])
 
         expect(Dea::Client).to receive(:update_uris).with(an_instance_of(VCAP::CloudController::App)) do |app|
           expect(app.uris).to include('foo.jesse.cloud')
         end
 
-        put @app_url, MultiJson.dump({ route_guids: [route.guid] })
+        put "/v2/apps/#{app_obj.guid}/routes/#{new_route.guid}"
 
         expect(last_response.status).to eq(201)
-      end
-    end
-
-    describe 'on route bind' do
-      context 'with a non-Diego app' do
-        let(:space) { route.space }
-        let(:app_obj) { AppFactory.make(diego: false, space: space, state: 'STARTED') }
-        let(:user) { make_developer_for_space(space) }
-        let(:route_binding) { RouteBinding.make }
-        let(:service_instance) { route_binding.service_instance }
-        let(:route) { route_binding.route }
-
-        context 'and the route is already bound to a routing service' do
-          let(:decoded_response) { MultiJson.load(last_response.body) }
-
-          it 'fails to change the route' do
-            set_current_user(user)
-
-            put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
-
-            expect(decoded_response['description']).to match(/Invalid relation: The requested route relation is invalid: .* - Route services are only supported for apps on Diego/)
-            expect(last_response.status).to eq(400)
-          end
-        end
       end
     end
 
@@ -1358,14 +1849,13 @@ module VCAP::CloudController
       end
 
       context 'when docker is disabled' do
-        let(:space) { Space.make }
         let!(:started_app) do
-          App.make(space: space, state: 'STARTED', package_hash: 'made-up-package-hash', docker_image: 'docker-image')
+          AppFactory.make(state: 'STARTED', docker_image: 'docker-image')
         end
 
         before do
           FeatureFlag.find(name: 'diego_docker').update(enabled: false)
-          set_current_user(make_developer_for_space(space))
+          set_current_user(make_developer_for_space(started_app.space))
         end
 
         it 'does not return docker disabled message' do
@@ -1382,18 +1872,16 @@ module VCAP::CloudController
       end
 
       context 'when docker is disabled' do
-        let(:space) { Space.make }
-        let!(:stopped_app) { App.make(space: space, state: 'STOPPED', package_hash: 'made-up-package-hash', docker_image: 'docker-image') }
-        let!(:started_app) do
-          App.make(space: space, state: 'STARTED', package_hash: 'made-up-package-hash', docker_image: 'docker-image')
-        end
+        let!(:stopped_app) { AppFactory.make(:docker, state: 'STOPPED', docker_image: 'docker-image') }
+        let!(:started_app) { AppFactory.make(:docker, state: 'STARTED', docker_image: 'docker-image') }
 
         before do
           FeatureFlag.find(name: 'diego_docker').update(enabled: false)
-          set_current_user(make_developer_for_space(space))
         end
 
         it 'returns docker disabled message on start' do
+          set_current_user(make_developer_for_space(stopped_app.space))
+
           put "/v2/apps/#{stopped_app.guid}", MultiJson.dump(state: 'STARTED')
 
           expect(last_response.status).to eq(400)
@@ -1402,6 +1890,8 @@ module VCAP::CloudController
         end
 
         it 'does not return docker disabled message on stop' do
+          set_current_user(make_developer_for_space(started_app.space))
+
           put "/v2/apps/#{started_app.guid}", MultiJson.dump(state: 'STOPPED')
 
           expect(last_response.status).to eq(201)
@@ -1413,8 +1903,8 @@ module VCAP::CloudController
       include_context 'permissions'
 
       before do
-        @obj_a = AppFactory.make(space: @space_a)
-        @obj_b = AppFactory.make(space: @space_b)
+        @obj_a = AppFactory.make(app: AppModel.make(space: @space_a))
+        @obj_b = AppFactory.make(app: AppModel.make(space: @space_b))
       end
 
       describe 'Org Level Permissions' do
@@ -1423,8 +1913,8 @@ module VCAP::CloudController
           let(:member_b) { @org_b_manager }
 
           include_examples 'permission enumeration', 'OrgManager',
-            name: 'app',
-            path: '/v2/apps',
+            name:      'app',
+            path:      '/v2/apps',
             enumerate: 1
         end
 
@@ -1433,8 +1923,8 @@ module VCAP::CloudController
           let(:member_b) { @org_b_member }
 
           include_examples 'permission enumeration', 'OrgUser',
-            name: 'app',
-            path: '/v2/apps',
+            name:      'app',
+            path:      '/v2/apps',
             enumerate: 0
         end
 
@@ -1443,8 +1933,8 @@ module VCAP::CloudController
           let(:member_b) { @org_b_billing_manager }
 
           include_examples 'permission enumeration', 'BillingManager',
-            name: 'app',
-            path: '/v2/apps',
+            name:      'app',
+            path:      '/v2/apps',
             enumerate: 0
         end
 
@@ -1453,8 +1943,8 @@ module VCAP::CloudController
           let(:member_b) { @org_b_auditor }
 
           include_examples 'permission enumeration', 'Auditor',
-            name: 'app',
-            path: '/v2/apps',
+            name:      'app',
+            path:      '/v2/apps',
             enumerate: 0
         end
       end
@@ -1465,8 +1955,8 @@ module VCAP::CloudController
           let(:member_b) { @space_b_manager }
 
           include_examples 'permission enumeration', 'SpaceManager',
-            name: 'app',
-            path: '/v2/apps',
+            name:      'app',
+            path:      '/v2/apps',
             enumerate: 1
         end
 
@@ -1475,8 +1965,8 @@ module VCAP::CloudController
           let(:member_b) { @space_b_developer }
 
           include_examples 'permission enumeration', 'Developer',
-            name: 'app',
-            path: '/v2/apps',
+            name:      'app',
+            path:      '/v2/apps',
             enumerate: 1
         end
 
@@ -1485,23 +1975,23 @@ module VCAP::CloudController
           let(:member_b) { @space_b_auditor }
 
           include_examples 'permission enumeration', 'SpaceAuditor',
-            name: 'app',
-            path: '/v2/apps',
+            name:      'app',
+            path:      '/v2/apps',
             enumerate: 1
         end
       end
     end
 
     describe 'Validation messages' do
-      let(:space) { Space.make }
-      let!(:app_obj) { App.make(space: space, state: 'STARTED', package_hash: 'some-made-up-package-hash') }
+      let(:space) { app_obj.space }
+      let!(:app_obj) { AppFactory.make(state: 'STARTED') }
 
       before do
         set_current_user(make_developer_for_space(space))
       end
 
       it 'returns duplicate app name message correctly' do
-        existing_app = App.make(space: space)
+        existing_app = App.make(app: AppModel.make(space: space))
         put "/v2/apps/#{app_obj.guid}", MultiJson.dump(name: existing_app.name)
 
         expect(last_response.status).to eq(400)
@@ -1613,6 +2103,405 @@ module VCAP::CloudController
 
         expect(last_response.status).to eq(400)
         expect(decoded_response['code']).to eq(310008)
+      end
+    end
+
+    describe 'enumerate' do
+      let!(:web_app) { App.make(type: 'web') }
+      let!(:other_app) { App.make(type: 'other') }
+
+      before do
+        set_current_user_as_admin
+      end
+
+      it 'displays apps with type web' do
+        get '/v2/apps'
+        expect(decoded_response['total_results']).to eq(1)
+        expect(decoded_response['resources'][0]['metadata']['guid']).to eq(web_app.guid)
+      end
+    end
+
+    describe 'PUT /v2/apps/:app_guid/routes/:route_guid' do
+      let(:space) { Space.make }
+      let(:app_obj) { AppFactory.make(space: space) }
+      let(:route) { Route.make(space: space) }
+      let(:developer) { make_developer_for_space(space) }
+
+      before do
+        set_current_user(developer)
+      end
+
+      it 'adds the route to the app' do
+        expect(app_obj.reload.routes).to be_empty
+
+        put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+
+        expect(last_response).to have_status_code(201)
+        expect(app_obj.reload.routes).to match_array([route])
+
+        route_mapping = RouteMappingModel.last
+        expect(route_mapping.app_port).to eq(8080)
+        expect(route_mapping.process_type).to eq('web')
+      end
+
+      context 'when the app does not exist' do
+        it 'returns 404' do
+          put "/v2/apps/not-real/routes/#{route.guid}", nil
+          expect(last_response).to have_status_code(404)
+          expect(last_response.body).to include('AppNotFound')
+        end
+      end
+
+      context 'when the route does not exist' do
+        it 'returns 404' do
+          put "/v2/apps/#{app_obj.guid}/routes/not-real", nil
+          expect(last_response).to have_status_code(404)
+          expect(last_response.body).to include('RouteNotFound')
+        end
+      end
+
+      context 'when the route is already mapped to the app' do
+        before do
+          RouteMappingModel.make(app: app_obj.app, route: route, process_type: app_obj.type)
+        end
+
+        it 'succeeds' do
+          expect(app_obj.reload.routes).to match_array([route])
+
+          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+          expect(last_response).to have_status_code(201)
+        end
+      end
+
+      context 'when the user is not a developer in the apps space' do
+        before do
+          set_current_user(User.make)
+        end
+
+        it 'returns 403' do
+          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+          expect(last_response).to have_status_code(403)
+        end
+      end
+
+      context 'when a route with a routing service is mapped to a non-diego app' do
+        let(:route_binding) { RouteBinding.make }
+        let(:route) { route_binding.route }
+        let(:app_obj) { AppFactory.make(space: space, diego: false) }
+        let(:space) { route.space }
+
+        it 'fails to add the route' do
+          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+          expect(last_response.status).to eq(400)
+          expect(decoded_response['description']).to match(/The requested route relation is invalid: .* - Route services are only supported for apps on Diego/)
+        end
+      end
+
+      context 'when the route is in a different space' do
+        let(:route) { Route.make }
+
+        it 'raises an error' do
+          expect(app_obj.reload.routes).to be_empty
+
+          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+          expect(last_response.status).to eq(400)
+          expect(last_response.body).to include('InvalidRelation')
+          expect(decoded_response['description']).to include(
+            'The app cannot be mapped to this route because the route is not in this space. Apps must be mapped to routes in the same space')
+
+          expect(app_obj.reload.routes).to be_empty
+        end
+      end
+
+      context 'when the app is diego' do
+        let(:app_obj) { AppFactory.make(diego: true, space: route.space, ports: [9797, 7979]) }
+
+        it 'uses the first port for the app as the app_port' do
+          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+          expect(last_response.status).to eq(201)
+
+          mapping = RouteMappingModel.last
+          expect(mapping.app_port).to eq(9797)
+        end
+      end
+
+      describe 'routes from tcp router groups' do
+        let(:domain) { SharedDomain.make(name: 'tcp.com', router_group_guid: 'router-group-guid') }
+        let(:route) { Route.make(space: app_obj.space, domain: domain, port: 9090, host: '') }
+        let(:routing_api_client) { double('routing_api_client', router_group: router_group) }
+        let(:router_group) { double('router_group', type: 'tcp', guid: 'router-group-guid') }
+
+        before do
+          allow_any_instance_of(RouteValidator).to receive(:validate)
+          allow(VCAP::CloudController::RoutingApi::Client).to receive(:new).and_return(routing_api_client)
+        end
+
+        it 'adds the route to the app' do
+          expect(app_obj.reload.routes).to be_empty
+
+          put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+
+          expect(last_response).to have_status_code(201)
+          expect(app_obj.reload.routes).to match_array([route])
+
+          route_mapping = RouteMappingModel.last
+          expect(route_mapping.app_port).to eq(8080)
+          expect(route_mapping.process_type).to eq('web')
+        end
+
+        context 'when routing api is disabled' do
+          before do
+            route
+            TestConfig.override(routing_api: nil)
+          end
+
+          it 'existing routes with router groups return 403 when mapped to apps' do
+            put "/v2/apps/#{app_obj.guid}/routes/#{route.guid}", nil
+            expect(last_response).to have_status_code(403)
+            expect(decoded_response['description']).to include('Routing API is disabled')
+          end
+        end
+      end
+    end
+
+    describe 'DELETE /v2/apps/:app_guid/routes/:route_guid' do
+      let(:space) { Space.make }
+      let(:app_obj) { AppFactory.make(space: space) }
+      let(:route) { Route.make(space: space) }
+      let!(:route_mapping) { RouteMappingModel.make(app: app_obj.app, route: route, process_type: app_obj.type) }
+      let(:developer) { make_developer_for_space(space) }
+
+      before do
+        set_current_user(developer)
+      end
+
+      it 'removes the association' do
+        expect(app_obj.reload.routes).to match_array([route])
+
+        delete "/v2/apps/#{app_obj.guid}/routes/#{route.guid}"
+        expect(last_response.status).to eq(204)
+
+        expect(app_obj.reload.routes).to be_empty
+      end
+
+      context 'when the app does not exist' do
+        it 'returns 404' do
+          delete "/v2/apps/not-found/routes/#{route.guid}"
+          expect(last_response).to have_status_code(404)
+          expect(last_response.body).to include('AppNotFound')
+        end
+      end
+
+      context 'when the route does not exist' do
+        it 'returns 404' do
+          delete "/v2/apps/#{app_obj.guid}/routes/not-found"
+          expect(last_response).to have_status_code(404)
+          expect(last_response.body).to include('RouteNotFound')
+        end
+      end
+
+      context 'when the route is not mapped to the app' do
+        before do
+          route_mapping.destroy
+        end
+
+        it 'succeeds' do
+          expect(app_obj.reload.routes).to be_empty
+
+          delete "/v2/apps/#{app_obj.guid}/routes/#{route.guid}"
+          expect(last_response).to have_status_code(204)
+        end
+      end
+
+      context 'when the user is not a developer in the apps space' do
+        before do
+          set_current_user(User.make)
+        end
+
+        it 'returns 403' do
+          delete "/v2/apps/#{app_obj.guid}/routes/#{route.guid}"
+          expect(last_response).to have_status_code(403)
+        end
+      end
+    end
+
+    describe 'DELETE /v2/apps/:app_guid/service_bindings/:service_binding_guid' do
+      let(:space) { Space.make }
+      let(:app_obj) { AppFactory.make(space: space) }
+      let(:instance) { ManagedServiceInstance.make(space: space) }
+      let!(:service_binding) { ServiceBinding.make(app: app_obj.app, service_instance: instance) }
+      let(:developer) { make_developer_for_space(space) }
+
+      before do
+        set_current_user(developer)
+        allow_any_instance_of(VCAP::Services::ServiceBrokers::V2::Client).to receive(:unbind)
+      end
+
+      it 'removes the association' do
+        expect(app_obj.reload.service_bindings).to match_array([service_binding])
+
+        delete "/v2/apps/#{app_obj.guid}/service_bindings/#{service_binding.guid}"
+        expect(last_response.status).to eq(204)
+
+        expect(app_obj.reload.service_bindings).to be_empty
+      end
+
+      context 'when the app does not exist' do
+        it 'returns 404' do
+          delete "/v2/apps/not-found/service_bindings/#{service_binding.guid}"
+          expect(last_response).to have_status_code(404)
+          expect(last_response.body).to include('AppNotFound')
+        end
+      end
+
+      context 'when the service binding does not exist' do
+        it 'returns 404' do
+          delete "/v2/apps/#{app_obj.guid}/service_bindings/not-found"
+          expect(last_response).to have_status_code(404)
+          expect(last_response.body).to include('ServiceBindingNotFound')
+        end
+      end
+
+      context 'when the user is not a developer in the apps space' do
+        before do
+          set_current_user(User.make)
+        end
+
+        it 'returns 403' do
+          delete "/v2/apps/#{app_obj.guid}/service_bindings/#{service_binding.guid}"
+          expect(last_response).to have_status_code(403)
+        end
+      end
+    end
+
+    describe 'GET /v2/apps/:guid/permissions' do
+      let(:app_obj) { AppFactory.make(space: space) }
+      let(:space) { Space.make }
+      let(:user)  { User.make }
+
+      before do
+        space.organization.add_user(user)
+      end
+
+      context 'when the user is a SpaceDeveloper' do
+        before do
+          space.add_developer(user)
+          set_current_user(user, { scopes: ['cloud_controller.user'] })
+        end
+
+        it 'succeeds and present data reading permissions' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(200)
+          expect(parsed_response['read_sensitive_data']).to eq(true)
+          expect(parsed_response['read_basic_data']).to eq(true)
+        end
+      end
+
+      context 'when the user is a OrgManager' do
+        before do
+          app_obj.organization.add_manager(user)
+          set_current_user(user, { scopes: ['cloud_controller.user'] })
+        end
+
+        it 'succeeds and present data reading permissions' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(200)
+          expect(parsed_response['read_sensitive_data']).to eq(false)
+          expect(parsed_response['read_basic_data']).to eq(true)
+        end
+      end
+
+      context 'when the user is a BillingManager' do
+        before do
+          space.organization.add_billing_manager(user)
+          set_current_user(user, { scopes: ['cloud_controller.user'] })
+        end
+
+        it 'fails with a 403' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(403)
+          expect(decoded_response['code']).to eq(10003)
+          expect(decoded_response['error_code']).to eq('CF-NotAuthorized')
+          expect(decoded_response['description']).to include('You are not authorized to perform the requested action')
+        end
+      end
+
+      context 'when the user is a OrgAuditor' do
+        before do
+          space.organization.add_auditor(user)
+          set_current_user(user, { scopes: ['cloud_controller.user'] })
+        end
+
+        it 'fails with a 403' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(403)
+          expect(decoded_response['code']).to eq(10003)
+          expect(decoded_response['error_code']).to eq('CF-NotAuthorized')
+          expect(decoded_response['description']).to include('You are not authorized to perform the requested action')
+        end
+      end
+
+      context 'when the user is a SpaceManager' do
+        before do
+          space.add_manager(user)
+          set_current_user(user, { scopes: ['cloud_controller.user'] })
+        end
+
+        it 'succeeds and present data reading permissions' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(200)
+          expect(parsed_response['read_sensitive_data']).to eq(false)
+          expect(parsed_response['read_basic_data']).to eq(true)
+        end
+      end
+
+      context 'when the user is a SpaceAuditor' do
+        before do
+          space.add_auditor(user)
+          set_current_user(user, { scopes: ['cloud_controller.user'] })
+        end
+
+        it 'succeeds and present data reading permissions' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(200)
+          expect(parsed_response['read_sensitive_data']).to eq(false)
+          expect(parsed_response['read_basic_data']).to eq(true)
+        end
+      end
+
+      context 'when missing cloud_controller.user scope' do
+        let(:user) { make_developer_for_space(space) }
+
+        before do
+          set_current_user(user, { scopes: [] })
+        end
+
+        it 'returns 403' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(403)
+        end
+      end
+
+      context 'when the user is not part of the org or space' do
+        before do
+          new_user = User.make
+          set_current_user(new_user)
+        end
+
+        it 'returns 403' do
+          get "/v2/apps/#{app_obj.guid}/permissions"
+          expect(last_response.status).to eq(403)
+          expect(decoded_response['code']).to eq(10003)
+          expect(decoded_response['error_code']).to eq('CF-NotAuthorized')
+          expect(decoded_response['description']).to include('You are not authorized to perform the requested action')
+        end
+      end
+
+      context 'when the app does not exist' do
+        it 'returns 404' do
+          get '/v2/apps/made-up-guid/permissions'
+          expect(last_response.status).to eq(404)
+        end
       end
     end
   end

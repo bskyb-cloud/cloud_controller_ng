@@ -25,9 +25,8 @@ module CloudController
         private
 
         def provide_fog(options, directory_key, root_dir)
-          cdn_uri        = options[:cdn].try(:[], :uri)
+          cdn_uri        = HashUtils.dig(options[:cdn], :uri)
           cdn            = CloudController::Blobstore::Cdn.make(cdn_uri)
-          encryption = options.try(:[], :fog_aws_storage_options).try(:[], :encryption)
 
           client = FogClient.new(
             connection_config: options.fetch(:fog_connection),
@@ -36,7 +35,7 @@ module CloudController
             root_dir: root_dir,
             min_size: options[:minimum_size],
             max_size: options[:maximum_size],
-            encryption: encryption
+            storage_options: options[:fog_aws_storage_options]
           )
 
           logger = Steno.logger('cc.blobstore')
@@ -55,7 +54,8 @@ module CloudController
         def provide_bits_service(bits_service_options, resource_type)
           client = BitsService::Client.new(
             bits_service_options: bits_service_options,
-            resource_type: resource_type
+            resource_type: resource_type,
+            vcap_request_id: VCAP::Request.current_id,
           )
 
           Client.new(client)

@@ -15,7 +15,7 @@ module CloudController
             'buildpack'                   => buildpack_name_or_url(app.buildpack),
             'detected_buildpack'          => app.detected_buildpack,
             'detected_buildpack_guid'     => app.detected_buildpack_guid,
-            'environment_json'            => redact(app.environment_json, admin_or_developer?(app)),
+            'environment_json'            => redact(app.environment_json, can_read_env?(app)),
             'memory'                      => app.memory,
             'instances'                   => app.instances,
             'disk_quota'                  => app.disk_quota,
@@ -28,6 +28,7 @@ module CloudController
             'package_state'               => app.package_state,
             'health_check_type'           => app.health_check_type,
             'health_check_timeout'        => app.health_check_timeout,
+            'health_check_http_endpoint'  => app.health_check_http_endpoint,
             'staging_failed_reason'       => app.staging_failed_reason,
             'staging_failed_description'  => app.staging_failed_description,
             'diego'                       => app.diego,
@@ -40,11 +41,16 @@ module CloudController
           }
 
           entity.merge!(RelationsPresenter.new.to_hash(controller, app, opts, depth, parents, orphans))
-
-          entity
+        rescue NoMethodError => e
+          logger.info("Error presenting app: no associated object: #{e}")
+          nil
         end
 
         private
+
+        def logger
+          @logger ||= Steno.logger('cc.presenter.app')
+        end
 
         def buildpack_name_or_url(buildpack)
           if buildpack.class == VCAP::CloudController::CustomBuildpack
@@ -54,9 +60,8 @@ module CloudController
           end
         end
 
-        def admin_or_developer?(app)
-          admin_override = VCAP::CloudController::SecurityContext.admin? || VCAP::CloudController::SecurityContext.admin_read_only?
-          admin_override || app.space.has_developer?(VCAP::CloudController::SecurityContext.current_user)
+        def can_read_env?(app)
+          VCAP::CloudController::Security::AccessContext.new.can?(:read_env, app)
         end
 
         def redact(attr, has_permission=false)

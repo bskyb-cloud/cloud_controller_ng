@@ -1,3 +1,5 @@
+require 'cloud_controller/blobstore/retryable_blob'
+
 module CloudController
   module Blobstore
     class RetryableClient
@@ -13,7 +15,13 @@ module CloudController
       end
 
       def exists?(key)
-        @wrapped_client.exists?(key)
+        with_retries(__method__.to_s, {
+          args: {
+            key: key,
+          }
+        }) do
+          @wrapped_client.exists?(key)
+        end
       end
 
       def download_from_blobstore(source_key, destination_path, mode: nil)
@@ -106,7 +114,8 @@ module CloudController
             key: key
           }
         }) do
-          @wrapped_client.blob(key)
+          blob = @wrapped_client.blob(key)
+          RetryableBlob.new(blob: blob, errors: @retryable_errors, logger: @logger, num_retries: @num_retries) if blob
         end
       end
 
@@ -121,7 +130,7 @@ module CloudController
 
         @logger.debug("#{log_prefix}-retry",
           {
-            error:             e,
+            error:             e.message,
             remaining_retries: retries
           }.merge(log_data)
         )

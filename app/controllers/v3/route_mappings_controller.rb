@@ -1,7 +1,7 @@
-require 'messages/route_mappings_create_message'
-require 'messages/route_mappings_list_message'
-require 'queries/route_mapping_list_fetcher'
-require 'queries/add_route_fetcher'
+require 'messages/route_mappings/route_mappings_create_message'
+require 'messages/route_mappings/route_mappings_list_message'
+require 'fetchers/route_mapping_list_fetcher'
+require 'fetchers/add_route_fetcher'
 require 'presenters/v3/paginated_list_presenter'
 require 'presenters/v3/route_mapping_presenter'
 require 'actions/route_mapping_create'
@@ -21,14 +21,14 @@ class RouteMappingsController < ApplicationController
       app, dataset = fetcher.fetch_for_app(app_guid: params[:app_guid])
       app_not_found! unless app && can_read?(app.space.guid, app.organization.guid)
     else
-      dataset = if roles.admin? || roles.admin_read_only?
+      dataset = if can_read_globally?
                   fetcher.fetch_all
                 else
                   fetcher.fetch_for_spaces(space_guids: readable_space_guids)
                 end
     end
 
-    render :ok, json: Presenters::V3::PaginatedListPresenter.new(dataset, base_url(resource: 'route_mappings'), message)
+    render :ok, json: Presenters::V3::PaginatedListPresenter.new(dataset: dataset, path: base_url(resource: 'route_mappings'), message: message)
   end
 
   def create
@@ -42,7 +42,7 @@ class RouteMappingsController < ApplicationController
     route_not_found! unless route
 
     begin
-      route_mapping = RouteMappingCreate.new(current_user, current_user_email, app, route, process, message).add
+      route_mapping = RouteMappingCreate.new(UserAuditInfo.from_context(SecurityContext), route, process).add(message)
     rescue RouteMappingCreate::InvalidRouteMapping => e
       unprocessable!(e.message)
     end
@@ -62,7 +62,7 @@ class RouteMappingsController < ApplicationController
     route_mapping_not_found! unless route_mapping && can_read?(route_mapping.space.guid, route_mapping.space.organization.guid)
     unauthorized! unless can_write?(route_mapping.space.guid)
 
-    RouteMappingDelete.new(current_user, current_user_email).delete(route_mapping)
+    RouteMappingDelete.new(UserAuditInfo.from_context(SecurityContext)).delete(route_mapping)
     head :no_content
   end
 

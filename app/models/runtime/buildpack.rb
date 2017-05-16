@@ -35,20 +35,27 @@ module VCAP::CloudController
       full_dataset_filter
     end
 
+    def before_destroy
+      Locking[name: 'buildpacks'].lock!
+    end
+
     def after_destroy
       super
-
       shifter = BuildpackShifter.new
       shifter.shift_positions_down(self)
     end
 
     def validate
       validates_unique :name
-      validates_format(/^(\w|\-)+$/, :name, message: 'name can only contain alphanumeric characters')
+      validates_format(/\A(\w|\-)+\z/, :name, message: 'name can only contain alphanumeric characters')
     end
 
     def locked?
       !!locked
+    end
+
+    def enabled?
+      !!enabled
     end
 
     def staging_message

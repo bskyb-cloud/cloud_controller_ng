@@ -3,7 +3,7 @@ require 'spec_helper'
 module VCAP::CloudController
   RSpec.describe Dea::InstancesReporter do
     subject { described_class.new(health_manager_client) }
-    let(:app) { AppFactory.make(package_hash: 'abc', package_state: 'STAGED') }
+    let(:app) { AppFactory.make }
     let(:health_manager_client) { double(:health_manager_client) }
 
     describe '#all_instances_for_app' do
@@ -56,7 +56,8 @@ module VCAP::CloudController
 
         context 'and the app failed to stage' do
           before do
-            app.package_state = 'FAILED'
+            app.latest_package.update(state: 'FAILED')
+            app.app.update(droplet_guid: nil)
           end
 
           it 'returns 0' do
@@ -69,27 +70,43 @@ module VCAP::CloudController
     end
 
     describe '#number_of_starting_and_running_instances_for_processes' do
-      let(:running_apps) do
+      let(:space_with_running_apps) { Space.make }
+      let(:space_with_stopped_apps) { Space.make }
+      let(:space_with_failed_apps) { Space.make }
+      let(:space_with_pending_apps) { Space.make }
+
+      let!(:running_apps) do
         Array.new(3) do
-          AppFactory.make(state: 'STARTED', package_state: 'STAGED', package_hash: 'abc')
+          AppFactory.make(state: 'STARTED', space: space_with_running_apps)
         end
       end
 
-      let(:stopped_apps) do
+      let!(:stopped_apps) do
         Array.new(3) do
-          AppFactory.make(state: 'STOPPED', package_state: 'STAGED', package_hash: 'xyz')
+          AppFactory.make(state: 'STOPPED', space: space_with_stopped_apps)
         end
       end
 
-      let(:failed_apps) do
-        [AppFactory.make(state: 'STARTED', package_state: 'FAILED', package_hash: 'def')]
+      let!(:failed_apps) do
+        a = AppFactory.make(state: 'STARTED', space: space_with_failed_apps)
+        a.latest_package.update(state: 'FAILED')
+        a.app.update(droplet_guid: nil)
+        [a]
       end
 
-      let(:pending_apps) do
-        [AppFactory.make(state: 'STARTED', package_state: 'PENDING', package_hash: 'def')]
+      let!(:pending_apps) do
+        a = AppFactory.make(state: 'STARTED', space: space_with_pending_apps)
+        a.latest_package.update(state: VCAP::CloudController::PackageModel::PENDING_STATE)
+        a.app.update(droplet_guid: nil)
+        [a]
       end
 
-      let(:apps) { running_apps + stopped_apps + failed_apps + pending_apps }
+      context 'when there are no proccesses' do
+        it 'returns an empty hash' do
+          result = subject.number_of_starting_and_running_instances_for_processes(Space.make.apps)
+          expect(result).to eq({})
+        end
+      end
 
       describe 'stopped apps' do
         before do
@@ -151,6 +168,8 @@ module VCAP::CloudController
       describe 'running apps' do
         before do
           allow(health_manager_client).to receive(:healthy_instances_bulk) do |apps|
+            running_apps.each { |running| expect(apps).to include(running) }
+
             apps.each_with_object({}) do |app, hash|
               hash[app.guid] = 3
             end
@@ -158,7 +177,7 @@ module VCAP::CloudController
         end
 
         it 'should ask the health manager for active instances for running apps' do
-          expect(health_manager_client).to receive(:healthy_instances_bulk).with(running_apps)
+          expect(health_manager_client).to receive(:healthy_instances_bulk)
 
           result = subject.number_of_starting_and_running_instances_for_processes(running_apps)
           expect(result.length).to be(3)
@@ -167,12 +186,15 @@ module VCAP::CloudController
       end
 
       describe 'started apps that failed to stage' do
-        let(:staging_failed_apps) do
+        let(:space) { Space.make }
+
+        let!(:staging_failed_apps) do
           Array.new(3) do
-            AppFactory.make(state: 'STARTED', package_state: 'FAILED', package_hash: 'abc')
+            AppFactory.make(state: 'STARTED', space: space).tap do |a|
+              a.latest_package.update(state: 'FAILED')
+              a.app.update(droplet_guid: nil)
+            end
           end
-        end
-        before do
         end
 
         it 'should return 0 instances for apps that failed to stage' do

@@ -8,12 +8,6 @@ RSpec.describe 'Routes' do
     space.organization.add_user(user)
     space.add_developer(user)
 
-    stub_request(:post, 'http://routing-client:routing-secret@localhost:8080/uaa/oauth/token').
-      with(body: 'grant_type=client_credentials').
-      to_return(status: 200,
-                body:           '{"token_type": "monkeys", "access_token": "banana"}',
-                headers:        { 'content-type' => 'application/json' })
-
     stub_request(:get, 'http://localhost:3000/routing/v1/router_groups').
       to_return(status: 200, body: '{}', headers: {})
   end
@@ -39,7 +33,7 @@ RSpec.describe 'Routes' do
               'guid'       => route.guid,
               'url'        => "/v2/routes/#{route.guid}",
               'created_at' => iso8601,
-              'updated_at' => nil
+              'updated_at' => iso8601
             },
             'entity' => {
               'host'                  => route.host,
@@ -60,7 +54,7 @@ RSpec.describe 'Routes' do
 
     context 'with inline-relations-depth' do
       let!(:process) { VCAP::CloudController::AppFactory.make(space: space) }
-      let!(:route_mapping) { VCAP::CloudController::RouteMapping.make(app: process, route: route) }
+      let!(:route_mapping) { VCAP::CloudController::RouteMappingModel.make(app: process.app, process_type: process.type, route: route) }
 
       it 'includes related records' do
         get '/v2/routes?inline-relations-depth=1', nil, headers_for(user)
@@ -79,7 +73,7 @@ RSpec.describe 'Routes' do
                 'guid'       => route.guid,
                 'url'        => "/v2/routes/#{route.guid}",
                 'created_at' => iso8601,
-                'updated_at' => nil
+                'updated_at' => iso8601
               },
               'entity' => {
                 'host'                  => route.host,
@@ -94,7 +88,7 @@ RSpec.describe 'Routes' do
                     'guid'       => domain.guid,
                     'url'        => "/v2/shared_domains/#{domain.guid}",
                     'created_at' => iso8601,
-                    'updated_at' => nil
+                    'updated_at' => iso8601
                   },
                   'entity' => {
                     'name'              => domain.name,
@@ -108,30 +102,32 @@ RSpec.describe 'Routes' do
                     'guid'       => space.guid,
                     'url'        => "/v2/spaces/#{space.guid}",
                     'created_at' => iso8601,
-                    'updated_at' => nil
+                    'updated_at' => iso8601
                   },
                   'entity' => {
-                    'name'                        => space.name,
-                    'organization_guid'           => space.organization.guid.to_s,
-                    'space_quota_definition_guid' => nil,
-                    'allow_ssh'                   => true,
-                    'organization_url'            => "/v2/organizations/#{space.organization.guid}",
-                    'developers_url'              => "/v2/spaces/#{space.guid}/developers",
-                    'managers_url'                => "/v2/spaces/#{space.guid}/managers",
-                    'auditors_url'                => "/v2/spaces/#{space.guid}/auditors",
-                    'apps_url'                    => "/v2/spaces/#{space.guid}/apps",
-                    'routes_url'                  => "/v2/spaces/#{space.guid}/routes",
-                    'domains_url'                 => "/v2/spaces/#{space.guid}/domains",
-                    'service_instances_url'       => "/v2/spaces/#{space.guid}/service_instances",
-                    'app_events_url'              => "/v2/spaces/#{space.guid}/app_events",
-                    'events_url'                  => "/v2/spaces/#{space.guid}/events",
-                    'security_groups_url'         => "/v2/spaces/#{space.guid}/security_groups"
+                    'name'                         => space.name,
+                    'organization_guid'            => space.organization.guid.to_s,
+                    'space_quota_definition_guid'  => nil,
+                    'isolation_segment_guid'       => nil,
+                    'allow_ssh'                    => true,
+                    'organization_url'             => "/v2/organizations/#{space.organization.guid}",
+                    'developers_url'               => "/v2/spaces/#{space.guid}/developers",
+                    'managers_url'                 => "/v2/spaces/#{space.guid}/managers",
+                    'auditors_url'                 => "/v2/spaces/#{space.guid}/auditors",
+                    'apps_url'                     => "/v2/spaces/#{space.guid}/apps",
+                    'routes_url'                   => "/v2/spaces/#{space.guid}/routes",
+                    'domains_url'                  => "/v2/spaces/#{space.guid}/domains",
+                    'service_instances_url'        => "/v2/spaces/#{space.guid}/service_instances",
+                    'app_events_url'               => "/v2/spaces/#{space.guid}/app_events",
+                    'events_url'                   => "/v2/spaces/#{space.guid}/events",
+                    'security_groups_url'          => "/v2/spaces/#{space.guid}/security_groups",
+                    'staging_security_groups_url'  => "/v2/spaces/#{space.guid}/staging_security_groups"
                   }
                 },
-                'apps_url' => "/v2/routes/#{route.guid}/apps",
-                'apps' => [
+                'apps_url'              => "/v2/routes/#{route.guid}/apps",
+                'apps'                  => [
                   {
-                    'metadata' =>                    {
+                    'metadata' => {
                       'guid'       => process.guid,
                       'url'        => "/v2/apps/#{process.guid}",
                       'created_at' => iso8601,
@@ -154,10 +150,11 @@ RSpec.describe 'Routes' do
                       'command'                    => nil,
                       'console'                    => false,
                       'debug'                      => nil,
-                      'staging_task_id'            => nil,
-                      'package_state'              => 'PENDING',
+                      'staging_task_id'            => process.latest_droplet.guid,
+                      'package_state'              => 'STAGED',
                       'health_check_type'          => 'port',
                       'health_check_timeout'       => nil,
+                      'health_check_http_endpoint' => nil,
                       'staging_failed_reason'      => nil,
                       'staging_failed_description' => nil,
                       'diego'                      => false,
@@ -202,7 +199,7 @@ RSpec.describe 'Routes' do
               'guid'       => route.guid,
               'url'        => "/v2/routes/#{route.guid}",
               'created_at' => iso8601,
-              'updated_at' => nil
+              'updated_at' => iso8601
             },
             'entity' => {
               'host'                  => route.host,
@@ -231,6 +228,44 @@ RSpec.describe 'Routes' do
         parsed_response = MultiJson.load(last_response.body)
         expect(parsed_response['entity']['domain_url']).to eq("/v2/private_domains/#{domain.guid}")
       end
+    end
+  end
+
+  describe 'GET /v2/routes/:guid/route_mappings' do
+    let(:process) { VCAP::CloudController::AppFactory.make(space: space) }
+    let(:route) { VCAP::CloudController::Route.make(space: space) }
+    let!(:route_mapping) { VCAP::CloudController::RouteMappingModel.make(app: process.app, route: route, process_type: process.type) }
+
+    it 'lists associated route mappings' do
+      get "/v2/routes/#{route.guid}/route_mappings", nil, headers_for(user)
+      expect(last_response.status).to eq(200)
+
+      parsed_response = MultiJson.load(last_response.body)
+      expect(parsed_response).to be_a_response_like(
+        {
+          'total_results' => 1,
+          'total_pages'   => 1,
+          'prev_url'      => nil,
+          'next_url'      => nil,
+          'resources'     => [
+            {
+              'metadata' => {
+                'guid'       => route_mapping.guid,
+                'url'        => "/v2/route_mappings/#{route_mapping.guid}",
+                'created_at' => iso8601,
+                'updated_at' => iso8601
+              },
+              'entity' => {
+                'app_port'   => nil,
+                'app_guid'   => process.guid,
+                'route_guid' => route.guid,
+                'app_url'    => "/v2/apps/#{process.guid}",
+                'route_url'  => "/v2/routes/#{route.guid}"
+              }
+            }
+          ]
+        }
+      )
     end
   end
 end

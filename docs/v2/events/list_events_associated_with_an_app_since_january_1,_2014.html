@@ -89,7 +89,7 @@
                   <span class="name">q</span>
               </td>
               <td>
-                  <span class="description">Parameters used to filter the result set.<br/>Format queries as &lt;filter&gt;&lt;op&gt;&lt;value&gt;<br/> Valid ops: : &gt;= &lt;= &lt; &gt; IN<br/> Valid filters: timestamp, type, actee</span>
+                  <span class="description">Parameters used to filter the result set.<br/>Format queries as &lt;filter&gt;&lt;op&gt;&lt;value&gt;<br/> Valid ops: : &gt;= &lt;= &lt; &gt; IN<br/> Valid filters: timestamp, type, actee, space_guid, organization_guid</span>
               </td>
               <td>
                 <ul class="valid_values">
@@ -144,6 +144,24 @@
               </td>
               <td>
                 <ul class="valid_values">
+                </ul>
+              </td>
+              <td>
+                <ul class="example_values">
+                </ul>
+              </td>
+            </tr>
+            <tr class="">
+              <td class=" ">
+                <span class="name">order-by</span>
+              </td>
+              <td>
+                <span class="description">Attribute to order results by</span>
+              </td>
+              <td>
+                <ul class="valid_values">
+                  <li>timestamp</li>
+                  <li>id</li>
                 </ul>
               </td>
               <td>
@@ -552,7 +570,7 @@ Cookie: </pre>
         "guid": "328a5f97-b3c7-4b96-9891-8dab5fb631c2",
         "url": "/v2/events/328a5f97-b3c7-4b96-9891-8dab5fb631c2",
         "created_at": "2016-06-08T16:41:23Z",
-        "updated_at": null
+        "updated_at": "2016-06-08T16:41:26Z"
       },
       "entity": {
         "type": "audit.app.create",
@@ -582,7 +600,7 @@ Cookie: </pre>
         "guid": "7fb184f5-329f-4436-98a0-7b3523a5b2f7",
         "url": "/v2/events/7fb184f5-329f-4436-98a0-7b3523a5b2f7",
         "created_at": "2016-06-08T16:41:23Z",
-        "updated_at": null
+        "updated_at": "2016-06-08T16:41:26Z"
       },
       "entity": {
         "type": "audit.app.update",
@@ -612,7 +630,7 @@ Cookie: </pre>
         "guid": "7e075705-9f98-40ab-bc1f-7a19ced0cf70",
         "url": "/v2/events/7e075705-9f98-40ab-bc1f-7a19ced0cf70",
         "created_at": "2016-06-08T16:41:23Z",
-        "updated_at": null
+        "updated_at": "2016-06-08T16:41:26Z"
       },
       "entity": {
         "type": "audit.app.delete-request",

@@ -13,6 +13,7 @@ module VCAP::CloudController
     define_schema do
       {
         :external_port => Integer,
+        :tls_port => Integer,
         :external_protocol => String,
         :internal_service_hostname => String,
         :info => {
@@ -72,9 +73,11 @@ module VCAP::CloudController
         },
 
         :uaa => {
-          :url                => String,
-          :resource_id        => String,
+          :url                        => String,
+          :resource_id                => String,
           optional(:symmetric_secret) => String,
+          :internal_url               => String,
+          :ca_file                    => String,
         },
 
         :logging => {
@@ -251,8 +254,6 @@ module VCAP::CloudController
         optional(:placement_top_stager_percentage) => Integer,
         optional(:minimum_candidate_stagers) => Integer,
 
-        optional(:diego_stager_url) => String,
-        optional(:diego_tps_url) => String,
         optional(:users_can_select_backend) => bool,
         optional(:default_to_diego_backend) => bool,
         optional(:routing_api) => {
@@ -274,7 +275,39 @@ module VCAP::CloudController
           enabled: bool,
           optional(:public_endpoint) => String,
           optional(:private_endpoint) => String
-        }
+        },
+
+        optional(:rate_limiter) => {
+          enabled: bool,
+          optional(:general_limit) => Integer,
+          optional(:unauthenticated_limit) => Integer,
+          optional(:reset_interval_in_minutes) => Integer,
+        },
+        :shared_isolation_segment_name => String,
+
+        optional(:diego) => {
+          bbs: {
+            url:         String,
+            ca_file:     String,
+            cert_file:   String,
+            key_file:    String,
+          },
+          cc_uploader_url:                       String,
+          file_server_url:                       String,
+          lifecycle_bundles:                     Hash,
+          nsync_url:                             String,
+          pid_limit:                             Integer,
+          stager_url:                            String,
+          temporary_local_staging:               bool,
+          temporary_local_tasks:                 bool,
+          temporary_local_apps:                  bool,
+          temporary_local_sync:                  bool,
+          temporary_local_tps:                   bool,
+          temporary_cc_uploader_mtls:            bool,
+          tps_url:                               String,
+          use_privileged_containers_for_running: bool,
+          use_privileged_containers_for_staging: bool,
+        },
       }
     end
 
@@ -328,7 +361,7 @@ module VCAP::CloudController
         stagers = Stagers.new(@config, message_bus, dea_pool)
         dependency_locator.register(:stagers, stagers)
 
-        dependency_locator.register(:instances_reporters, InstancesReporters.new(tps_client, hm_client))
+        dependency_locator.register(:instances_reporters, InstancesReporters.new)
         dependency_locator.register(:index_stopper, IndexStopper.new(runners))
 
         Dea::Client.configure(@config, message_bus, dea_pool, blobstore_url_generator)
@@ -354,7 +387,7 @@ module VCAP::CloudController
           # When Rails is present, NewRelic adds itself to the Rails initializers instead
           # of initializing immediately.
 
-          opts = if Rails.env.test? && !ENV['NRCONFIG']
+          opts = if (Rails.env.test? || Rails.env.development?) && !ENV['NRCONFIG']
                    { env: ENV['NEW_RELIC_ENV'] || 'production', monitor_mode: false }
                  else
                    { env: ENV['NEW_RELIC_ENV'] || 'production' }
@@ -397,6 +430,9 @@ module VCAP::CloudController
         config[:droplets][:max_staged_droplets_stored] ||= 5
         config[:minimum_candidate_stagers] = (config[:minimum_candidate_stagers] && config[:minimum_candidate_stagers] > 0) ? config[:minimum_candidate_stagers] : 5
         config[:bits_service] ||= { enabled: false }
+        config[:rate_limiter] ||= { enabled: false }
+        config[:rate_limiter][:general_limit] ||= 2000
+        config[:rate_limiter][:reset_interval_in_minutes] ||= 60
 
         unless config.key?(:users_can_select_backend)
           config[:users_can_select_backend] = true
@@ -410,7 +446,16 @@ module VCAP::CloudController
       def sanitize(config)
         sanitize_grace_period(config)
         sanitize_staging_auth(config)
+        sanitize_diego_properties(config)
+
         config
+      end
+
+      def sanitize_diego_properties(config)
+        pid_limit = HashUtils.dig(config, :diego, :pid_limit)
+        if pid_limit
+          config[:diego][:pid_limit] = 0 if pid_limit < 0
+        end
       end
 
       def sanitize_grace_period(config)

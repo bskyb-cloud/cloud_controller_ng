@@ -20,7 +20,8 @@ module VCAP::Services
                   SuccessValidator.new(state: 'succeeded'))
             when 202
               JsonObjectValidator.new(@logger,
-                  SuccessValidator.new(state: 'in progress'))
+                OperationValidator.new(
+                  SuccessValidator.new(state: 'in progress')))
             when 409
               FailingValidator.new(Errors::ServiceBrokerConflict)
             when 422
@@ -101,7 +102,8 @@ module VCAP::Services
               IgnoreDescriptionKeyFailingValidator.new(Errors::ServiceBrokerBadResponse)
             when 202
               JsonObjectValidator.new(@logger,
-                SuccessValidator.new(state: 'in progress'))
+                OperationValidator.new(
+                  SuccessValidator.new(state: 'in progress')))
             when 204
               FailingValidator.new(Errors::ServiceBrokerBadResponse)
             when 410
@@ -148,7 +150,8 @@ module VCAP::Services
               IgnoreDescriptionKeyFailingValidator.new(Errors::ServiceBrokerBadResponse)
             when 202
               JsonObjectValidator.new(@logger,
-                  SuccessValidator.new(state: 'in progress'))
+                OperationValidator.new(
+                  SuccessValidator.new(state: 'in progress')))
             when 422
               FailWhenValidator.new('error', { 'AsyncRequired' => Errors::AsyncRequired },
                 FailingValidator.new(Errors::ServiceBrokerRequestRejected))
@@ -225,7 +228,36 @@ module VCAP::Services
               raise Errors::ServiceBrokerInvalidVolumeMounts.new(uri, method, response, invalid_error_description(response.body))
             end
 
+            if !parsed_response['volume_mounts'].nil?
+              parsed_response['volume_mounts'].each do |mount_info|
+                validate_mount(method, uri, response, mount_info)
+              end
+            end
+
             @validator.validate(method: method, uri: uri, code: code, response: response)
+          end
+
+          def validate_mount(method, uri, response, mount_info)
+            %w(device_type device mode container_dir driver).each do |key|
+              raise Errors::ServiceBrokerInvalidVolumeMounts.new(uri, method, response, "missing required field '#{key}'") unless mount_info.key?(key)
+            end
+
+            %w(device_type mode container_dir driver).each do |key|
+              raise Errors::ServiceBrokerInvalidVolumeMounts.new(uri, method, response, "missing required field '#{key}'") unless
+                mount_info[key].is_a?(String) && !mount_info[key].empty?
+            end
+
+            if !mount_info['device'].is_a?(Hash)
+              raise Errors::ServiceBrokerInvalidVolumeMounts.new(uri, method, response, "required field 'device' must be an object but is " + mount_info['device'].class.to_s)
+            end
+
+            if mount_info['device']['volume_id'].class != String || mount_info['device']['volume_id'].empty?
+              raise Errors::ServiceBrokerInvalidVolumeMounts.new(uri, method, response, "required field 'device.volume_id' must be a non-empty string")
+            end
+
+            if mount_info['device'].key?('mount_config') && !mount_info['device']['mount_config'].nil? && mount_info['device']['mount_config'].class != Hash
+              raise Errors::ServiceBrokerInvalidVolumeMounts.new(uri, method, response, "field 'device.mount_config' must be an object if it is defined")
+            end
           end
 
           def invalid_error_description(body)
@@ -235,6 +267,28 @@ module VCAP::Services
           def not_required_error_description
             'The service is attempting to supply volume mounts from your application, but is not registered as a volume mount service. ' \
             'Please contact the service provider.'
+          end
+        end
+
+        class OperationValidator
+          def initialize(validator)
+            @validator = validator
+          end
+
+          def validate(method:, uri:, code:, response:)
+            parsed_response = MultiJson.load(response.body)
+
+            if (operation = parsed_response['operation'])
+              if !operation.is_a?(String)
+                raise Errors::ServiceBrokerResponseMalformed.new(uri, method, response,
+                  'The service broker response contained an operation field that was not a string.')
+              elsif operation.length > 10_000
+                raise Errors::ServiceBrokerResponseMalformed.new(uri, method, response,
+                  'The service broker response contained an operation field exceeding 10k characters.')
+              end
+            end
+
+            @validator.validate(method: method, uri: uri, code: code, response: response)
           end
         end
 

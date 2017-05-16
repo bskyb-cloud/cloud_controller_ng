@@ -6,9 +6,9 @@ module VCAP::CloudController
 
     it_behaves_like 'a model with an encrypted attribute' do
       let(:value_to_encrypt) { 'https://acme-buildpack.com' }
-      let(:encrypted_attr) { :buildpack_without_serialization }
-      let(:storage_column) { :encrypted_buildpack }
-      let(:attr_salt) { :salt }
+      let(:encrypted_attr) { :buildpack_url }
+      let(:storage_column) { :encrypted_buildpack_url }
+      let(:attr_salt) { :encrypted_buildpack_url_salt }
     end
 
     describe '#stack' do
@@ -20,16 +20,30 @@ module VCAP::CloudController
     end
 
     describe '#buildpack' do
-      it 'persists the buildpack' do
-        buildpack_lifecycle_data_model.buildpack = 'ruby'
-        buildpack_lifecycle_data_model.save
-        expect(buildpack_lifecycle_data_model.reload.buildpack).to eq 'ruby'
+      context 'url' do
+        it 'persists the buildpack' do
+          buildpack_lifecycle_data_model.buildpack = 'http://buildpack.example.com'
+          buildpack_lifecycle_data_model.save
+          expect(buildpack_lifecycle_data_model.reload.buildpack).to eq 'http://buildpack.example.com'
+          expect(buildpack_lifecycle_data_model.reload.buildpack_url).to eq 'http://buildpack.example.com'
+        end
+      end
+
+      context 'admin buildpack name' do
+        let(:buildpack) { Buildpack.make(name: 'ruby') }
+
+        it 'persists the buildpack' do
+          buildpack_lifecycle_data_model.buildpack = 'ruby'
+          buildpack_lifecycle_data_model.save
+          expect(buildpack_lifecycle_data_model.reload.buildpack).to eq 'ruby'
+          expect(buildpack_lifecycle_data_model.reload.admin_buildpack_name).to eq 'ruby'
+        end
       end
     end
 
     describe '#to_hash' do
       let(:expected_lifecycle_data) do
-        { buildpack: buildpack, stack: 'cflinuxfs2' }
+        { buildpacks: [buildpack], stack: 'cflinuxfs2' }
       end
       let(:buildpack) { 'ruby' }
       let(:stack) { 'cflinuxfs2' }
@@ -46,6 +60,9 @@ module VCAP::CloudController
 
       context 'when the user has not specified a buildpack' do
         let(:buildpack) { nil }
+        let(:expected_lifecycle_data) do
+          { buildpacks: [], stack: 'cflinuxfs2' }
+        end
 
         it 'returns the lifecycle data as a hash' do
           expect(buildpack_lifecycle_data_model.to_hash).to eq expected_lifecycle_data

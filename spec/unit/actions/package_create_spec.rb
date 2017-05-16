@@ -3,18 +3,18 @@ require 'actions/package_create'
 
 module VCAP::CloudController
   RSpec.describe PackageCreate do
-    let(:package_create) { PackageCreate.new(user_guid, user_email) }
+    let(:app) { AppModel.make }
+    let(:type) { 'docker' }
+    let(:relationships) { { app: { data: { guid: app.guid } } } }
+    let(:message) { PackageCreateMessage.new({ type: type, relationships: relationships }) }
+    let(:user_audit_info) { UserAuditInfo.new(user_guid: user_guid, user_email: user_email) }
 
     describe '#create' do
-      let(:app) { AppModel.make }
-      let(:type) { 'docker' }
-      let(:app_guid) { app.guid }
-      let(:message) { PackageCreateMessage.new({ type: type, app_guid: app_guid }) }
       let(:user_guid) { 'gooid' }
       let(:user_email) { 'user@example.com' }
 
       it 'creates the package with the correct values' do
-        result = package_create.create(message)
+        result = described_class.create(message: message, user_audit_info: user_audit_info)
 
         expect(app.packages.first).to eq(result)
         created_package = PackageModel.find(guid: result.guid)
@@ -22,40 +22,64 @@ module VCAP::CloudController
         expect(created_package.type).to eq(type)
       end
 
-      it 'creates an v3 audit event' do
+      it 'creates an audit event' do
         expect(Repositories::PackageEventRepository).to receive(:record_app_package_create).with(
           instance_of(PackageModel),
-          user_guid,
-          user_email,
+          user_audit_info,
           {
-            'app_guid' => app_guid,
+            'relationships' => relationships,
             'type' => type,
           }
         )
 
-        package_create.create(message)
+        described_class.create(message: message, user_audit_info: user_audit_info)
       end
 
       describe 'docker packages' do
+        let(:image) { 'registry/image:latest' }
+        let(:docker_username) { 'anakin' }
+        let(:docker_password) { 'n1k4n4' }
         let(:message) do
           data = {
             type: 'docker',
-            app_guid: app_guid,
+            relationships: relationships,
             data: {
-              image: 'registry/image:latest'
+              image: image,
+              username: docker_username,
+              password: docker_password
             }
           }
           PackageCreateMessage.new(data)
         end
 
         it 'persists docker info' do
-          result = package_create.create(message)
+          result = described_class.create(message: message, user_audit_info: user_audit_info)
 
           expect(app.packages.first).to eq(result)
           created_package = PackageModel.find(guid: result.guid)
 
           expect(created_package).to eq(result)
-          expect(created_package.docker_data.image).to eq('registry/image:latest')
+          expect(created_package.image).to eq(image)
+          expect(created_package.docker_username).to eq(docker_username)
+          expect(created_package.docker_password).to eq(docker_password)
+        end
+
+        it 'creates an audit event' do
+          expect(Repositories::PackageEventRepository).to receive(:record_app_package_create).with(
+            instance_of(PackageModel),
+            user_audit_info,
+            {
+              'relationships' => relationships,
+              'type' => type,
+              'data' => {
+                image: image,
+                username: docker_username,
+                password: '***'
+              }
+            }
+          )
+
+          described_class.create(message: message, user_audit_info: user_audit_info)
         end
       end
 
@@ -65,7 +89,7 @@ module VCAP::CloudController
           let(:url) { nil }
 
           it 'sets the state to CREATED_STATE' do
-            result = package_create.create(message)
+            result = described_class.create(message: message, user_audit_info: user_audit_info)
             expect(result.type).to eq('bits')
             expect(result.state).to eq(PackageModel::CREATED_STATE)
           end
@@ -73,7 +97,7 @@ module VCAP::CloudController
 
         context 'when the type is docker' do
           it 'sets the state to READY_STATE' do
-            result = package_create.create(message)
+            result = described_class.create(message: message, user_audit_info: user_audit_info)
             expect(result.type).to eq('docker')
             expect(result.state).to eq(PackageModel::READY_STATE)
           end
@@ -87,9 +111,25 @@ module VCAP::CloudController
 
         it 'raises an InvalidPackage error' do
           expect {
-            package_create.create(message)
+            described_class.create(message: message, user_audit_info: user_audit_info)
           }.to raise_error(PackageCreate::InvalidPackage, 'the message')
         end
+      end
+    end
+
+    describe '#create_without_event' do
+      it 'creates the package with the correct values' do
+        result = described_class.create_without_event(message)
+
+        expect(app.packages.first).to eq(result)
+        created_package = PackageModel.find(guid: result.guid)
+        expect(created_package).to eq(result)
+        expect(created_package.type).to eq(type)
+      end
+
+      it 'does not create an audit event' do
+        expect(Repositories::PackageEventRepository).not_to receive(:record_app_package_create)
+        described_class.create_without_event(message)
       end
     end
   end

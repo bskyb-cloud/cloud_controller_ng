@@ -2,34 +2,37 @@ require 'cloud_controller/diego/lifecycles/app_lifecycle_provider'
 require 'cloud_controller/paging/pagination_options'
 require 'actions/app_create'
 require 'actions/app_update'
+require 'actions/app_patch_environment_variables'
 require 'actions/app_delete'
 require 'actions/app_start'
 require 'actions/app_stop'
 require 'actions/set_current_droplet'
-require 'messages/apps_list_message'
-require 'messages/app_update_message'
-require 'messages/app_create_message'
+require 'messages/apps/apps_list_message'
+require 'messages/apps/app_update_message'
+require 'messages/apps/app_create_message'
+require 'messages/apps/app_update_environment_variables_message'
 require 'presenters/v3/app_presenter'
 require 'presenters/v3/app_env_presenter'
+require 'presenters/v3/app_environment_variables_presenter'
 require 'presenters/v3/paginated_list_presenter'
-require 'queries/app_list_fetcher'
-require 'queries/app_fetcher'
-require 'queries/app_delete_fetcher'
-require 'queries/assign_current_droplet_fetcher'
+require 'presenters/v3/app_droplet_relationship_presenter'
+require 'fetchers/app_list_fetcher'
+require 'fetchers/app_fetcher'
+require 'fetchers/app_delete_fetcher'
+require 'fetchers/assign_current_droplet_fetcher'
 
 class AppsV3Controller < ApplicationController
   def index
     message = AppsListMessage.from_params(query_params)
     invalid_param!(message.errors.full_messages) unless message.valid?
-    invalid_param!(message.pagination_options.errors.full_messages) unless message.pagination_options.valid?
 
-    dataset = if roles.admin? || roles.admin_read_only?
+    dataset = if can_read_globally?
                 AppListFetcher.new.fetch_all(message)
               else
                 AppListFetcher.new.fetch(message, readable_space_guids)
               end
 
-    render status: :ok, json: Presenters::V3::PaginatedListPresenter.new(dataset, '/v3/apps', message)
+    render status: :ok, json: Presenters::V3::PaginatedListPresenter.new(dataset: dataset, path: '/v3/apps', message: message)
   end
 
   def show
@@ -45,8 +48,7 @@ class AppsV3Controller < ApplicationController
     unprocessable!(message.errors.full_messages) unless message.valid?
 
     space = Space.where(guid: message.space_guid).first
-    space_not_found! unless space
-    space_not_found! unless can_read?(space.guid, space.organization_guid)
+    unprocessable_space! unless space && can_read?(space.guid, space.organization_guid)
     unauthorized! unless can_write?(message.space_guid)
 
     if message.lifecycle_type == VCAP::CloudController::PackageModel::DOCKER_TYPE
@@ -56,7 +58,7 @@ class AppsV3Controller < ApplicationController
     lifecycle = AppLifecycleProvider.provide_for_create(message)
     unprocessable!(lifecycle.errors.full_messages) unless lifecycle.valid?
 
-    app = AppCreate.new(current_user, current_user_email).create(message, lifecycle)
+    app = AppCreate.new(user_audit_info).create(message, lifecycle)
 
     render status: :created, json: Presenters::V3::AppPresenter.new(app)
   rescue AppCreate::InvalidApp => e
@@ -75,7 +77,7 @@ class AppsV3Controller < ApplicationController
     lifecycle = AppLifecycleProvider.provide_for_update(message, app)
     unprocessable!(lifecycle.errors.full_messages) unless lifecycle.valid?
 
-    app = AppUpdate.new(current_user, current_user_email).update(app, message, lifecycle)
+    app = AppUpdate.new(user_audit_info).update(app, message, lifecycle)
 
     render status: :ok, json: Presenters::V3::AppPresenter.new(app)
   rescue AppUpdate::DropletNotFound
@@ -90,7 +92,7 @@ class AppsV3Controller < ApplicationController
     app_not_found! unless app && can_read?(space.guid, org.guid)
     unauthorized! unless can_write?(space.guid)
 
-    AppDelete.new(current_user.guid, current_user_email).delete(app)
+    AppDelete.new(user_audit_info).delete(app)
 
     head :no_content
   rescue AppDelete::InvalidDelete => e
@@ -106,7 +108,7 @@ class AppsV3Controller < ApplicationController
       FeatureFlag.raise_unless_enabled!(:diego_docker)
     end
 
-    AppStart.new(current_user, current_user_email).start(app)
+    AppStart.start(app: app, user_audit_info: user_audit_info)
 
     render status: :ok, json: Presenters::V3::AppPresenter.new(app)
   rescue AppStart::InvalidApp => e
@@ -118,14 +120,14 @@ class AppsV3Controller < ApplicationController
     app_not_found! unless app && can_read?(space.guid, org.guid)
     unauthorized! unless can_write?(space.guid)
 
-    AppStop.new(current_user, current_user_email).stop(app)
+    AppStop.stop(app: app, user_audit_info: user_audit_info)
 
     render status: :ok, json: Presenters::V3::AppPresenter.new(app)
   rescue AppStop::InvalidApp => e
     unprocessable!(e.message)
   end
 
-  def show_environment
+  def show_env
     app, space, org = AppFetcher.new.fetch(params[:guid])
 
     FeatureFlag.raise_unless_enabled!(:env_var_visibility)
@@ -138,22 +140,68 @@ class AppsV3Controller < ApplicationController
     render status: :ok, json: Presenters::V3::AppEnvPresenter.new(app)
   end
 
+  def show_environment_variables
+    FeatureFlag.raise_unless_enabled!(:env_var_visibility)
+
+    app, space, org = AppFetcher.new.fetch(params[:guid])
+
+    app_not_found! unless app && can_read?(space.guid, org.guid)
+    unauthorized! unless can_see_secrets?(space)
+
+    FeatureFlag.raise_unless_enabled!(:space_developer_env_var_visibility)
+
+    render status: :ok, json: Presenters::V3::AppEnvironmentVariablesPresenter.new(app)
+  end
+
+  def update_environment_variables
+    app, space, org = AppFetcher.new.fetch(params[:guid])
+
+    app_not_found! unless app && can_read?(space.guid, org.guid)
+    unauthorized! unless can_write?(space.guid)
+
+    message = AppUpdateEnvironmentVariablesMessage.create_from_http_request(params[:body])
+    unprocessable!(message.errors.full_messages) unless message.valid?
+
+    app = AppPatchEnvironmentVariables.new(user_audit_info).patch(app, message)
+
+    render status: :ok, json: Presenters::V3::AppEnvironmentVariablesPresenter.new(app)
+  end
+
   def assign_current_droplet
-    app_guid = params[:guid]
-    droplet_guid = params[:body]['droplet_guid']
+    app_guid     = params[:guid]
+    droplet_guid = HashUtils.dig(params[:body], 'data', 'guid')
+    cannot_remove_droplet! if params[:body].key?('data') && droplet_guid.nil?
     app, space, org, droplet = AssignCurrentDropletFetcher.new.fetch(app_guid, droplet_guid)
 
     app_not_found! unless app && can_read?(space.guid, org.guid)
     unauthorized! unless can_write?(space.guid)
-    unprocessable!('Stop the app before changing droplet') if app.desired_state != 'STOPPED'
 
-    droplet_not_found! if droplet.nil?
+    SetCurrentDroplet.new(user_audit_info).update_to(app, droplet)
 
-    SetCurrentDroplet.new(current_user, current_user_email).update_to(app, droplet)
-
-    render status: :ok, json: Presenters::V3::DropletPresenter.new(droplet)
-  rescue SetCurrentDroplet::InvalidApp => e
+    render status: :ok, json: Presenters::V3::AppDropletRelationshipPresenter.new(
+      resource_path:         "apps/#{app_guid}",
+      related_instance:      droplet,
+      relationship_name:     'current_droplet',
+      related_resource_name: 'droplets',
+      app_model:             app
+    )
+  rescue SetCurrentDroplet::InvalidApp, SetCurrentDroplet::Error => e
     unprocessable!(e.message)
+  end
+
+  def current_droplet_relationship
+    app, space, org = AppFetcher.new.fetch(params[:guid])
+    app_not_found! unless app && can_read?(space.guid, org.guid)
+    droplet = DropletModel.where(guid: app.droplet_guid).eager(:space, space: :organization).all.first
+
+    droplet_not_found! unless droplet
+    render status: :ok, json: Presenters::V3::AppDropletRelationshipPresenter.new(
+      resource_path:         "apps/#{app.guid}",
+      related_instance:      droplet,
+      relationship_name:     'current_droplet',
+      related_resource_name: 'droplets',
+      app_model:             app
+    )
   end
 
   def current_droplet
@@ -171,12 +219,16 @@ class AppsV3Controller < ApplicationController
     resource_not_found!(:droplet)
   end
 
-  def space_not_found!
-    resource_not_found!(:space)
+  def unprocessable_space!
+    unprocessable!('Space is invalid. Ensure it exists and you have access to it.')
   end
 
   def app_not_found!
     resource_not_found!(:app)
+  end
+
+  def cannot_remove_droplet!
+    unprocessable!('Current droplet cannot be removed. Replace it with a preferred droplet.')
   end
 
   def instances_reporters

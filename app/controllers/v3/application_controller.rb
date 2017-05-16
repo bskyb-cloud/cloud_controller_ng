@@ -1,3 +1,5 @@
+require 'cloud_controller/blobstore/errors'
+
 module V3ErrorsHelper
   def invalid_request!(message)
     raise CloudController::Errors::ApiError.new_from_details('InvalidRequest', message)
@@ -14,6 +16,14 @@ module V3ErrorsHelper
   def unauthorized!
     raise CloudController::Errors::ApiError.new_from_details('NotAuthorized')
   end
+
+  def resources_not_found!(message)
+    raise CloudController::Errors::ApiError.new_from_details('ResourceNotFound', message)
+  end
+
+  def resource_not_found!(resource)
+    raise CloudController::Errors::NotFound.new_from_details('ResourceNotFound', "#{resource.to_s.humanize} not found")
+  end
 end
 
 class ApplicationController < ActionController::Base
@@ -23,15 +33,16 @@ class ApplicationController < ActionController::Base
   wrap_parameters :body, format: [:json, :url_encoded_form, :multipart_form]
 
   before_action :set_locale
-  around_action :manage_request_id
   before_action :validate_scheme!, except: [:not_found, :internal_error, :bad_request]
   before_action :validate_token!, except: [:not_found, :internal_error, :bad_request]
-  before_action :check_read_permissions!, only: [:index, :show, :show_environment, :stats]
-  before_action :check_write_permissions!, except: [:index, :show, :not_found, :internal_error, :bad_request]
+  before_action :check_read_permissions!, only: [:index, :show, :show_env, :show_environment_variables, :stats]
+  before_action :check_write_permissions!, except: [:index, :show, :not_found, :show_environment_variables, :internal_error, :bad_request]
   before_action :null_coalesce_body
 
   rescue_from CloudController::Blobstore::BlobstoreError, with: :handle_blobstore_error
   rescue_from CloudController::Errors::NotAuthenticated, with: :handle_not_authenticated
+  rescue_from CloudController::Errors::NotFound, with: :handle_not_found
+  rescue_from CloudController::Errors::InvalidAuthToken, with: :handle_invalid_auth_token
   rescue_from CloudController::Errors::ApiError, with: :handle_api_error
 
   def configuration
@@ -58,6 +69,10 @@ class ApplicationController < ActionController::Base
     VCAP::CloudController::SecurityContext.current_user_email
   end
 
+  def user_audit_info
+    VCAP::CloudController::UserAuditInfo.from_context(VCAP::CloudController::SecurityContext)
+  end
+
   def request_id
     ::VCAP::Request.current_id
   end
@@ -76,6 +91,18 @@ class ApplicationController < ActionController::Base
     VCAP::CloudController::Permissions.new(current_user).can_read_from_space?(space_guid, org_guid)
   end
 
+  def can_read_from_org?(org_guid)
+    VCAP::CloudController::Permissions.new(current_user).can_read_from_org?(org_guid)
+  end
+
+  def can_read_globally?
+    VCAP::CloudController::Permissions.new(current_user).can_read_globally?
+  end
+
+  def can_read_from_isolation_segment?(isolation_segment)
+    VCAP::CloudController::Permissions.new(current_user).can_read_from_isolation_segment?(isolation_segment)
+  end
+
   def can_see_secrets?(space)
     VCAP::CloudController::Permissions.new(current_user).can_see_secrets_in_space?(space.guid, space.organization.guid)
   end
@@ -88,22 +115,20 @@ class ApplicationController < ActionController::Base
     VCAP::CloudController::Permissions.new(current_user).readable_space_guids
   end
 
+  def readable_org_guids
+    VCAP::CloudController::Permissions.new(current_user).readable_org_guids
+  end
+
   ###
   ### FILTERS
   ###
 
-  def manage_request_id
-    ::VCAP::Request.current_id = request.env['cf.request_id']
-    yield
-  ensure
-    ::VCAP::Request.current_id = nil
-  end
-
   def check_read_permissions!
     read_scope = SecurityContext.scopes.include?('cloud_controller.read')
     admin_read_only_scope = SecurityContext.scopes.include?('cloud_controller.admin_read_only')
+    global_auditor_scope = SecurityContext.scopes.include?('cloud_controller.global_auditor')
 
-    raise CloudController::Errors::ApiError.new_from_details('NotAuthorized') if !roles.admin? && !read_scope && !admin_read_only_scope
+    raise CloudController::Errors::ApiError.new_from_details('NotAuthorized') if !roles.admin? && !read_scope && !admin_read_only_scope && !global_auditor_scope
   end
 
   def check_write_permissions!
@@ -127,7 +152,7 @@ class ApplicationController < ActionController::Base
       raise CloudController::Errors::NotAuthenticated
     end
 
-    raise CloudController::Errors::ApiError.new_from_details('InvalidAuthToken')
+    raise CloudController::Errors::InvalidAuthToken
   end
 
   def handle_blobstore_error(error)
@@ -135,17 +160,15 @@ class ApplicationController < ActionController::Base
     handle_api_error(error)
   end
 
-  def handle_not_authenticated(error)
-    presenter = ErrorPresenter.new(error, Rails.env.test?)
+  def handle_exception(error)
+    presenter = ErrorPresenter.new(error, Rails.env.test?, V3ErrorHasher.new(error))
     logger.info(presenter.log_message)
     render status: presenter.response_code, json: presenter
   end
-
-  def handle_api_error(error)
-    presenter = ErrorPresenter.new(error, Rails.env.test?)
-    logger.info(presenter.log_message)
-    render status: presenter.response_code, json: presenter
-  end
+  alias_method :handle_not_authenticated, :handle_exception
+  alias_method :handle_api_error, :handle_exception
+  alias_method :handle_not_found, :handle_exception
+  alias_method :handle_invalid_auth_token, :handle_exception
 
   def null_coalesce_body
     params[:body] ||= {}
@@ -153,9 +176,5 @@ class ApplicationController < ActionController::Base
 
   def membership
     @membership ||= Membership.new(current_user)
-  end
-
-  def resource_not_found!(resource)
-    raise CloudController::Errors::ApiError.new_from_details('ResourceNotFound', "#{resource.to_s.humanize} not found")
   end
 end

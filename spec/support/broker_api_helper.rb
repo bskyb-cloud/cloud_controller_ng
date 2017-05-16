@@ -62,6 +62,7 @@ module VCAP::CloudController::BrokerApiHelper
 
   def setup_broker(catalog=nil)
     stub_catalog_fetch(200, catalog)
+    UAARequests.stub_all
 
     post('/v2/service_brokers',
          { name: 'broker-name', broker_url: 'http://broker-url', auth_username: 'username', auth_password: 'password' }.to_json,
@@ -221,7 +222,8 @@ module VCAP::CloudController::BrokerApiHelper
          json_headers(admin_headers)
     )
 
-    @binding_id = JSON.parse(last_response.body)['metadata']['guid']
+    metadata = JSON.parse(last_response.body).fetch('metadata', {})
+    @binding_id = metadata.fetch('guid', nil)
   end
 
   def unbind_service

@@ -3,9 +3,9 @@ require 'spec_helper'
 module VCAP::CloudController::Diego
   RSpec.describe StagerClient do
     let(:content_type_header) { { 'Content-Type' => 'application/json' } }
-    let(:app) { VCAP::CloudController::AppFactory.make(staging_task_id: 'staging-task-id') }
-    let(:staging_guid) { StagingGuid.from_process(app) }
-    let(:staging_url) { "#{TestConfig.config[:diego_stager_url]}/v1/staging/#{staging_guid}" }
+    let(:app) { VCAP::CloudController::AppFactory.make }
+    let(:staging_guid) { app.latest_droplet.guid }
+    let(:staging_url) { "#{TestConfig.config[:diego][:stager_url]}/v1/staging/#{staging_guid}" }
 
     subject(:client) { StagerClient.new(TestConfig.config) }
 
@@ -108,7 +108,7 @@ module VCAP::CloudController::Diego
 
       context 'when the stager url is missing' do
         before do
-          TestConfig.override(diego_stager_url: nil)
+          TestConfig.override(diego: { stager_url: nil })
         end
 
         it 'raises StagerUnavailable' do
@@ -152,7 +152,7 @@ module VCAP::CloudController::Diego
 
       context 'when the stager url is missing' do
         before do
-          TestConfig.override(diego_stager_url: nil)
+          TestConfig.override(diego: { stager_url: nil })
         end
 
         it 'raises StagerUnavailable' do

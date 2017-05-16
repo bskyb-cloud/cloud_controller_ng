@@ -3,17 +3,15 @@ require 'actions/process_update'
 
 module VCAP::CloudController
   RSpec.describe ProcessUpdate do
-    subject(:process_update) { ProcessUpdate.new(user_guid, user_email) }
+    subject(:process_update) { ProcessUpdate.new(user_audit_info) }
 
     let(:health_check) do
       {
-        'type' => 'process',
-        'data' => {
-          'timeout' => 20
-        }
+        type: 'process',
+        data: { timeout: 20 }
       }
     end
-    let(:message) { ProcessUpdateMessage.new({ command: 'new', health_check: health_check, ports: [1234, 5678] }) }
+    let(:message) { ProcessUpdateMessage.new({ command: 'new', health_check: health_check }) }
     let!(:process) do
       App.make(
         :process,
@@ -25,6 +23,7 @@ module VCAP::CloudController
     end
     let(:user_guid) { 'user-guid' }
     let(:user_email) { 'user@example.com' }
+    let(:user_audit_info) { instance_double(UserAuditInfo).as_null_object }
 
     describe '#update' do
       it 'updates the requested changes on the process' do
@@ -34,7 +33,6 @@ module VCAP::CloudController
         expect(process.command).to eq('new')
         expect(process.health_check_type).to eq('process')
         expect(process.health_check_timeout).to eq(20)
-        expect(process.ports).to match_array([1234, 5678])
       end
 
       context 'when no changes are requested' do
@@ -53,8 +51,8 @@ module VCAP::CloudController
       context 'when partial health check update is requested' do
         let(:health_check) do
           {
-            'type' => 'process',
-            'data' => {}
+            type: 'process',
+            data: {}
           }
         end
 
@@ -70,16 +68,12 @@ module VCAP::CloudController
       it 'creates an audit event' do
         expect(Repositories::ProcessEventRepository).to receive(:record_update).with(
           process,
-          user_guid,
-          user_email,
+          user_audit_info,
           {
             'command'      => 'new',
-            'ports'        => [1234, 5678],
             'health_check' => {
-              'type' => 'process',
-              'data' => {
-                'timeout' => 20
-              }
+              type: 'process',
+              data: { timeout: 20 }
             }
           }
         )

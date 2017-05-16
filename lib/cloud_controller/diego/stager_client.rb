@@ -1,12 +1,10 @@
-require 'cloud_controller/diego/staging_guid'
-
 module VCAP::CloudController
   module Diego
     REQUEST_HEADERS = { 'Content-Type' => 'application/json' }.freeze
 
     class StagerClient
       def initialize(config)
-        @url = URI(config[:diego_stager_url]) if config[:diego_stager_url]
+        @url = URI(config[:diego][:stager_url]) if HashUtils.dig(config, :diego, :stager_url)
       end
 
       def stage(staging_guid, staging_message)

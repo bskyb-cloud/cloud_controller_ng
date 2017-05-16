@@ -30,6 +30,74 @@ module VCAP::CloudController
         end
       end
 
+      describe 'RateLimiter' do
+        before do
+          allow(CloudFoundry::Middleware::RateLimiter).to receive(:new)
+        end
+
+        context 'when configuring a limit' do
+          before do
+            builder.build(TestConfig.override(rate_limiter: {
+              enabled: true,
+              reset_interval_in_minutes: 60,
+              general_limit: 123,
+              unauthenticated_limit: 1,
+            }), request_metrics).to_app
+          end
+
+          it 'enables the RateLimiter middleware' do
+            expect(CloudFoundry::Middleware::RateLimiter).to have_received(:new).with(
+              anything,
+              logger: instance_of(Steno::Logger),
+              general_limit: 123,
+              unauthenticated_limit: 1,
+              interval: 60
+            )
+          end
+        end
+
+        context 'when not configuring a limit' do
+          before do
+            builder.build(TestConfig.override(rate_limiter: {
+              enabled: false,
+              reset_interval_in_minutes: 60,
+              general_limit: 123,
+              unauthenticated_limit: 1
+            }), request_metrics).to_app
+          end
+
+          it 'does not enable the RateLimiter middleware' do
+            expect(CloudFoundry::Middleware::RateLimiter).not_to have_received(:new)
+          end
+        end
+      end
+
+      describe 'New Relic custom attributes' do
+        before do
+          allow(CloudFoundry::Middleware::NewRelicCustomAttributes).to receive(:new)
+        end
+
+        context 'when new relic is enabled' do
+          before do
+            builder.build(TestConfig.override(newrelic_enabled: true), request_metrics).to_app
+          end
+
+          it 'enables the New Relic custom attribute middleware' do
+            expect(CloudFoundry::Middleware::NewRelicCustomAttributes).to have_received(:new)
+          end
+        end
+
+        context 'when new relic is NOT enabled' do
+          before do
+            builder.build(TestConfig.override(newrelic_enabled: false), request_metrics).to_app
+          end
+
+          it 'does NOT enable the New Relic custom attribute middleware' do
+            expect(CloudFoundry::Middleware::NewRelicCustomAttributes).not_to have_received(:new)
+          end
+        end
+      end
+
       describe 'CEF logs' do
         before do
           allow(CloudFoundry::Middleware::CefLogs).to receive(:new)

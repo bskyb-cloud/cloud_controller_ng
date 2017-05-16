@@ -134,20 +134,20 @@ module VCAP::CloudController::RestController
       if VCAP::CloudController::SecurityContext.missing_token?
         raise CloudController::Errors::NotAuthenticated
       elsif VCAP::CloudController::SecurityContext.invalid_token?
-        raise CloudController::Errors::ApiError.new_from_details('InvalidAuthToken')
+        raise CloudController::Errors::InvalidAuthToken
       else
         logger.error 'Unexpected condition: valid token with no user/client id ' \
                        "or admin scope. Token hash: #{VCAP::CloudController::SecurityContext.token}"
-        raise CloudController::Errors::ApiError.new_from_details('InvalidAuthToken')
+        raise CloudController::Errors::InvalidAuthToken
       end
     end
 
     def v2_api?
-      env['PATH_INFO'] =~ /^#{V2_ROUTE_PREFIX}/
+      env['PATH_INFO'] =~ /\A#{V2_ROUTE_PREFIX}/
     end
 
     def unversioned_api?
-      !(env['PATH_INFO'] =~ %r{^/v\d})
+      !(env['PATH_INFO'] =~ %r{\A/v\d})
     end
 
     def recursive_delete?

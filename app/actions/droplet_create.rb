@@ -1,39 +1,39 @@
-require 'cloud_controller/backends/staging_memory_calculator'
+require 'cloud_controller/backends/quota_validating_staging_memory_calculator'
 require 'cloud_controller/backends/staging_disk_calculator'
 require 'cloud_controller/backends/staging_environment_builder'
-require 'cloud_controller/diego/v3/staging_details'
+require 'cloud_controller/diego/staging_details'
 require 'cloud_controller/diego/lifecycles/lifecycle_provider'
 require 'repositories/droplet_event_repository'
 
 module VCAP::CloudController
   class DropletCreate
-    class InvalidPackage < StandardError; end
-    class SpaceQuotaExceeded < StandardError; end
-    class OrgQuotaExceeded < StandardError; end
-    class DiskLimitExceeded < StandardError; end
+    class DropletError < StandardError; end
+    class InvalidPackage < DropletError; end
+    class SpaceQuotaExceeded < DropletError; end
+    class OrgQuotaExceeded < DropletError; end
+    class DiskLimitExceeded < DropletError; end
 
-    def initialize(memory_limit_calculator=StagingMemoryCalculator.new,
-      disk_limit_calculator=StagingDiskCalculator.new,
-      environment_presenter=StagingEnvironmentBuilder.new,
-      actor:,
-      actor_email:)
+    attr_reader :staging_response
+
+    def initialize(memory_limit_calculator: QuotaValidatingStagingMemoryCalculator.new,
+      disk_limit_calculator: StagingDiskCalculator.new,
+      environment_presenter: StagingEnvironmentBuilder.new)
 
       @memory_limit_calculator = memory_limit_calculator
       @disk_limit_calculator   = disk_limit_calculator
       @environment_builder     = environment_presenter
-      @actor = actor
-      @actor_name = actor_email
     end
 
-    def create_and_stage(package, lifecycle, message)
+    def create_and_stage(package:, lifecycle:, message:, user_audit_info:, start_after_staging: false, record_event: true)
       raise InvalidPackage.new('Cannot stage package whose state is not ready.') if package.state != PackageModel::READY_STATE
 
-      staging_details = get_staging_details(package, lifecycle)
+      staging_details                     = get_staging_details(package, lifecycle)
+      staging_details.start_after_staging = start_after_staging
 
       droplet = DropletModel.new({
         app_guid:              package.app.guid,
         package_guid:          package.guid,
-        state:                 DropletModel::PENDING_STATE,
+        state:                 DropletModel::STAGING_STATE,
         environment_variables: staging_details.environment_variables,
         staging_memory_in_mb:  staging_details.staging_memory_in_mb,
         staging_disk_in_mb:    staging_details.staging_disk_in_mb
@@ -44,15 +44,7 @@ module VCAP::CloudController
         staging_details.droplet = droplet
         lifecycle.create_lifecycle_data_model(droplet)
 
-        Repositories::DropletEventRepository.record_create_by_staging(
-          droplet,
-          @actor,
-          @actor_name,
-          message.audit_hash,
-          package.app.name,
-          package.app.space_guid,
-          package.app.space.organization_guid
-          )
+        record_audit_event(droplet, message, package, user_audit_info) if record_event
       end
 
       load_association(droplet)
@@ -60,13 +52,29 @@ module VCAP::CloudController
       logger.info("droplet created: #{droplet.guid}")
 
       logger.info("staging package: #{package.inspect} for droplet #{droplet.guid}")
-      stagers.stager_for_package(package, lifecycle.type).stage(staging_details)
+      @staging_response = stagers.stager_for_app(package.app).stage(staging_details)
       logger.info("package staging requested: #{package.inspect}")
 
       droplet
     end
 
+    def create_and_stage_without_event(package:, lifecycle:, message:, start_after_staging: false)
+      create_and_stage(package: package, lifecycle: lifecycle, message: message,
+                       user_audit_info: UserAuditInfo.new(user_email: nil, user_guid: nil), start_after_staging: start_after_staging, record_event: false)
+    end
+
     private
+
+    def record_audit_event(droplet, message, package, user_audit_info)
+      Repositories::DropletEventRepository.record_create_by_staging(
+        droplet,
+        user_audit_info,
+        message.audit_hash,
+        package.app.name,
+        package.app.space_guid,
+        package.app.space.organization_guid
+      )
+    end
 
     def load_association(droplet)
       droplet.reload
@@ -74,9 +82,9 @@ module VCAP::CloudController
 
     def get_staging_details(package, lifecycle)
       staging_message = lifecycle.staging_message
-      app   = package.app
-      space = package.space
-      org   = space.organization
+      app             = package.app
+      space           = package.space
+      org             = space.organization
 
       memory_limit          = get_memory_limit(staging_message.staging_memory_in_mb, space, org)
       disk_limit            = get_disk_limit(staging_message.staging_disk_in_mb)
@@ -87,11 +95,13 @@ module VCAP::CloudController
         disk_limit,
         staging_message.environment_variables)
 
-      staging_details                       = VCAP::CloudController::Diego::V3::StagingDetails.new
+      staging_details                       = Diego::StagingDetails.new
+      staging_details.package               = package
       staging_details.staging_memory_in_mb  = memory_limit
       staging_details.staging_disk_in_mb    = disk_limit
       staging_details.environment_variables = environment_variables
       staging_details.lifecycle             = lifecycle
+      staging_details.isolation_segment     = IsolationSegmentSelector.for_space(space)
 
       staging_details
     end
@@ -104,10 +114,10 @@ module VCAP::CloudController
 
     def get_memory_limit(requested_limit, space, org)
       @memory_limit_calculator.get_limit(requested_limit, space, org)
-    rescue StagingMemoryCalculator::SpaceQuotaExceeded
-      raise SpaceQuotaExceeded
-    rescue StagingMemoryCalculator::OrgQuotaExceeded
-      raise OrgQuotaExceeded
+    rescue QuotaValidatingStagingMemoryCalculator::SpaceQuotaExceeded => e
+      raise SpaceQuotaExceeded.new e.message
+    rescue QuotaValidatingStagingMemoryCalculator::OrgQuotaExceeded => e
+      raise OrgQuotaExceeded.new e.message
     end
 
     def logger

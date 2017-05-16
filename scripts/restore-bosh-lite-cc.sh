@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 
 bosh ssh api_z1 0 <<'ENDSSH'
-  sudo sed -i -- 's/192\.168\.50\.1/10\.244\.0\.138/g' '/var/vcap/jobs/route_registrar/config/registrar_settings.yml' && \
-  sudo /var/vcap/bosh/bin/monit start cloud_controller_ng && \
-  sudo /var/vcap/bosh/bin/monit restart route_registrar
+  sudo sed -i -- 's/192\.168\.50\.1:9022/unix:\/var\/vcap\/sys\/run\/cloud_controller_ng\/cloud_controller\.sock/g' '/var/vcap/jobs/cloud_controller_ng/config/nginx.conf' && \
+  sudo /var/vcap/bosh/bin/monit restart nginx_cc
 ENDSSH
 
-line_number=$(cat /etc/hosts | grep -n "blobstore.service.cf.internal" | cut -d : -f 1)
-
-if [[ -n "${line_number}" ]]; then
-  sed "${line_number}d" /etc/hosts | sudo tee /etc/hosts > /dev/null
-fi
+sed "/blobstore.service.cf.internal/d" /etc/hosts | sudo tee /etc/hosts > /dev/null
+sed "/bbs.service.cf.internal/d" /etc/hosts | sudo tee /etc/hosts > /dev/null
+sed "/bits-service.service.cf.internal/d" /etc/hosts | sudo tee /etc/hosts > /dev/null
+sed "/bits-service.bosh-lite.com/d" /etc/hosts | sudo tee /etc/hosts > /dev/null
+sed "/uaa.service.cf.internal/d" /etc/hosts | sudo tee /etc/hosts > /dev/null
+sed "/loggregator-trafficcontroller.service.cf.internal/d" /etc/hosts | sudo tee /etc/hosts > /dev/null

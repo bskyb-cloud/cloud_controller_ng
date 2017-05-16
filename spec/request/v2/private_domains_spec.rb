@@ -9,12 +9,6 @@ RSpec.describe 'PrivateDomains' do
     space.organization.add_user(user)
     space.add_developer(user)
 
-    stub_request(:post, 'http://routing-client:routing-secret@localhost:8080/uaa/oauth/token').
-      with(body: 'grant_type=client_credentials').
-      to_return(status: 200,
-                body:           '{"token_type": "monkeys", "access_token": "banana"}',
-                headers:        { 'content-type' => 'application/json' })
-
     stub_request(:get, 'http://localhost:3000/routing/v1/router_groups').
       to_return(status: 200, body: '{}', headers: {})
   end
@@ -40,7 +34,7 @@ RSpec.describe 'PrivateDomains' do
                 'guid'       => domain.guid,
                 'url'        => "/v2/private_domains/#{domain.guid}",
                 'created_at' => iso8601,
-                'updated_at' => nil
+                'updated_at' => iso8601
               },
               'entity' => {
                 'name' => domain.name,
@@ -69,7 +63,7 @@ RSpec.describe 'PrivateDomains' do
             'guid'       => domain.guid,
             'url'        => "/v2/private_domains/#{domain.guid}",
             'created_at' => iso8601,
-            'updated_at' => nil
+            'updated_at' => iso8601
           },
           'entity' => {
             'name' => domain.name,
@@ -96,7 +90,7 @@ RSpec.describe 'PrivateDomains' do
           'guid'       => domain.guid,
           'url'        => "/v2/private_domains/#{domain.guid}",
           'created_at' => iso8601,
-          'updated_at' => nil
+          'updated_at' => iso8601
         },
         'entity' => {
           'name' => 'meow.mc.meowerson.com',

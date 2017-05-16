@@ -17,24 +17,12 @@ module VCAP::CloudController
           raise 'source package does not exist' unless src_package
 
           CloudController::DependencyLocator.instance.package_blobstore.cp_file_between_keys(@src_package_guid, @dest_package_guid)
-
-          dest_package.db.transaction do
-            dest_package.lock!
-            dest_package.package_hash = src_package.package_hash
-            dest_package.state        = VCAP::CloudController::PackageModel::READY_STATE
-            dest_package.save
-          end
+          checksums = { sha1: src_package.package_hash, sha256: src_package.sha256_checksum }
+          dest_package.succeed_upload!(checksums)
 
         rescue => e
-          if dest_package
-            dest_package.db.transaction do
-              dest_package.lock!
-              dest_package.state = VCAP::CloudController::PackageModel::FAILED_STATE
-              dest_package.error = "failed to copy - #{e.message}"
-              dest_package.save
-            end
-          end
-          raise e
+          dest_package.fail_upload!("failed to copy - #{e.message}") if dest_package
+          raise
         end
 
         def job_name_in_configuration

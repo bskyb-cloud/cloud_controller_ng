@@ -40,6 +40,12 @@ module VCAP::CloudController
       end
     end
 
+    context 'global auditor' do
+      include_context :global_auditor_setup
+
+      it_behaves_like :read_only_access
+    end
+
     context 'a manager for the organization' do
       before do
         object.add_manager(user)
@@ -77,7 +83,10 @@ module VCAP::CloudController
     end
 
     context 'a user in the organization' do
-      before { object.add_user(user) }
+      before do
+        object.add_user(user)
+        object.status = 'active'
+      end
 
       it_behaves_like :read_only_access
 
@@ -87,9 +96,9 @@ module VCAP::CloudController
         context 'who is the user' do
           let(:related) { user }
 
-          it 'can read_related_object_for_update? for themself' do
+          it 'can not read_related_object_for_update? for themselves' do
             params = { relation: relation, related_guid: related.guid }
-            expect(subject.can_remove_related_object?(object, params)).to be true
+            expect(subject.read_for_update?(object, params)).to be false
           end
         end
 

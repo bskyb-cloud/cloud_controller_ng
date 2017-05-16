@@ -221,7 +221,7 @@ module VCAP::CloudController
           'metadata' => {
             'guid' => service_broker.guid,
             'created_at' => service_broker.created_at.iso8601,
-            'updated_at' => nil,
+            'updated_at' => service_broker.updated_at.iso8601,
             'url' => "/v2/service_brokers/#{service_broker.guid}",
           },
           'entity' => {
@@ -337,7 +337,7 @@ module VCAP::CloudController
 
       context 'when the fields for creating the broker is invalid' do
         context 'when the broker url is malformed' do
-          let(:broker_url) { 'http://url_with_underscore.broker.com' }
+          let(:broker_url) { 'bad url' }
 
           it 'returns a 400 error' do
             post '/v2/service_brokers', body

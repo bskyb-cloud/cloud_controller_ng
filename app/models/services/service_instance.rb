@@ -22,7 +22,7 @@ module VCAP::CloudController
 
     one_to_one :service_instance_operation
 
-    one_to_many :service_bindings, before_add: :validate_service_binding
+    one_to_many :service_bindings, before_add: :validate_service_binding, key: :service_instance_guid, primary_key: :guid
     one_to_many :service_keys
     many_to_many :routes, join_table: :route_bindings
 
@@ -102,7 +102,8 @@ module VCAP::CloudController
     end
 
     def to_hash(opts={})
-      if !SecurityContext.admin? && !SecurityContext.admin_read_only? && !space.has_developer?(SecurityContext.current_user)
+      access_context = VCAP::CloudController::Security::AccessContext.new
+      if access_context.cannot?(:read_env, self)
         opts[:redact] = ['credentials']
       end
       hash = super(opts)

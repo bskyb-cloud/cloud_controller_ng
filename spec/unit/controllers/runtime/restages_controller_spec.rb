@@ -6,10 +6,13 @@ module VCAP::CloudController
     before { CloudController::DependencyLocator.instance.register(:app_event_repository, app_event_repository) }
 
     describe 'POST /v2/apps/:id/restage' do
-      let(:package_state) { 'STAGED' }
-      let!(:application) { AppFactory.make(package_hash: 'abc', package_state: package_state) }
-
       subject(:restage_request) { post "/v2/apps/#{application.guid}/restage", {} }
+      let!(:application) { AppFactory.make }
+      let(:app_stage) { instance_double(V2::AppStage, stage: nil) }
+
+      before do
+        allow(V2::AppStage).to receive(:new).and_return(app_stage)
+      end
 
       before do
         set_current_user(account)
@@ -24,17 +27,31 @@ module VCAP::CloudController
         end
       end
 
+      context 'as a space auditor' do
+        let(:account) { make_auditor_for_space(application.space) }
+
+        it 'should return 403' do
+          restage_request
+          expect(last_response.status).to eq(403)
+        end
+      end
+
       context 'as a developer' do
         let(:account) { make_developer_for_space(application.space) }
 
-        it 'restages the app' do
-          allow_any_instance_of(VCAP::CloudController::RestagesController).to receive(:find_guid_and_validate_access).with(:read, application.guid).and_return(application)
+        it 'removes the current droplet from the app' do
+          expect(application.current_droplet).not_to be_nil
 
-          allow(application).to receive(:restage!)
           restage_request
-
           expect(last_response.status).to eq(201)
-          expect(application).to have_received(:restage!)
+
+          expect(application.reload.current_droplet).to be_nil
+        end
+
+        it 'restages the app' do
+          restage_request
+          expect(last_response.status).to eq(201)
+          expect(app_stage).to have_received(:stage).with(application)
         end
 
         it 'returns the application' do
@@ -45,8 +62,8 @@ module VCAP::CloudController
 
         context 'when the app is pending to be staged' do
           before do
-            application.package_state = 'PENDING'
-            application.save
+            PackageModel.make(app: application.app)
+            application.reload
           end
 
           it "returns '170002 NotStaged'" do
@@ -59,22 +76,13 @@ module VCAP::CloudController
         end
 
         context 'with a Docker app' do
+          let!(:application) { AppFactory.make(docker_image: 'some-image') }
+
           before do
             FeatureFlag.create(name: 'diego_docker', enabled: true)
           end
 
-          let!(:docker_app) do
-            AppFactory.make(package_hash: 'abc', docker_image: 'some_image', state: 'STARTED')
-          end
-
-          subject(:restage_request) { post("/v2/apps/#{docker_app.guid}/restage", {}) }
-
           context 'when there are validation errors' do
-            before do
-              allow_any_instance_of(VCAP::CloudController::RestagesController).to receive(:find_guid_and_validate_access).with(:read, docker_app.guid).and_return(docker_app)
-              allow(docker_app).to receive(:package_state).and_return('STAGED')
-            end
-
             context 'when Docker is disabled' do
               before do
                 FeatureFlag.find(name: 'diego_docker').update(enabled: false)
@@ -82,7 +90,6 @@ module VCAP::CloudController
 
               it 'correctly propagates the error' do
                 restage_request
-
                 expect(last_response.status).to eq(400)
                 expect(decoded_response['code']).to eq(320003)
                 expect(decoded_response['description']).to match(/Docker support has not been enabled./)
@@ -97,17 +104,25 @@ module VCAP::CloudController
           end
 
           context 'when the restage completes without error' do
+            let(:user_audit_info) { UserAuditInfo.from_context(SecurityContext) }
+            before do
+              allow(UserAuditInfo).to receive(:from_context).and_return(user_audit_info)
+            end
+
             it 'generates an audit.app.restage event' do
-              restage_request
+              expect {
+                restage_request
+              }.to change { Event.count }.by(1)
 
               expect(last_response.status).to eq(201)
-              expect(app_event_repository).to have_received(:record_app_restage).with(application, account.guid, SecurityContext.current_user_email)
+              expect(app_event_repository).to have_received(:record_app_restage).with(application,
+                user_audit_info)
             end
           end
 
           context 'when the restage fails due to an error' do
             before do
-              allow_any_instance_of(App).to receive(:restage!).and_raise('Error saving')
+              allow(app_stage).to receive(:stage).and_raise('Error staging')
             end
 
             it 'does not generate an audit.app.restage event' do
@@ -116,6 +131,19 @@ module VCAP::CloudController
               expect(last_response.status).to eq(500)
               expect(app_event_repository).to_not have_received(:record_app_restage)
             end
+          end
+        end
+
+        context 'when the app has a staged droplet but no package' do
+          before do
+            application.latest_package.destroy
+          end
+
+          it 'raises error' do
+            restage_request
+
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('bits have not been uploaded')
           end
         end
       end

@@ -6,6 +6,12 @@ module VCAP::CloudController
       it { expect(described_class).to be_queryable_by(:timestamp) }
       it { expect(described_class).to be_queryable_by(:type) }
       it { expect(described_class).to be_queryable_by(:actee) }
+      it { expect(described_class).to be_queryable_by(:space_guid) }
+      it { expect(described_class).to be_queryable_by(:organization_guid) }
+    end
+
+    it 'can order by name and id when listing' do
+      expect(described_class.sortable_parameters).to match_array([:timestamp, :id])
     end
 
     describe 'GET /v2/events' do
@@ -56,11 +62,12 @@ module VCAP::CloudController
 
       context 'as an org auditor' do
         before do
-          @space_a.organization.add_auditor(@user_a)
+          @org_a.add_auditor(@user_a)
+          expect(@user_a.spaces).to be_empty
           set_current_user(@user_a)
         end
 
-        it 'includes only events from space visible to the user' do
+        it 'includes only events from organizations in which the user is an auditor' do
           get '/v2/events'
 
           parsed_body = MultiJson.load(last_response.body)

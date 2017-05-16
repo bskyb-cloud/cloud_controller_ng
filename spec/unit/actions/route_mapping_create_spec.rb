@@ -2,28 +2,38 @@ require 'spec_helper'
 
 module VCAP::CloudController
   RSpec.describe RouteMappingCreate do
-    let(:route_mapping_create) { described_class.new(user, user_email, app, route, process, message) }
+    subject(:route_mapping_create) { RouteMappingCreate.new(user_audit_info, route, process) }
+
     let(:space) { app.space }
     let(:app) { AppModel.make }
-    let(:user) { double(:user, guid: '7') }
+    let(:user_guid) { 'user-guid' }
     let(:user_email) { '1@2.3' }
-    let(:process) { App.make(:process, app: app, space: space, type: process_type, ports: ports, health_check_type: 'none') }
+    let(:user_audit_info) { UserAuditInfo.new(user_email: user_email, user_guid: user_guid) }
+    let(:process) { App.make(:process, app: app, type: process_type, ports: ports, health_check_type: 'none') }
     let(:process_type) { 'web' }
-    let(:ports) { [8888] }
-    let(:requested_port) { 8888 }
-    let(:message) { RouteMappingsCreateMessage.new({ app_port: requested_port, relationships: { process: { type: process_type } } }) }
+    let(:ports) { [8080] }
+    let(:requested_port) { nil }
+    let(:message) { RouteMappingsCreateMessage.new({ relationships: { process: { type: process_type } } }) }
+    let(:route_handler) { instance_double(ProcessRouteHandler, update_route_information: nil) }
+
+    before do
+      allow(ProcessRouteHandler).to receive(:new).and_return(route_handler)
+    end
 
     describe '#add' do
       let(:route) { Route.make(space: space) }
 
-      it 'associates the app to the route' do
-        route_mapping_create.add
-        expect(app.reload.routes).to eq([route])
+      it 'maps the route' do
+        expect {
+          route_mapping = route_mapping_create.add(message)
+          expect(route_mapping.route.guid).to eq(route.guid)
+          expect(route_mapping.process.guid).to eq(process.guid)
+        }.to change { RouteMappingModel.count }.by(1)
       end
 
-      it 'associates the route to the process' do
-        route_mapping_create.add
-        expect(process.reload.routes).to eq([route])
+      it 'delegates to the route handler to update route information' do
+        route_mapping_create.add(message)
+        expect(route_handler).to have_received(:update_route_information)
       end
 
       describe 'recording events' do
@@ -35,236 +45,73 @@ module VCAP::CloudController
         end
 
         it 'creates an event for adding a route to an app' do
-          route_mapping = route_mapping_create.add
+          route_mapping = route_mapping_create.add(message)
 
           expect(event_repository).to have_received(:record_map_route).with(
             app,
             route,
-            user.guid,
-            user_email,
+            user_audit_info,
             route_mapping: route_mapping
           )
         end
       end
 
-      context 'when the process type does not yet exist' do
-        let(:process_type) { 'worker' }
-        let(:process) { nil }
-
-        it 'still creates the route mapping' do
-          route_mapping_create.add
-          expect(app.reload.routes).to eq([route])
-          expect(RouteMappingModel.first.process_type).to eq 'worker'
-        end
-      end
-
       context 'when the process is web' do
         let(:process_type) { 'web' }
-        context 'when no app port is requested' do
-          let(:message) { RouteMappingsCreateMessage.new({ relationships: { process: { type: process_type } } }) }
-          context 'when the process has an empty array of ports' do
-            let(:ports) { [] }
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /8080 is not available/)
-            end
-          end
 
-          context 'when the process has nil ports' do
-            let(:ports) { nil }
-            it 'succeeds' do
-              route_mapping_create.add
-              expect(app.reload.routes).to eq([route])
-            end
-          end
+        context 'dea' do
+          let(:process) { App.make(diego: false, app: app, type: process_type, health_check_type: 'none') }
 
-          context 'when the process has an array of ports' do
-            context 'that matches the default port' do
-              let(:ports) { [8080] }
-              it 'succeeds' do
-                route_mapping_create.add
-                expect(app.reload.routes).to eq([route])
-              end
-            end
-
-            context 'that does not match the default port' do
-              let(:ports) { [1234] }
-
-              it 'raises' do
-                expect {
-                  route_mapping_create.add
-                }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /8080 is not available/)
-              end
-            end
+          it 'succeeds' do
+            route_mapping_create.add(message)
+            expect(app.reload.routes).to eq([route])
           end
         end
 
-        context 'when the default port is requested' do
-          let(:requested_port) { 8080 }
+        context 'diego' do
+          let(:process) { App.make(diego: true, app: app, type: process_type, ports: [1234, 5678], health_check_type: 'none') }
 
-          context 'and the process ports are nil' do
-            let(:ports) { nil }
-            it 'succeeds' do
-              route_mapping_create.add
-              expect(app.reload.routes).to eq([route])
-            end
+          it 'succeeds with the default port' do
+            mapping = route_mapping_create.add(message)
+            expect(app.reload.routes).to eq([route])
+            expect(mapping.app_port).to eq(App::DEFAULT_HTTP_PORT)
           end
         end
 
-        context 'a non-default port is requested' do
-          let(:requested_port) { 1234 }
+        context 'docker' do
+          let(:process) { AppFactory.make(app: app, diego: true, type: process_type, ports: [1234, 5678], health_check_type: 'none', docker_image: 'docker/image') }
 
-          context 'when the process has an empty array of ports' do
-            let(:ports) { [] }
-
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /1234 is not available/)
-            end
+          before do
+            allow_any_instance_of(AppModel).to receive(:lifecycle_type).and_return(DockerLifecycleDataModel::LIFECYCLE_TYPE)
           end
 
-          context 'when the process has nil ports' do
-            let(:ports) { nil }
-
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /1234 is not available/)
-            end
-          end
-
-          context 'when the process has an array of ports' do
-            context 'that matches the requested port' do
-              let(:ports) { [1234, 5678] }
-
-              it 'succeeds' do
-                route_mapping_create.add
-                expect(app.reload.routes).to eq([route])
-              end
-            end
-
-            context 'that does not match the requested port' do
-              let(:ports) { [5678] }
-
-              it 'raises' do
-                expect {
-                  route_mapping_create.add
-                }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /1234 is not available/)
-              end
-            end
-          end
-        end
-      end
-
-      context 'when the process is not web' do
-        let(:process_type) { 'baboon' }
-
-        context 'when no app port is requested' do
-          let(:message) { RouteMappingsCreateMessage.new({ relationships: { process: { type: process_type } } }) }
-          context 'when the process has an empty array of ports' do
-            let(:ports) { [] }
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /8080 is not available/)
-            end
-          end
-
-          context 'when the process has nil ports' do
-            let(:ports) { nil }
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /8080 is not available/)
-            end
-          end
-
-          context 'when the process has an array of ports' do
-            context 'that matches the default port' do
-              let(:ports) { [8080] }
-              it 'succeeds' do
-                route_mapping_create.add
-                expect(app.reload.routes).to eq([route])
-              end
-            end
-
-            context 'that does not match the default port' do
-              let(:ports) { [1234] }
-
-              it 'raises' do
-                expect {
-                  route_mapping_create.add
-                }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /8080 is not available/)
-              end
-            end
-          end
-        end
-
-        context 'when the default web port is requested' do
-          let(:requested_port) { 8080 }
-          context 'when the process has an empty array of ports' do
-            let(:ports) { [] }
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /8080 is not available/)
-            end
-          end
-
-          context 'when the process has nil ports' do
-            let(:ports) { nil }
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /8080 is not available/)
-            end
-          end
-        end
-
-        context 'a non-default port is requested' do
-          let(:requested_port) { 1234 }
-          context 'when the process has an empty array of ports' do
-            let(:ports) { [] }
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /1234 is not available/)
-            end
-          end
-
-          context 'when the process has nil ports' do
-            let(:ports) { nil }
-            it 'raises' do
-              expect {
-                route_mapping_create.add
-              }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /1234 is not available/)
-            end
+          it 'succeeds' do
+            route_mapping_create.add(message)
+            expect(app.reload.routes).to eq([route])
           end
         end
       end
 
       context 'when a route mapping already exists and a new mapping is requested' do
         before do
-          route_mapping_create.add
+          route_mapping_create.add(message)
         end
 
         context 'for the same process type' do
           it 'does not allow for duplicate route association' do
             expect {
-              route_mapping_create.add
-            }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /Duplicate Route Mapping/)
+              route_mapping_create.add(message)
+            }.to raise_error(RouteMappingCreate::DuplicateRouteMapping, /Duplicate Route Mapping/)
             expect(app.reload.routes).to eq([route])
           end
         end
 
         context 'for a different process type' do
-          let(:worker_process) { App.make(:process, app_guid: app.guid, space: space, type: 'worker', ports: [8888]) }
-          let(:worker_message) { RouteMappingsCreateMessage.new({ app_port: 8888, relationships: { process: { type: 'worker' } } }) }
+          let(:worker_process) { App.make(:process, app: app, type: 'worker', ports: [8080]) }
+          let(:worker_message) { RouteMappingsCreateMessage.new({ relationships: { process: { type: 'worker' } } }) }
 
           it 'allows a new route mapping' do
-            described_class.new(user, user_email, app, route, worker_process, worker_message).add
+            RouteMappingCreate.new(user_audit_info, route, worker_process).add(worker_message)
             expect(app.reload.routes).to eq([route, route])
           end
         end
@@ -277,7 +124,7 @@ module VCAP::CloudController
 
         it 'raises an InvalidRouteMapping error' do
           expect {
-            route_mapping_create.add
+            route_mapping_create.add(message)
           }.to raise_error(RouteMappingCreate::InvalidRouteMapping, 'shizzle')
         end
       end
@@ -287,7 +134,7 @@ module VCAP::CloudController
 
         it 'raises InvalidRouteMapping' do
           expect {
-            route_mapping_create.add
+            route_mapping_create.add(message)
           }.to raise_error(RouteMappingCreate::InvalidRouteMapping, /the app and route must belong to the same space/)
           expect(app.reload.routes).to be_empty
         end

@@ -1,5 +1,6 @@
 ---
 external_port: 8181
+tls_port: 8183
 
 info:
   name: "vcap"
@@ -48,6 +49,8 @@ hm9000:
 uaa:
   url: "http://localhost:8080/uaa"
   resource_id: "cloud_controller"
+  internal_url: "https://uaa.service.cf.internal"
+  ca_file: "spec/fixtures/certs/uaa_ca.crt"
 
 logging:
   level: fatal # Keep at fatal to avoid lots of extraneous output in tests
@@ -125,6 +128,8 @@ loggregator:
 renderer:
   max_results_per_page: 100
   default_results_per_page: 50
+
+shared_isolation_segment_name: 'shared'
 
 stacks_file: "/tmp/foo"
 default_app_disk_in_mb: 512

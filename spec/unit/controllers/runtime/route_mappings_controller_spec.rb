@@ -16,8 +16,8 @@ module VCAP::CloudController
           @app_b = AppFactory.make(space: @space_b)
           @route_a = Route.make(space: @space_a)
           @route_b = Route.make(space: @space_b)
-          @obj_a = RouteMapping.make(app_guid: @app_a.guid, route_guid: @route_a.guid)
-          @obj_b = RouteMapping.make(app_guid: @app_b.guid, route_guid: @route_b.guid)
+          @obj_a = RouteMappingModel.make(app_guid: @app_a.app.guid, route_guid: @route_a.guid, process_type: @app_a.type)
+          @obj_b = RouteMappingModel.make(app_guid: @app_b.app.guid, route_guid: @route_b.guid, process_type: @app_b.type)
         end
 
         describe 'Org Level Permissions' do
@@ -95,10 +95,49 @@ module VCAP::CloudController
         end
       end
 
-      describe 'POST /v2/route_mappings' do
-        let(:route) { Route.make }
+      describe 'GET /v2/route_mappings' do
+        let(:space) { Space.make }
+        let(:developer) { make_developer_for_space(space) }
+        let(:route) { Route.make(space: space) }
         let(:app_obj) { AppFactory.make(space: space) }
-        let(:space) { route.space }
+        let(:route_mapping) { RouteMappingModel.make(app: app_obj, route: route) }
+
+        before do
+          set_current_user(developer)
+        end
+
+        it 'returns the route mappings' do
+          get "/v2/route_mappings/#{route_mapping.guid}"
+
+          expect(last_response).to have_status_code(200)
+          expect(last_response.body).to include route_mapping.guid
+        end
+
+        context 'when there is no route' do
+          it 'cannot find a route' do
+            get '/v2/route_mappings/nonexistent-guid'
+
+            expect(last_response).to have_status_code(404)
+            expect(last_response.body).to include 'RouteMappingNotFound'
+          end
+        end
+
+        context "when the route mapping's process type is not 'web'" do
+          let(:route_mapping) { RouteMappingModel.make(app: app_obj, route: route, process_type: 'foo') }
+
+          it 'returns a 404 NotFound' do
+            get "/v2/route_mappings/#{route_mapping.guid}"
+
+            expect(last_response).to have_status_code(404)
+            expect(last_response.body).to include 'RouteMappingNotFound'
+          end
+        end
+      end
+
+      describe 'POST /v2/route_mappings' do
+        let(:space) { Space.make }
+        let(:route) { Route.make(space: space) }
+        let(:app_obj) { AppFactory.make(space: space) }
         let(:developer) { make_developer_for_space(space) }
 
         before do
@@ -366,6 +405,26 @@ module VCAP::CloudController
               expect(decoded_response['description']).to_not include('port')
             end
           end
+
+          context 'when a route bound to a service is specified' do
+            let(:route_binding) { RouteBinding.make }
+            let(:route) { route_binding.route }
+            let(:app_obj) { AppFactory.make(space: route.space, diego: false) }
+            let(:space) { route.space }
+            let(:body) do
+              {
+                app_guid: app_obj.guid,
+                route_guid: route.guid
+              }.to_json
+            end
+
+            it 'fails to add the route' do
+              post '/v2/route_mappings', body
+
+              expect(last_response.status).to eq(400)
+              expect(decoded_response['description']).to match(/Route services are only supported for apps on Diego/)
+            end
+          end
         end
 
         context 'when the Routing API is not enabled' do
@@ -374,6 +433,9 @@ module VCAP::CloudController
           let(:tcp_route) { Route.make(port: 9090, host: '', space: space, domain: tcp_domain) }
           let(:app_obj) { AppFactory.make(space: space, ports: [9090], diego: true) }
           let(:space_developer) { make_developer_for_space(space) }
+          let(:routing_api_client) { double('routing_api_client', router_group: router_group) }
+          let(:router_group) { double('router_group', type: 'tcp', guid: 'router-group-guid') }
+
           let(:body) do
             {
                 app_guid: app_obj.guid,
@@ -384,59 +446,71 @@ module VCAP::CloudController
           before do
             space.space_quota_definition = space_quota
             allow_any_instance_of(RouteValidator).to receive(:validate)
-            TestConfig.override(routing_api: nil)
+            allow(RoutingApi::Client).to receive(:new).and_return(routing_api_client)
           end
 
-          it 'returns 403' do
+          context 'when a pre-exiting route has a router_group' do
+            before do
+              tcp_route
+              TestConfig.override(routing_api: nil)
+            end
+
+            it 'returns 403' do
+              post '/v2/route_mappings', body
+              expect(last_response).to have_status_code(403)
+              expect(decoded_response['description']).to include('Routing API is disabled')
+            end
+          end
+
+          context 'when a pre-existing route has no router_group' do
+            let(:route) { Route.make(port: 9090, host: '', space: space) }
+            let(:body) do
+              {
+                app_guid: app_obj.guid,
+                route_guid: route.guid
+              }.to_json
+            end
+
+            before do
+              route
+              TestConfig.override(routing_api: nil)
+            end
+
+            it 'returns 201 created' do
+              post '/v2/route_mappings', body
+              expect(last_response).to have_status_code(201)
+            end
+          end
+        end
+
+        context 'when the app and route are in different spaces' do
+          let(:route) { Route.make }
+          let(:body) do
+            {
+              app_guid:   app_obj.guid,
+              route_guid: route.guid
+            }.to_json
+          end
+
+          it 'raises an error' do
+            expect(RouteMappingModel.count).to eq(0)
+
             post '/v2/route_mappings', body
-            expect(last_response).to have_status_code(403)
-            expect(decoded_response['description']).to include('Support for TCP routing is disabled')
+            expect(last_response.status).to eq(400)
+            expect(last_response.body).to include('InvalidRelation')
+            expect(last_response.body).to include('must belong to the same space')
+
+            expect(RouteMappingModel.count).to eq(0)
           end
         end
       end
 
       describe 'PUT /v2/route_mappings/:guid' do
-        let(:route) { Route.make }
-        let(:app_obj) { AppFactory.make(space: space, ports: [8080, 9090], diego: true) }
-        let(:space) { route.space }
-        let(:route_mapping) { RouteMapping.make(app_guid: app_obj.guid, route_guid: route.guid) }
-        let(:space_developer) { make_developer_for_space(space) }
-
-        before do
-          set_current_user(space_developer)
-        end
-
-        context 'as SpaceDeveloper' do
-          it 'returns 201' do
-            put "/v2/route_mappings/#{route_mapping.guid}", '{ "app_port": 9090 }'
-            expect(last_response).to have_status_code(201)
-          end
-        end
-
-        context 'as SpaceDeveloper for another space' do
-          it 'returns 403' do
-            set_current_user(User.make)
-            put "/v2/route_mappings/#{route_mapping.guid}", '{ "app_port": 9090 }'
-            expect(last_response).to have_status_code(403)
-          end
-        end
-
-        context 'when updating app_guid and route_guid' do
-          let(:body) do
-            {
-                app_port: 9090,
-                app_guid: '123',
-                route_guid: '456'
-            }.to_json
-          end
-
-          it 'does not update non-updatable fields' do
-            put "/v2/route_mappings/#{route_mapping.guid}", body
-            expect(last_response).to have_status_code(201)
-            expect(decoded_response['entity']['app_port']).to eq 9090
-            expect(decoded_response['entity']['app_guid']).to eq app_obj.guid
-            expect(decoded_response['entity']['route_guid']).to eq route.guid
-          end
+        it 'does not have a route' do
+          set_current_user_as_admin
+          mapping = RouteMappingModel.make
+          put "/v2/route_mappings/#{mapping.guid}", '{"app_port": 34}'
+          expect(last_response).to have_status_code(404)
         end
       end
 
@@ -445,7 +519,7 @@ module VCAP::CloudController
         let(:app_obj) { AppFactory.make(space: space) }
         let(:space) { route.space }
         let(:developer) { make_developer_for_space(space) }
-        let(:route_mapping) { RouteMapping.make(app_guid: app_obj.guid, route_guid: route.guid) }
+        let(:route_mapping) { RouteMappingModel.make(app: app_obj.app, route: route, process_type: app_obj.type) }
 
         before do
           set_current_user(developer)
@@ -453,8 +527,8 @@ module VCAP::CloudController
 
         it 'deletes the route mapping' do
           delete "/v2/route_mappings/#{route_mapping.guid}"
-
           expect(last_response).to have_status_code(204)
+          expect(route_mapping.exists?).to be_falsey
         end
 
         it 'does not delete the associated app and route' do
@@ -463,6 +537,17 @@ module VCAP::CloudController
           expect(last_response).to have_status_code(204)
           expect(route).to exist
           expect(app_obj).to exist
+        end
+
+        context 'when the user is not a SpaceDeveloper' do
+          before do
+            set_current_user(User.make)
+          end
+
+          it 'raises a 403' do
+            delete "/v2/route_mappings/#{route_mapping.guid}"
+            expect(last_response).to have_status_code(403)
+          end
         end
 
         context 'when the route mapping does not exist' do

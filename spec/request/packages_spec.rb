@@ -3,12 +3,13 @@ require 'spec_helper'
 RSpec.describe 'Packages' do
   let(:email) { 'potato@house.com' }
   let(:user) { VCAP::CloudController::User.make }
-  let(:user_header) { headers_for(user, email: email) }
+  let(:user_name) { 'clarence' }
+  let(:user_header) { headers_for(user, email: email, user_name: user_name) }
   let(:space) { VCAP::CloudController::Space.make }
   let(:space_guid) { space.guid }
   let(:app_model) { VCAP::CloudController::AppModel.make(space_guid: space_guid) }
 
-  describe 'POST /v3/apps/:guid/packages' do
+  describe 'POST /v3/packages' do
     let(:guid) { app_model.guid }
 
     before do
@@ -17,16 +18,14 @@ RSpec.describe 'Packages' do
     end
 
     let(:type) { 'docker' }
-    let(:data) do
-      {
-        image: 'registry/image:latest'
-      }
-    end
+    let(:data) { { image: 'registry/image:latest', username: 'my-docker-username', password: 'my-password' } }
+    let(:expected_data) { { image: 'registry/image:latest', username: 'my-docker-username', password: '***' } }
+    let(:relationships) { { app: { data: { guid: app_model.guid } } } }
 
     describe 'creation' do
       it 'creates a package' do
         expect {
-          post "/v3/apps/#{guid}/packages", { type: type, data: data }, user_header
+          post '/v3/packages', { type: type, data: data, relationships: relationships }, user_header
         }.to change { VCAP::CloudController::PackageModel.count }.by(1)
 
         package = VCAP::CloudController::PackageModel.last
@@ -36,14 +35,16 @@ RSpec.describe 'Packages' do
           'type'       => type,
           'data'       => {
             'image'    => 'registry/image:latest',
+            'username' => 'my-docker-username',
+            'password' => '***'
           },
           'state'      => 'READY',
           'created_at' => iso8601,
-          'updated_at' => nil,
+          'updated_at' => iso8601,
           'links' => {
-            'self' => { 'href' => "/v3/packages/#{package.guid}" },
-            'app'  => { 'href' => "/v3/apps/#{guid}" },
-            'stage' => { 'href' => "/v3/packages/#{package.guid}/droplets", 'method' => 'POST' },
+            'self' => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}" },
+            'app'  => { 'href' => "#{link_prefix}/v3/apps/#{guid}" },
+            'stage' => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}/droplets", 'method' => 'POST' },
           }
         }
 
@@ -51,7 +52,8 @@ RSpec.describe 'Packages' do
           package_guid: package.guid,
           request: {
             type: type,
-            data: data
+            data: expected_data,
+            relationships: relationships
           }
         }.to_json
 
@@ -65,8 +67,9 @@ RSpec.describe 'Packages' do
           actor:             user.guid,
           actor_type:        'user',
           actor_name:        email,
+          actor_username:    user_name,
           actee:             package.app.guid,
-          actee_type:        'v3-app',
+          actee_type:        'app',
           actee_name:        package.app.name,
           metadata:          expected_metadata,
           space_guid:        space.guid,
@@ -77,17 +80,19 @@ RSpec.describe 'Packages' do
 
     describe 'copying' do
       let(:target_app_model) { VCAP::CloudController::AppModel.make(space_guid: space_guid) }
-      let!(:original_package) { VCAP::CloudController::PackageModel.make(type: 'docker', app_guid: app_model.guid) }
+      let!(:original_package) { VCAP::CloudController::PackageModel.make(type: 'docker', app_guid: app_model.guid, docker_image: 'http://awesome-sauce.com') }
       let!(:guid) { target_app_model.guid }
       let(:source_package_guid) { original_package.guid }
 
-      before do
-        VCAP::CloudController::PackageDockerDataModel.create(package: original_package, image: 'http://awesome-sauce.com')
-      end
-
       it 'copies a package' do
         expect {
-          post "/v3/apps/#{guid}/packages?source_package_guid=#{source_package_guid}", {}, user_header
+          post "/v3/packages?source_guid=#{source_package_guid}",
+            {
+              relationships: {
+                app: { data: { guid: guid } },
+              }
+            },
+            user_header
         }.to change { VCAP::CloudController::PackageModel.count }.by(1)
 
         package = VCAP::CloudController::PackageModel.last
@@ -96,15 +101,17 @@ RSpec.describe 'Packages' do
           'guid'       => package.guid,
           'type'       => 'docker',
           'data'       => {
-            'image'    => 'http://awesome-sauce.com'
+            'image'    => 'http://awesome-sauce.com',
+            'username' => nil,
+            'password' => nil,
           },
           'state'      => 'READY',
           'created_at' => iso8601,
-          'updated_at' => nil,
+          'updated_at' => iso8601,
           'links' => {
-            'self' => { 'href' => "/v3/packages/#{package.guid}" },
-            'app'  => { 'href' => "/v3/apps/#{guid}" },
-            'stage' => { 'href' => "/v3/packages/#{package.guid}/droplets", 'method' => 'POST' },
+            'self' => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}" },
+            'app'  => { 'href' => "#{link_prefix}/v3/apps/#{guid}" },
+            'stage' => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}/droplets", 'method' => 'POST' },
           }
         }
 
@@ -112,7 +119,7 @@ RSpec.describe 'Packages' do
         parsed_response = MultiJson.load(last_response.body)
         expect(parsed_response).to be_a_response_like(expected_response)
 
-        expected_metadata = {
+        expected_event_metadata = {
           package_guid: package.guid,
           request: {
             source_package_guid: source_package_guid
@@ -125,10 +132,11 @@ RSpec.describe 'Packages' do
           actor:             user.guid,
           actor_type:        'user',
           actor_name:        email,
+          actor_username:    user_name,
           actee:             package.app.guid,
-          actee_type:        'v3-app',
+          actee_type:        'app',
           actee_name:        package.app.name,
-          metadata:          expected_metadata,
+          metadata:          expected_event_metadata,
           space_guid:        space.guid,
           organization_guid: space.organization.guid
         })
@@ -157,8 +165,8 @@ RSpec.describe 'Packages' do
         'pagination' => {
           'total_results' => 2,
           'total_pages'   => 1,
-          'first'         => { 'href' => "/v3/apps/#{guid}/packages?order_by=-created_at&page=1&per_page=2" },
-          'last'          => { 'href' => "/v3/apps/#{guid}/packages?order_by=-created_at&page=1&per_page=2" },
+          'first'         => { 'href' => "#{link_prefix}/v3/apps/#{guid}/packages?order_by=-created_at&page=1&per_page=2" },
+          'last'          => { 'href' => "#{link_prefix}/v3/apps/#{guid}/packages?order_by=-created_at&page=1&per_page=2" },
           'next'          => nil,
           'previous'      => nil,
         },
@@ -167,36 +175,36 @@ RSpec.describe 'Packages' do
             'guid'       => package2.guid,
             'type'       => 'bits',
             'data'       => {
-              'hash'       => { 'type' => 'sha1', 'value' => nil },
-              'error'      => nil
+              'checksum' => { 'type' => 'sha256', 'value' => nil },
+              'error' => nil
             },
             'state'      => VCAP::CloudController::PackageModel::CREATED_STATE,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
             'links' => {
-              'self'   => { 'href' => "/v3/packages/#{package2.guid}" },
-              'upload' => { 'href' => "/v3/packages/#{package2.guid}/upload", 'method' => 'POST' },
-              'download' => { 'href' => "/v3/packages/#{package2.guid}/download", 'method' => 'GET' },
-              'stage' => { 'href' => "/v3/packages/#{package2.guid}/droplets", 'method' => 'POST' },
-              'app' => { 'href' => "/v3/apps/#{guid}" },
+              'self'   => { 'href' => "#{link_prefix}/v3/packages/#{package2.guid}" },
+              'upload' => { 'href' => "#{link_prefix}/v3/packages/#{package2.guid}/upload", 'method' => 'POST' },
+              'download' => { 'href' => "#{link_prefix}/v3/packages/#{package2.guid}/download", 'method' => 'GET' },
+              'stage' => { 'href' => "#{link_prefix}/v3/packages/#{package2.guid}/droplets", 'method' => 'POST' },
+              'app' => { 'href' => "#{link_prefix}/v3/apps/#{guid}" },
             }
           },
           {
             'guid'       => package.guid,
             'type'       => 'bits',
             'data'       => {
-              'hash'       => { 'type' => 'sha1', 'value' => nil },
-              'error'      => nil
+              'checksum' => { 'type' => 'sha256', 'value' => nil },
+              'error' => nil
             },
             'state'      => VCAP::CloudController::PackageModel::CREATED_STATE,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
             'links' => {
-              'self'   => { 'href' => "/v3/packages/#{package.guid}" },
-              'upload' => { 'href' => "/v3/packages/#{package.guid}/upload", 'method' => 'POST' },
-              'download' => { 'href' => "/v3/packages/#{package.guid}/download", 'method' => 'GET' },
-              'stage' => { 'href' => "/v3/packages/#{package.guid}/droplets", 'method' => 'POST' },
-              'app' => { 'href' => "/v3/apps/#{guid}" },
+              'self'   => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}" },
+              'upload' => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}/upload", 'method' => 'POST' },
+              'download' => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}/download", 'method' => 'GET' },
+              'stage' => { 'href' => "#{link_prefix}/v3/packages/#{package.guid}/droplets", 'method' => 'POST' },
+              'app' => { 'href' => "#{link_prefix}/v3/apps/#{guid}" },
             }
           },
         ]
@@ -222,8 +230,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 3,
           'total_pages'   => 1,
-          'first'         => { 'href' => '/v3/packages?page=1&per_page=50&types=bits' },
-          'last'          => { 'href' => '/v3/packages?page=1&per_page=50&types=bits' },
+          'first'         => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&types=bits" },
+          'last'          => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&types=bits" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -247,8 +255,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 2,
           'total_pages'   => 1,
-          'first'         => { 'href' => "/v3/apps/#{app_model.guid}/packages?page=1&per_page=50&states=PROCESSING_UPLOAD" },
-          'last'          => { 'href' => "/v3/apps/#{app_model.guid}/packages?page=1&per_page=50&states=PROCESSING_UPLOAD" },
+          'first'         => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/packages?page=1&per_page=50&states=PROCESSING_UPLOAD" },
+          'last'          => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/packages?page=1&per_page=50&states=PROCESSING_UPLOAD" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -271,8 +279,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 2,
           'total_pages'   => 1,
-          'first'         => { 'href' => "/v3/apps/#{app_model.guid}/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
-          'last'          => { 'href' => "/v3/apps/#{app_model.guid}/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
+          'first'         => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
+          'last'          => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -302,20 +310,19 @@ RSpec.describe 'Packages' do
       docker_package = VCAP::CloudController::PackageModel.make(
         type: docker_type,
         app_guid: app_model.guid,
-        state: VCAP::CloudController::PackageModel::READY_STATE)
-      docker_package2 = VCAP::CloudController::PackageModel.make(type: docker_type, app_guid: app_model.guid)
+        state: VCAP::CloudController::PackageModel::READY_STATE,
+        docker_image: 'http://location-of-image.com')
+      VCAP::CloudController::PackageModel.make(type: docker_type, app_guid: app_model.guid, docker_image: 'http://location-of-image-2.com')
       VCAP::CloudController::PackageModel.make(app_guid: VCAP::CloudController::AppModel.make.guid)
-      VCAP::CloudController::PackageDockerDataModel.create(package: docker_package, image: 'http://location-of-image.com')
-      VCAP::CloudController::PackageDockerDataModel.create(package: docker_package2, image: 'http://location-of-image-2.com')
 
       expected_response =
         {
         'pagination' => {
               'total_results' => 3,
               'total_pages'   => 2,
-              'first'         => { 'href' => '/v3/packages?page=1&per_page=2' },
-              'last'          => { 'href' => '/v3/packages?page=2&per_page=2' },
-              'next'          => { 'href' => '/v3/packages?page=2&per_page=2' },
+              'first'         => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=2" },
+              'last'          => { 'href' => "#{link_prefix}/v3/packages?page=2&per_page=2" },
+              'next'          => { 'href' => "#{link_prefix}/v3/packages?page=2&per_page=2" },
               'previous'      => nil,
             },
         'resources' => [
@@ -323,33 +330,35 @@ RSpec.describe 'Packages' do
             'guid'       => bits_package.guid,
             'type'       => 'bits',
             'data'       => {
-              'hash'       => { 'type' => 'sha1', 'value' => nil },
-              'error'      => nil
+              'checksum' => { 'type' => 'sha256', 'value' => nil },
+              'error' => nil
             },
             'state'      => VCAP::CloudController::PackageModel::CREATED_STATE,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
             'links' => {
-              'self'   => { 'href' => "/v3/packages/#{bits_package.guid}" },
-              'upload' => { 'href' => "/v3/packages/#{bits_package.guid}/upload", 'method' => 'POST' },
-              'download' => { 'href' => "/v3/packages/#{bits_package.guid}/download", 'method' => 'GET' },
-              'stage' => { 'href' => "/v3/packages/#{bits_package.guid}/droplets", 'method' => 'POST' },
-              'app' => { 'href' => "/v3/apps/#{bits_package.app_guid}" },
+              'self'   => { 'href' => "#{link_prefix}/v3/packages/#{bits_package.guid}" },
+              'upload' => { 'href' => "#{link_prefix}/v3/packages/#{bits_package.guid}/upload", 'method' => 'POST' },
+              'download' => { 'href' => "#{link_prefix}/v3/packages/#{bits_package.guid}/download", 'method' => 'GET' },
+              'stage' => { 'href' => "#{link_prefix}/v3/packages/#{bits_package.guid}/droplets", 'method' => 'POST' },
+              'app' => { 'href' => "#{link_prefix}/v3/apps/#{bits_package.app_guid}" },
             }
           },
           {
             'guid'       => docker_package.guid,
             'type'       => 'docker',
             'data'       => {
-              'image'    => 'http://location-of-image.com'
+              'image'    => 'http://location-of-image.com',
+              'username' => nil,
+              'password' => nil,
             },
             'state'      => VCAP::CloudController::PackageModel::READY_STATE,
             'created_at' => iso8601,
-            'updated_at' => nil,
+            'updated_at' => iso8601,
             'links' => {
-              'self' => { 'href' => "/v3/packages/#{docker_package.guid}" },
-              'app'  => { 'href' => "/v3/apps/#{docker_package.app_guid}" },
-              'stage' => { 'href' => "/v3/packages/#{docker_package.guid}/droplets", 'method' => 'POST' },
+              'self' => { 'href' => "#{link_prefix}/v3/packages/#{docker_package.guid}" },
+              'app'  => { 'href' => "#{link_prefix}/v3/apps/#{docker_package.app_guid}" },
+              'stage' => { 'href' => "#{link_prefix}/v3/packages/#{docker_package.guid}/droplets", 'method' => 'POST' },
             }
           }
         ]
@@ -376,8 +385,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 3,
           'total_pages'   => 1,
-          'first'         => { 'href' => '/v3/packages?page=1&per_page=50&types=bits' },
-          'last'          => { 'href' => '/v3/packages?page=1&per_page=50&types=bits' },
+          'first'         => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&types=bits" },
+          'last'          => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&types=bits" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -403,8 +412,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 3,
           'total_pages'   => 1,
-          'first'         => { 'href' => '/v3/packages?page=1&per_page=50&states=PROCESSING_UPLOAD' },
-          'last'          => { 'href' => '/v3/packages?page=1&per_page=50&states=PROCESSING_UPLOAD' },
+          'first'         => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&states=PROCESSING_UPLOAD" },
+          'last'          => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&states=PROCESSING_UPLOAD" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -428,8 +437,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 2,
           'total_pages'   => 1,
-          'first'         => { 'href' => "/v3/packages?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
-          'last'          => { 'href' => "/v3/packages?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
+          'first'         => { 'href' => "#{link_prefix}/v3/packages?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
+          'last'          => { 'href' => "#{link_prefix}/v3/packages?app_guids=#{app_model.guid}%2C#{app_model2.guid}&page=1&per_page=50" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -452,8 +461,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 2,
           'total_pages'   => 1,
-          'first'         => { 'href' => "/v3/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
-          'last'          => { 'href' => "/v3/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
+          'first'         => { 'href' => "#{link_prefix}/v3/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
+          'last'          => { 'href' => "#{link_prefix}/v3/packages?guids=#{package1.guid}%2C#{package2.guid}&page=1&per_page=50" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -483,8 +492,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 2,
           'total_pages'   => 1,
-          'first'         => { 'href' => "/v3/packages?page=1&per_page=50&space_guids=#{space2.guid}%2C#{space_guid}" },
-          'last'          => { 'href' => "/v3/packages?page=1&per_page=50&space_guids=#{space2.guid}%2C#{space_guid}" },
+          'first'         => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&space_guids=#{space2.guid}%2C#{space_guid}" },
+          'last'          => { 'href' => "#{link_prefix}/v3/packages?page=1&per_page=50&space_guids=#{space2.guid}%2C#{space_guid}" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -521,8 +530,8 @@ RSpec.describe 'Packages' do
         expected_pagination = {
           'total_results' => 2,
           'total_pages'   => 1,
-          'first'         => { 'href' => "/v3/packages?organization_guids=#{org1_guid}%2C#{org2_guid}&page=1&per_page=50" },
-          'last'          => { 'href' => "/v3/packages?organization_guids=#{org1_guid}%2C#{org2_guid}&page=1&per_page=50" },
+          'first'         => { 'href' => "#{link_prefix}/v3/packages?organization_guids=#{org1_guid}%2C#{org2_guid}&page=1&per_page=50" },
+          'last'          => { 'href' => "#{link_prefix}/v3/packages?organization_guids=#{org1_guid}%2C#{org2_guid}&page=1&per_page=50" },
           'next'          => nil,
           'previous'      => nil
         }
@@ -556,18 +565,18 @@ RSpec.describe 'Packages' do
         'type'       => package_model.type,
         'guid'       => guid,
         'data'       => {
-          'hash'       => { 'type' => 'sha1', 'value' => nil },
-          'error'      => nil
+          'checksum' => { 'type' => 'sha256', 'value' => nil },
+          'error' => nil
         },
         'state'      => VCAP::CloudController::PackageModel::CREATED_STATE,
         'created_at' => iso8601,
-        'updated_at' => nil,
+        'updated_at' => iso8601,
         'links' => {
-          'self'   => { 'href' => "/v3/packages/#{guid}" },
-          'upload' => { 'href' => "/v3/packages/#{guid}/upload", 'method' => 'POST' },
-          'download' => { 'href' => "/v3/packages/#{guid}/download", 'method' => 'GET' },
-          'stage' => { 'href' => "/v3/packages/#{guid}/droplets", 'method' => 'POST' },
-          'app' => { 'href' => "/v3/apps/#{app_model.guid}" },
+          'self'   => { 'href' => "#{link_prefix}/v3/packages/#{guid}" },
+          'upload' => { 'href' => "#{link_prefix}/v3/packages/#{guid}/upload", 'method' => 'POST' },
+          'download' => { 'href' => "#{link_prefix}/v3/packages/#{guid}/download", 'method' => 'GET' },
+          'stage' => { 'href' => "#{link_prefix}/v3/packages/#{guid}/droplets", 'method' => 'POST' },
+          'app' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
         }
       }
 
@@ -612,18 +621,18 @@ RSpec.describe 'Packages' do
         'type'       => package_model.type,
         'guid'       => guid,
         'data'       => {
-          'hash'       => { 'type' => 'sha1', 'value' => nil },
-          'error'      => nil
+          'checksum' => { 'type' => 'sha256', 'value' => nil },
+          'error' => nil
         },
         'state'      => VCAP::CloudController::PackageModel::PENDING_STATE,
         'created_at' => iso8601,
         'updated_at' => iso8601,
         'links' => {
-          'self'   => { 'href' => "/v3/packages/#{guid}" },
-          'upload' => { 'href' => "/v3/packages/#{guid}/upload", 'method' => 'POST' },
-          'download' => { 'href' => "/v3/packages/#{guid}/download", 'method' => 'GET' },
-          'stage' => { 'href' => "/v3/packages/#{guid}/droplets", 'method' => 'POST' },
-          'app' => { 'href' => "/v3/apps/#{app_model.guid}" },
+          'self'   => { 'href' => "#{link_prefix}/v3/packages/#{guid}" },
+          'upload' => { 'href' => "#{link_prefix}/v3/packages/#{guid}/upload", 'method' => 'POST' },
+          'download' => { 'href' => "#{link_prefix}/v3/packages/#{guid}/download", 'method' => 'GET' },
+          'stage' => { 'href' => "#{link_prefix}/v3/packages/#{guid}/droplets", 'method' => 'POST' },
+          'app' => { 'href' => "#{link_prefix}/v3/apps/#{app_model.guid}" },
         }
       }
       parsed_response = MultiJson.load(last_response.body)
@@ -638,8 +647,9 @@ RSpec.describe 'Packages' do
         actor:             user.guid,
         actor_type:        'user',
         actor_name:        email,
+        actor_username:    user_name,
         actee:             'woof',
-        actee_type:        'v3-app',
+        actee_type:        'app',
         actee_name:        'meow',
         metadata:          expected_metadata,
         space_guid:        space.guid,
@@ -693,8 +703,9 @@ RSpec.describe 'Packages' do
           actor:             user.guid,
           actor_type:        'user',
           actor_name:        email,
+          actor_username:    user_name,
           actee:             'woof-guid',
-          actee_type:        'v3-app',
+          actee_type:        'app',
           actee_name:        'meow',
           metadata:          expected_metadata,
           space_guid:        space.guid,
@@ -734,8 +745,9 @@ RSpec.describe 'Packages' do
         actor:             user.guid,
         actor_type:        'user',
         actor_name:        email,
+        actor_username:    user_name,
         actee:             app_guid,
-        actee_type:        'v3-app',
+        actee_type:        'app',
         actee_name:        app_name,
         metadata:          expected_metadata,
         space_guid:        space.guid,

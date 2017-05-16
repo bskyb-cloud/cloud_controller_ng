@@ -4,7 +4,7 @@ require 'actions/services/service_instance_create'
 require 'actions/services/service_instance_update'
 require 'controllers/services/lifecycle/service_instance_deprovisioner'
 require 'controllers/services/lifecycle/service_instance_purger'
-require 'queries/service_instance_fetcher'
+require 'fetchers/service_instance_fetcher'
 
 module VCAP::CloudController
   class ServiceInstancesController < RestController::ModelController
@@ -15,7 +15,7 @@ module VCAP::CloudController
       attribute :tags, [String], default: []
       to_one :space
       to_one :service_plan
-      to_many :service_bindings
+      to_many :service_bindings, route_for: [:get], exclude_in: [:create, :update]
       to_many :service_keys
       to_many :routes, route_for: [:get, :put, :delete], exclude_in: [:create, :update]
     end

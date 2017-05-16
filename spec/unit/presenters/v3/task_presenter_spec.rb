@@ -5,13 +5,15 @@ module VCAP::CloudController::Presenters::V3
   RSpec.describe TaskPresenter do
     subject(:presenter) { TaskPresenter.new(task) }
     let(:task) {
-      VCAP::CloudController::TaskModel.make(
-        environment_variables: { 'some' => 'stuff' },
-        failure_reason:        'sup dawg',
-        memory_in_mb:          2048,
-        updated_at:            Time.at(2),
-        created_at:            Time.at(1),
+      task = VCAP::CloudController::TaskModel.make(
+        failure_reason: 'sup dawg',
+        memory_in_mb:   2048,
+        disk_in_mb:     4048,
+        created_at:     Time.at(1),
+        sequence_id:    5
       )
+      task.this.update(updated_at: Time.at(2))
+      task.reload
     }
 
     describe '#to_hash' do
@@ -19,9 +21,9 @@ module VCAP::CloudController::Presenters::V3
 
       it 'presents the task as a hash' do
         links = {
-          self:    { href: "/v3/tasks/#{task.guid}" },
-          app:     { href: "/v3/apps/#{task.app.guid}" },
-          droplet: { href: "/v3/droplets/#{task.droplet.guid}" },
+          self:    { href: "#{link_prefix}/v3/tasks/#{task.guid}" },
+          app:     { href: "#{link_prefix}/v3/apps/#{task.app.guid}" },
+          droplet: { href: "#{link_prefix}/v3/droplets/#{task.droplet.guid}" },
         }
 
         expect(result[:guid]).to eq(task.guid)
@@ -29,8 +31,9 @@ module VCAP::CloudController::Presenters::V3
         expect(result[:command]).to eq(task.command)
         expect(result[:state]).to eq(task.state)
         expect(result[:result][:failure_reason]).to eq 'sup dawg'
-        expect(result[:environment_variables]).to eq(task.environment_variables)
         expect(result[:memory_in_mb]).to eq(task.memory_in_mb)
+        expect(result[:disk_in_mb]).to eq(task.disk_in_mb)
+        expect(result[:sequence_id]).to eq(5)
         expect(result[:created_at]).to eq(task.created_at.iso8601)
         expect(result[:updated_at]).to eq(task.updated_at.iso8601)
         expect(result[:links]).to eq(links)
@@ -39,9 +42,8 @@ module VCAP::CloudController::Presenters::V3
       context 'when show_secrets is false' do
         let(:presenter) { TaskPresenter.new(task, show_secrets: false) }
 
-        it 'redacts command and environment_variables' do
-          expect(result[:command]).to eq('[PRIVATE DATA HIDDEN]')
-          expect(result[:environment_variables]).to eq({ 'redacted_message' => '[PRIVATE DATA HIDDEN]' })
+        it 'excludes command' do
+          expect(result).not_to have_key(:command)
         end
       end
     end

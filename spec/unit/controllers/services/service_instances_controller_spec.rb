@@ -21,7 +21,6 @@ module VCAP::CloudController
           name: { type: 'string', required: true },
           space_guid: { type: 'string', required: true },
           service_plan_guid: { type: 'string', required: true },
-          service_binding_guids: { type: '[string]' },
           service_key_guids: { type: '[string]' },
           tags: { type: '[string]', default: [] },
           parameters: { type: 'hash', default: nil },
@@ -33,7 +32,6 @@ module VCAP::CloudController
           name: { type: 'string' },
           space_guid: { type: 'string' },
           service_plan_guid: { type: 'string' },
-          service_binding_guids: { type: '[string]' },
           service_key_guids: { type: '[string]' },
           tags: { type: '[string]' },
           parameters: { type: 'hash' },
@@ -263,7 +261,7 @@ module VCAP::CloudController
     describe 'Associations' do
       it do
         expect(described_class).to have_nested_routes(
-          service_bindings: [:get, :put, :delete],
+          service_bindings: [:get],
           service_keys: [:get, :put, :delete],
           routes: [:get, :put, :delete]
         )
@@ -1184,9 +1182,11 @@ module VCAP::CloudController
       context 'with a managed service instance' do
         let(:space) { Space.make }
         let(:service_instance) { ManagedServiceInstance.make(space: space) }
+        let(:service_plan) { ServicePlan.make(active: false) }
 
         before do
           service_instance.dashboard_url = 'this.should.be.visible.com'
+          service_instance.service_plan_id = service_plan.id
           service_instance.save
         end
 
@@ -1197,27 +1197,41 @@ module VCAP::CloudController
           expect(decoded_response.fetch('metadata').fetch('guid')).to eq(service_instance.guid)
         end
 
-        context 'developer' do
+        context 'space developer' do
           before do
             set_current_user(developer)
           end
+
           it 'returns the dashboard url in the response' do
             get "v2/service_instances/#{service_instance.guid}"
             expect(last_response.status).to eq(200)
             expect(decoded_response.fetch('entity').fetch('dashboard_url')).to eq('this.should.be.visible.com')
           end
+
+          it 'returns service_plan_guid in the response' do
+            get "v2/service_instances/#{service_instance.guid}"
+            expect(last_response.status).to eq(200)
+            expect(decoded_response.fetch('entity').fetch('service_plan_guid')).to eq(service_plan.guid)
+          end
         end
 
-        context 'manager' do
+        context 'space manager' do
           let(:manager) { make_manager_for_space(space) }
 
           before do
             set_current_user(manager)
           end
+
           it 'returns the dashboard url in the response' do
             get "v2/service_instances/#{service_instance.guid}"
             expect(last_response.status).to eq(200)
             expect(decoded_response.fetch('entity').fetch('dashboard_url')).to eq('')
+          end
+
+          it 'returns service_plan_guid in the response' do
+            get "v2/service_instances/#{service_instance.guid}"
+            expect(last_response.status).to eq(200)
+            expect(decoded_response.fetch('entity').fetch('service_plan_guid')).to eq(service_plan.guid)
           end
         end
 
@@ -1225,10 +1239,17 @@ module VCAP::CloudController
           before do
             set_current_user_as_admin
           end
+
           it 'returns the dashboard url in the response' do
             get "v2/service_instances/#{service_instance.guid}"
             expect(last_response.status).to eq(200)
             expect(decoded_response.fetch('entity').fetch('dashboard_url')).to eq('this.should.be.visible.com')
+          end
+
+          it 'returns service_plan_guid in the response' do
+            get "v2/service_instances/#{service_instance.guid}"
+            expect(last_response.status).to eq(200)
+            expect(decoded_response.fetch('entity').fetch('service_plan_guid')).to eq(service_plan.guid)
           end
         end
       end
@@ -3006,7 +3027,7 @@ module VCAP::CloudController
       context 'when the route is mapped to a diego app' do
         before do
           diego_app = AppFactory.make(diego: true, space: route.space, state: 'STARTED')
-          diego_app.add_route(route)
+          RouteMappingModel.make(app: diego_app.app, route: route, process_type: diego_app.type)
         end
 
         it 'successfully binds to the route' do
@@ -3017,7 +3038,7 @@ module VCAP::CloudController
         context 'and is mapped to another diego app as well' do
           before do
             another_diego_app = AppFactory.make(diego: true, space: route.space, state: 'STARTED')
-            another_diego_app.add_route(route)
+            RouteMappingModel.make(app: another_diego_app.app, route: route, process_type: another_diego_app.type)
           end
 
           it 'raises RouteServiceRequiresDiego' do
@@ -3031,7 +3052,7 @@ module VCAP::CloudController
       context 'when the route is mapped to a non-diego app' do
         before do
           app = AppFactory.make(diego: false, space: route.space, state: 'STARTED')
-          app.add_route(route)
+          RouteMappingModel.make(app: app.app, route: route, process_type: app.type)
         end
 
         it 'raises RouteServiceRequiresDiego' do
@@ -3045,7 +3066,7 @@ module VCAP::CloudController
         context 'and is mapped to a diego app' do
           before do
             diego_app = AppFactory.make(diego: true, space: route.space, state: 'STARTED')
-            diego_app.add_route(route)
+            RouteMappingModel.make(app: diego_app.app, route: route, process_type: diego_app.type)
           end
 
           it 'raises RouteServiceRequiresDiego' do
@@ -3063,6 +3084,21 @@ module VCAP::CloudController
         before do
           service_instance.service.bindable = false
           service_instance.service.save
+
+          put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}"
+        end
+
+        it 'raises UnbindableService error' do
+          hash_body = JSON.parse(last_response.body)
+          expect(hash_body['error_code']).to eq('CF-UnbindableService')
+          expect(last_response).to have_status_code(400)
+        end
+      end
+
+      context 'when attempting to bind to an unbindable service plan' do
+        before do
+          service_instance.service_plan.bindable = false
+          service_instance.service_plan.save
 
           put "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}"
         end
@@ -3272,7 +3308,7 @@ module VCAP::CloudController
         it 'returns a 400 InvalidRelation error' do
           delete "/v2/service_instances/#{service_instance.guid}/routes/#{route.guid}"
           expect(last_response.status).to eq(400)
-          expect(JSON.parse(last_response.body)['description']).to include('Invalid relation')
+          expect(JSON.parse(last_response.body)['description']).to include('is not bound to service instance')
         end
       end
     end
@@ -3305,7 +3341,7 @@ module VCAP::CloudController
         end
 
         context 'when the user does not have either necessary scope' do
-          it 'returns InvalidAuthToken' do
+          it 'returns InsufficientScope' do
             set_current_user(developer, { scopes: ['cloud_controller.write'] })
             get "/v2/service_instances/#{instance.guid}/permissions"
             expect(last_response.status).to eql(403)
