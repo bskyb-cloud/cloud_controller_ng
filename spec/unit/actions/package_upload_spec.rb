@@ -66,7 +66,7 @@ module VCAP::CloudController
 
         job = Delayed::Job.last
         expect(returned_job).to eq(job)
-        expect(job.queue).to eq('cc-local-1')
+        expect(job.queue).to eq('cc--local-1')
         expect(job.handler).to include(package.guid)
         expect(job.handler).to include('PackageBits')
       end

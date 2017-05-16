@@ -4,7 +4,7 @@ module VCAP::CloudController
   RSpec.describe SshController, type: :v2_controller do
     describe 'GET /v2/apps/:id/instances/ssh' do
       before :each do
-        @app = AppFactory.make(package_hash: 'abc', package_state: 'STAGED')
+        @app = AppFactory.make()
         @user = make_user_for_space(@app.space)
         @developer = make_developer_for_space(@app.space)
         @auditor = make_auditor_for_space(@app.space)
@@ -47,7 +47,7 @@ module VCAP::CloudController
             'port' => 1234
           }
 
-          Dea::Client.should_receive(:ssh_instance).with(@app, 0).
+          expect(Dea::Client).to receive(:ssh_instance).with(@app, 0).
             and_return(response)
 
           get "v2/apps/#{@app.guid}/instances/0/ssh"
@@ -89,7 +89,7 @@ module VCAP::CloudController
             'port' => 1234
           }
 
-          Dea::Client.should_receive(:ssh_instance).with(@app, 0).
+          expect(Dea::Client).to receive(:ssh_instance).with(@app, 0).
             and_return(response)
 
           set_current_user(@auditor)
