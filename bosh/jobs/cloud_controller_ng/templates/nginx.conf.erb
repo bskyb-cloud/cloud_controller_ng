@@ -24,7 +24,7 @@ http {
   tcp_nopush           on;
   tcp_nodelay          on;  #disable nagel's algorithm
 
-  keepalive_timeout  75 20; #inherited from router
+  keepalive_timeout    <%= p("cc.server_keepalive_timeout") %> 20;
 
   <% if_p("cc.nginx_rate_limit_general") do %>
   limit_req_zone $http_authorization zone=all:10m rate=<%=p("cc.nginx_rate_limit_general")['limit'] %>;
@@ -59,6 +59,7 @@ http {
     ssl_certificate_key    /var/vcap/jobs/cloud_controller_ng/config/certs/mutual_tls.key;
     ssl_client_certificate /var/vcap/jobs/cloud_controller_ng/config/certs/mutual_tls_ca.crt;
     ssl_verify_client      on;
+    ssl_verify_depth       2;
     ssl_protocols          TLSv1.2;
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 10m;

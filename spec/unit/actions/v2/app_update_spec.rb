@@ -225,6 +225,12 @@ module VCAP::CloudController
       describe 'updating docker_image' do
         let(:process) { AppFactory.make(app: AppModel.make(:docker), docker_image: 'repo/original-image') }
         let!(:original_package) { process.latest_package }
+        let(:app_stage) { instance_double(V2::AppStage, stage: nil) }
+
+        before do
+          FeatureFlag.create(name: 'diego_docker', enabled: true)
+          allow(V2::AppStage).to receive(:new).and_return(app_stage)
+        end
 
         it 'creates a new docker package' do
           request_attrs = { 'docker_image' => 'repo/new-image' }
@@ -236,14 +242,95 @@ module VCAP::CloudController
           expect(process.latest_package).not_to eq(original_package)
         end
 
-        context 'when the docker image is requested but is not a change' do
-          it 'does not create a new package' do
-            request_attrs = { 'docker_image' => 'REPO/ORIGINAL-IMAGE' }
+        context 'when docker credentials are requested' do
+          it 'creates a new docker package with those credentials' do
+            request_attrs = {
+              'docker_image'       => 'repo/new-image',
+              'docker_credentials' => { 'username' => 'bob', 'password' => 'secret' }
+            }
 
+            expect(process.docker_image).not_to eq('repo/new-image')
+            expect(process.docker_username).to be_nil
+            expect(process.docker_password).to be_nil
             app_update.update(process.app, process, request_attrs)
 
-            expect(process.reload.docker_image).to eq('repo/original-image')
-            expect(process.latest_package).to eq(original_package)
+            expect(process.reload.docker_image).to eq('repo/new-image')
+            expect(process.docker_username).to eq('bob')
+            expect(process.docker_password).to eq('secret')
+            expect(process.latest_package).not_to eq(original_package)
+          end
+        end
+
+        context 'when the same docker image is requested' do
+          context 'but there are no changes' do
+            it 'does not create a new package and does not trigger staging' do
+              request_attrs = { 'docker_image' => 'REPO/ORIGINAL-IMAGE', 'state' => 'STARTED' }
+
+              app_update.update(process.app, process, request_attrs)
+
+              expect(process.reload.docker_image).to eq('repo/original-image')
+              expect(process.latest_package).to eq(original_package)
+              expect(process.needs_staging?).to be_falsey
+            end
+          end
+
+          context 'but it changes credentials' do
+            it 'creates a new docker package and triggers staging' do
+              request_attrs = {
+                'docker_image'       => 'repo/original-image',
+                'docker_credentials' => { 'username' => 'bob', 'password' => 'secret' },
+                'state'              => 'STARTED',
+              }
+
+              expect(process.reload.docker_image).to eq('repo/original-image')
+              expect(process.docker_username).to be_nil
+              expect(process.docker_password).to be_nil
+              app_update.update(process.app, process, request_attrs)
+
+              expect(process.reload.docker_image).to eq('repo/original-image')
+              expect(process.docker_username).to eq('bob')
+              expect(process.docker_password).to eq('secret')
+              expect(process.latest_package).not_to eq(original_package)
+              expect(process.needs_staging?).to be_truthy
+            end
+          end
+        end
+      end
+
+      describe 'updating docker_credentials' do
+        let(:process) { AppFactory.make(app: AppModel.make(:docker), docker_image: 'repo/original-image') }
+        let!(:original_package) { process.latest_package }
+        let(:app_stage) { instance_double(V2::AppStage, stage: nil) }
+
+        before do
+          FeatureFlag.create(name: 'diego_docker', enabled: true)
+          allow(V2::AppStage).to receive(:new).and_return(app_stage)
+        end
+
+        it 'creates a new docker package' do
+          request_attrs = { 'docker_credentials' => {
+            'username' => 'user', 'password' => 'secret' } }
+
+          expect(process.docker_image).to eq('repo/original-image')
+          expect(process.docker_username).to be_nil
+          expect(process.docker_password).to be_nil
+          app_update.update(process.app, process, request_attrs)
+
+          expect(process.reload.docker_image).to eq('repo/original-image')
+          expect(process.docker_username).to eq('user')
+          expect(process.docker_password).to eq('secret')
+          expect(process.latest_package).not_to eq(original_package)
+        end
+
+        context 'when docker_image is not requested and the app does not have a docker_image' do
+          let(:process) { AppFactory.make(app: AppModel.make(:docker)) }
+
+          it 'raises an error' do
+            request_attrs = { 'docker_credentials' => {
+              'username' => 'user', 'password' => 'secret' } }
+
+            expect { app_update.update(process.app, process, request_attrs) }.to raise_error(CloudController::Errors::ApiError,
+              /Docker credentials can only be supplied for apps with a 'docker_image'/)
           end
         end
       end

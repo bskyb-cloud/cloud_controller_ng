@@ -40,6 +40,8 @@ module VCAP::CloudController
           certificate_properties:           ::Diego::Bbs::Models::CertificateProperties.new(
             organizational_unit: ["app:#{task.app.guid}"]
           ),
+          image_username:                   task.droplet.docker_receipt_username,
+          image_password:                   task.droplet.docker_receipt_password,
         )
       end
 
@@ -68,6 +70,8 @@ module VCAP::CloudController
           certificate_properties:           ::Diego::Bbs::Models::CertificateProperties.new(
             organizational_unit: ["app:#{staging_details.package.app_guid}"]
           ),
+          image_username:                   staging_details.package.docker_username,
+          image_password:                   staging_details.package.docker_password,
         )
       end
 

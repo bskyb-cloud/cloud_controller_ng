@@ -17,7 +17,6 @@ RSpec.describe 'Apps' do
           environment_variables: { 'RAILS_ENV' => 'staging' }
         ),
         command:                    'hello_world',
-        docker_credentials_json:    { 'docker_user' => 'bob', 'docker_password' => 'password', 'docker_email' => 'blah@blah.com' },
         health_check_type:          'http',
         health_check_http_endpoint: '/health'
       )
@@ -68,12 +67,13 @@ RSpec.describe 'Apps' do
               'staging_failed_description' => nil,
               'diego'                      => false,
               'docker_image'               => nil,
+              'docker_credentials'         => {
+                'username' => nil,
+                'password' => nil
+              },
               'package_updated_at'         => iso8601,
               'detected_start_command'     => '',
               'enable_ssh'                 => true,
-              'docker_credentials_json'    => {
-                'redacted_message' => '[PRIVATE DATA HIDDEN]'
-              },
               'ports'                      => nil,
               'space_url'                  => "/v2/spaces/#{space.guid}",
               'stack_url'                  => "/v2/stacks/#{process.stack.guid}",
@@ -146,12 +146,13 @@ RSpec.describe 'Apps' do
                 'staging_failed_description' => nil,
                 'diego'                      => false,
                 'docker_image'               => nil,
+                'docker_credentials'         => {
+                  'username' => nil,
+                  'password' => nil
+                },
                 'package_updated_at'         => iso8601,
                 'detected_start_command'     => '',
                 'enable_ssh'                 => true,
-                'docker_credentials_json'    => {
-                  'redacted_message' => '[PRIVATE DATA HIDDEN]'
-                },
                 'ports'                      => nil,
                 'space_url'                  => "/v2/spaces/#{space.guid}",
                 'space'                      => {
@@ -313,7 +314,6 @@ RSpec.describe 'Apps' do
       VCAP::CloudController::AppFactory.make(
         space:                   space,
         name:                    'app-name',
-        docker_credentials_json: { 'docker_user' => 'bob', 'docker_password' => 'password', 'docker_email' => 'blah@blah.com' },
         command:                 'app-command'
       )
     end
@@ -357,12 +357,13 @@ RSpec.describe 'Apps' do
             'staging_failed_description' => nil,
             'diego'                      => false,
             'docker_image'               => nil,
+            'docker_credentials'         => {
+              'username' => nil,
+              'password' => nil
+            },
             'package_updated_at'         => iso8601,
             'detected_start_command'     => '',
             'enable_ssh'                 => true,
-            'docker_credentials_json'    => {
-              'redacted_message' => '[PRIVATE DATA HIDDEN]'
-            },
             'ports'                      => nil,
             'space_url'                  => "/v2/spaces/#{process.space.guid}",
             'stack_url'                  => "/v2/stacks/#{process.stack.guid}",
@@ -390,7 +391,6 @@ RSpec.describe 'Apps' do
         name:                    'maria',
         space_guid:              space.guid,
         stack_guid:              stack.guid,
-        docker_credentials_json: { 'docker_user' => 'bob', 'docker_password' => 'password', 'docker_email' => 'blah@blah.com' },
         environment_json:        { 'KEY' => 'val' },
       })
 
@@ -432,10 +432,13 @@ RSpec.describe 'Apps' do
             'staging_failed_description' => nil,
             'diego'                      => false,
             'docker_image'               => nil,
+            'docker_credentials'         => {
+              'username' => nil,
+              'password' => nil
+            },
             'package_updated_at'         => nil,
             'detected_start_command'     => '',
             'enable_ssh'                 => true,
-            'docker_credentials_json'    => { 'redacted_message' => '[PRIVATE DATA HIDDEN]' },
             'ports'                      => nil,
             'space_url'                  => "/v2/spaces/#{space.guid}",
             'stack_url'                  => "/v2/stacks/#{process.stack.guid}",
@@ -454,7 +457,7 @@ RSpec.describe 'Apps' do
           name:                    'maria',
           space_guid:              space.guid,
           docker_image:            'cloudfoundry/diego-docker-app:latest',
-          docker_credentials_json: { 'docker_user' => 'bob', 'docker_password' => 'password', 'docker_email' => 'blah@blah.com' },
+          docker_credentials:      { 'username' => 'bob', 'password' => 'password' },
           environment_json:        { 'KEY' => 'val' },
         })
 
@@ -496,10 +499,13 @@ RSpec.describe 'Apps' do
               'staging_failed_description' => nil,
               'diego'                      => false,
               'docker_image'               => 'cloudfoundry/diego-docker-app:latest',
+              'docker_credentials'         => {
+                'username' => 'bob',
+                'password' => '***'
+              },
               'package_updated_at'         => iso8601,
               'detected_start_command'     => '',
               'enable_ssh'                 => true,
-              'docker_credentials_json'    => { 'redacted_message' => '[PRIVATE DATA HIDDEN]' },
               'ports'                      => nil,
               'space_url'                  => "/v2/spaces/#{space.guid}",
               'stack_url'                  => "/v2/stacks/#{process.stack.guid}",
@@ -521,7 +527,6 @@ RSpec.describe 'Apps' do
         name:                    'mario',
         environment_json:        { 'RAILS_ENV' => 'staging' },
         command:                 'hello_world',
-        docker_credentials_json: { 'docker_user' => 'bob', 'docker_password' => 'password', 'docker_email' => 'blah@blah.com' }
       )
     }
 
@@ -573,12 +578,13 @@ RSpec.describe 'Apps' do
             'staging_failed_description' => nil,
             'diego'                      => false,
             'docker_image'               => nil,
+            'docker_credentials'         => {
+              'username' => nil,
+              'password' => nil
+            },
             'package_updated_at'         => iso8601,
             'detected_start_command'     => '',
             'enable_ssh'                 => true,
-            'docker_credentials_json'    => {
-              'redacted_message' => '[PRIVATE DATA HIDDEN]'
-            },
             'ports'                      => nil,
             'space_url'                  => "/v2/spaces/#{space.guid}",
             'stack_url'                  => "/v2/stacks/#{process.stack.guid}",
@@ -596,13 +602,14 @@ RSpec.describe 'Apps' do
       let!(:process) {
         VCAP::CloudController::AppFactory.make(
           app:                     app_model,
-          docker_credentials_json: { 'docker_user' => 'bob', 'docker_password' => 'password', 'docker_email' => 'blah@blah.com' },
           docker_image:            'cloudfoundry/diego-docker-app:latest'
         )
       }
 
       before do
         VCAP::CloudController::FeatureFlag.make(name: 'diego_docker', enabled: true)
+        allow_any_instance_of(VCAP::CloudController::V2::AppStage).to receive(:stage).and_return(nil)
+        process.latest_package.update(docker_username: 'bob', docker_password: 'password')
       end
 
       it 'updates an app' do
@@ -652,12 +659,13 @@ RSpec.describe 'Apps' do
               'staging_failed_description' => nil,
               'diego'                      => false,
               'docker_image'               => 'cloudfoundry/diego-docker-app:latest',
+              'docker_credentials'         => {
+                'username' => 'bob',
+                'password' => '***'
+              },
               'package_updated_at'         => iso8601,
               'detected_start_command'     => '',
               'enable_ssh'                 => true,
-              'docker_credentials_json'    => {
-                'redacted_message' => '[PRIVATE DATA HIDDEN]'
-              },
               'ports'                      => nil,
               'space_url'                  => "/v2/spaces/#{space.guid}",
               'stack_url'                  => "/v2/stacks/#{process.stack.guid}",
@@ -668,6 +676,84 @@ RSpec.describe 'Apps' do
             }
           }
         )
+      end
+
+      context 'when updating docker data' do
+        let(:update_params) do
+          MultiJson.dump({
+            name:             'maria',
+            environment_json: { 'RAILS_ENV' => 'production' },
+            state:            'STARTED',
+            docker_image:       'cloudfoundry/diego-docker-app:even-more-latest',
+            docker_credentials: {
+              'username' => 'somedude',
+              'password' => 'secretfromdude',
+            },
+          })
+        end
+
+        it 'updates the app with docker data' do
+          # updating docker data will create a new package, which triggers staging. Therefore, package_state will
+          # become PENDING
+
+          put "/v2/apps/#{process.guid}", update_params, headers_for(user)
+
+          process.reload
+          expect(last_response.status).to eq(201)
+          expect(MultiJson.load(last_response.body)).to be_a_response_like(
+            {
+              'metadata' => {
+                'guid'       => process.guid,
+                'url'        => "/v2/apps/#{process.guid}",
+                'created_at' => iso8601,
+                'updated_at' => iso8601
+              },
+              'entity' => {
+                'name'                       => 'maria',
+                'production'                 => false,
+                'space_guid'                 => space.guid,
+                'stack_guid'                 => process.stack.guid,
+                'buildpack'                  => nil,
+                'detected_buildpack'         => nil,
+                'detected_buildpack_guid'    => nil,
+                'environment_json'           => {
+                  'RAILS_ENV' => 'production'
+                },
+                'memory'                     => 1024,
+                'instances'                  => 1,
+                'disk_quota'                 => 1024,
+                'state'                      => 'STARTED',
+                'version'                    => process.version,
+                'command'                    => nil,
+                'console'                    => false,
+                'debug'                      => nil,
+                'staging_task_id'            => process.latest_droplet.guid,
+                'package_state'              => 'PENDING',
+                'health_check_type'          => 'port',
+                'health_check_timeout'       => nil,
+                'health_check_http_endpoint' => nil,
+                'staging_failed_reason'      => nil,
+                'staging_failed_description' => nil,
+                'diego'                      => false,
+                'docker_image'               => 'cloudfoundry/diego-docker-app:even-more-latest',
+                'docker_credentials'         => {
+                  'username' => 'somedude',
+                  'password' => '***'
+                },
+                'package_updated_at'         => iso8601,
+                'detected_start_command'     => '',
+                'enable_ssh'                 => true,
+                'ports'                      => nil,
+                'space_url'                  => "/v2/spaces/#{space.guid}",
+                'stack_url'                  => "/v2/stacks/#{process.stack.guid}",
+                'routes_url'                 => "/v2/apps/#{process.guid}/routes",
+                'events_url'                 => "/v2/apps/#{process.guid}/events",
+                'service_bindings_url'       => "/v2/apps/#{process.guid}/service_bindings",
+                'route_mappings_url'         => "/v2/apps/#{process.guid}/route_mappings"
+              }
+            }
+          )
+        end
       end
     end
   end
@@ -755,7 +841,6 @@ RSpec.describe 'Apps' do
           'package_updated_at'         => iso8601,
           'detected_start_command'     => '',
           'enable_ssh'                 => true,
-          'docker_credentials_json'    => { 'redacted_message' => '[PRIVATE DATA HIDDEN]' },
           'ports'                      => nil
         })
     end
@@ -1002,12 +1087,13 @@ RSpec.describe 'Apps' do
             'staging_failed_description' => nil,
             'diego'                      => true,
             'docker_image'               => nil,
+            'docker_credentials'         => {
+              'username' => nil,
+              'password' => nil
+            },
             'package_updated_at'         => iso8601,
             'detected_start_command'     => '',
             'enable_ssh'                 => true,
-            'docker_credentials_json'    => {
-              'redacted_message' => '[PRIVATE DATA HIDDEN]'
-            },
             'ports' => [8080]
           }
         }
@@ -1266,10 +1352,13 @@ RSpec.describe 'Apps' do
             'staging_failed_description' => nil,
             'diego'                      => false,
             'docker_image'               => nil,
+            'docker_credentials'         => {
+              'username' => nil,
+              'password' => nil
+            },
             'package_updated_at'         => iso8601,
             'detected_start_command'     => '',
             'enable_ssh'                 => true,
-            'docker_credentials_json'    => { 'redacted_message' => '[PRIVATE DATA HIDDEN]' },
             'ports'                      => nil,
             'space_url'                  => "/v2/spaces/#{space.guid}",
             'stack_url'                  => "/v2/stacks/#{process.stack.guid}",

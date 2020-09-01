@@ -71,6 +71,8 @@ module VCAP::CloudController
           certificate_properties:           ::Diego::Bbs::Models::CertificateProperties.new(
             organizational_unit: ["app:#{process.app.guid}"]
           ),
+          image_username:                   process.current_droplet.docker_receipt_username,
+          image_password:                   process.current_droplet.docker_receipt_password,
         )
       end
 
@@ -105,8 +107,8 @@ module VCAP::CloudController
           {
             hostnames:         [i['hostname']],
             port:              i['port'],
-            router_group_guid: i['router_group_guid'],
-            route_service_url: i['route_service_url']
+            route_service_url: i['route_service_url'],
+            isolation_segment: IsolationSegmentSelector.for_space(process.space),
           }
         end
 
@@ -207,7 +209,7 @@ module VCAP::CloudController
           actions << build_action(lrp_builder, port, index)
         end
 
-        action(timeout(parallel(actions), timeout_ms: 1000 * 30.seconds))
+        action(timeout(parallel(actions), timeout_ms: 1000 * 10.minutes))
       end
 
       def build_action(lrp_builder, port, index)

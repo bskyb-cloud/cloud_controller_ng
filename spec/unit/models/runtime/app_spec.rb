@@ -476,44 +476,6 @@ module VCAP::CloudController
         end
       end
 
-      describe 'docker credentials' do
-        context 'when all credentials are present' do
-          it 'succeeds' do
-            expect {
-              AppFactory.make(docker_credentials_json: {
-                'docker_user'     => 'user',
-                'docker_password' => 'password',
-                'docker_email'    => 'email',
-              })
-            }.to_not raise_error
-          end
-        end
-
-        context 'when some credentials are missing' do
-          it 'errors' do
-            expect {
-              AppFactory.make(docker_credentials_json: { 'docker_user' => 'user' })
-            }.to raise_error(Sequel::ValidationFailed, /docker_credentials/)
-          end
-        end
-
-        context 'when no credentials are provided' do
-          it 'succeeds' do
-            expect {
-              AppFactory.make(docker_credentials_json: {})
-            }.to_not raise_error
-          end
-        end
-
-        context 'when docker_credentials_json is nil' do
-          it 'succeeds' do
-            expect {
-              AppFactory.make
-            }.to_not raise_error
-          end
-        end
-      end
-
       describe 'ports and health check type' do
         describe 'health check type is not "ports"' do
           before do
@@ -575,7 +537,6 @@ module VCAP::CloudController
           :diego,
           :disk_quota,
           :docker_image,
-          :docker_credentials_json,
           :environment_json,
           :health_check_http_endpoint,
           :health_check_timeout,
@@ -609,7 +570,6 @@ module VCAP::CloudController
           :diego,
           :disk_quota,
           :docker_image,
-          :docker_credentials_json,
           :environment_json,
           :health_check_http_endpoint,
           :health_check_timeout,
@@ -738,40 +698,6 @@ module VCAP::CloudController
 
       it 'returns the parent app environment_variables' do
         expect(app.environment_json).to eq({ 'key' => 'value' })
-      end
-    end
-
-    describe 'docker credentials' do
-      let(:login_server) { 'https://index.docker.io/v1' }
-      let(:user) { 'user' }
-      let(:password) { 'password' }
-      let(:email) { 'email@example.com' }
-      let(:docker_credentials) do
-        {
-          docker_login_server: login_server,
-          docker_user:         user,
-          docker_password:     password,
-          docker_email:        email
-        }
-      end
-
-      context 'if credentials change' do
-        let(:new_credentials) do
-          {
-            docker_login_server: login_server,
-            docker_user:         user,
-            docker_password:     password,
-            docker_email:        email
-          }
-        end
-        let(:app) { AppFactory.make(docker_credentials_json: docker_credentials) }
-
-        it 'does not mark an app for restage' do
-          expect {
-            app.docker_credentials_json = new_credentials
-            app.save
-          }.not_to change { app.needs_staging? }
-        end
       end
     end
 
@@ -1704,6 +1630,29 @@ module VCAP::CloudController
         expect {
           app.save
         }.to raise_error(Sequel::ValidationFailed, /incompatible with buildpack/)
+      end
+
+      it 'retrieves the docker image from the package' do
+        PackageModel.make(:docker, app: app.app, docker_image: 'someimage')
+        expect(app.reload.docker_image).to eq('someimage')
+      end
+    end
+
+    describe 'docker_username' do
+      subject(:app) { AppFactory.make(app: parent_app) }
+
+      it 'retrieves the docker registry username from the package' do
+        PackageModel.make(:docker, app: app.app, docker_image: 'someimage', docker_username: 'user')
+        expect(app.reload.docker_username).to eq('user')
+      end
+    end
+
+    describe 'docker_password' do
+      subject(:app) { AppFactory.make(app: parent_app) }
+
+      it 'retrieves the docker registry password from the package' do
+        PackageModel.make(:docker, app: app.app, docker_image: 'someimage', docker_password: 'pass')
+        expect(app.reload.docker_password).to eq('pass')
       end
     end
 

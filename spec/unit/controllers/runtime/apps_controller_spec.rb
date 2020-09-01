@@ -52,54 +52,54 @@ module VCAP::CloudController
       it do
         expect(described_class).to have_creatable_attributes(
           {
-            enable_ssh:              { type: 'bool' },
-            buildpack:               { type: 'string' },
-            command:                 { type: 'string' },
-            console:                 { type: 'bool', default: false },
-            debug:                   { type: 'string' },
-            disk_quota:              { type: 'integer' },
-            environment_json:        { type: 'hash', default: {} },
+            enable_ssh:                 { type: 'bool' },
+            buildpack:                  { type: 'string' },
+            command:                    { type: 'string' },
+            console:                    { type: 'bool', default: false },
+            debug:                      { type: 'string' },
+            disk_quota:                 { type: 'integer' },
+            environment_json:           { type: 'hash', default: {} },
             health_check_http_endpoint: { type: 'string' },
-            health_check_timeout:    { type: 'integer' },
-            health_check_type:       { type: 'string', default: 'port' },
-            instances:               { type: 'integer', default: 1 },
-            memory:                  { type: 'integer' },
-            name:                    { type: 'string', required: true },
-            production:              { type: 'bool', default: false },
-            state:                   { type: 'string', default: 'STOPPED' },
-            space_guid:              { type: 'string', required: true },
-            stack_guid:              { type: 'string' },
-            diego:                   { type: 'bool' },
-            docker_image:            { type: 'string', required: false },
-            docker_credentials_json: { type: 'hash', default: {} },
-            ports:                   { type: '[integer]', default: nil }
+            health_check_timeout:       { type: 'integer' },
+            health_check_type:          { type: 'string', default: 'port' },
+            instances:                  { type: 'integer', default: 1 },
+            memory:                     { type: 'integer' },
+            name:                       { type: 'string', required: true },
+            production:                 { type: 'bool', default: false },
+            state:                      { type: 'string', default: 'STOPPED' },
+            space_guid:                 { type: 'string', required: true },
+            stack_guid:                 { type: 'string' },
+            diego:                      { type: 'bool' },
+            docker_image:               { type: 'string', required: false },
+            docker_credentials:         { type: 'hash', default: {} },
+            ports:                      { type: '[integer]', default: nil }
           })
       end
 
       it do
         expect(described_class).to have_updatable_attributes(
           {
-            enable_ssh:              { type: 'bool' },
-            buildpack:               { type: 'string' },
-            command:                 { type: 'string' },
-            console:                 { type: 'bool' },
-            debug:                   { type: 'string' },
-            disk_quota:              { type: 'integer' },
-            environment_json:        { type: 'hash' },
+            enable_ssh:                 { type: 'bool' },
+            buildpack:                  { type: 'string' },
+            command:                    { type: 'string' },
+            console:                    { type: 'bool' },
+            debug:                      { type: 'string' },
+            disk_quota:                 { type: 'integer' },
+            environment_json:           { type: 'hash' },
             health_check_http_endpoint: { type: 'string' },
-            health_check_timeout:    { type: 'integer' },
-            health_check_type:       { type: 'string' },
-            instances:               { type: 'integer' },
-            memory:                  { type: 'integer' },
-            name:                    { type: 'string' },
-            production:              { type: 'bool' },
-            state:                   { type: 'string' },
-            space_guid:              { type: 'string' },
-            stack_guid:              { type: 'string' },
-            diego:                   { type: 'bool' },
-            docker_image:            { type: 'string' },
-            docker_credentials_json: { type: 'hash' },
-            ports:                   { type: '[integer]' }
+            health_check_timeout:       { type: 'integer' },
+            health_check_type:          { type: 'string' },
+            instances:                  { type: 'integer' },
+            memory:                     { type: 'integer' },
+            name:                       { type: 'string' },
+            production:                 { type: 'bool' },
+            state:                      { type: 'string' },
+            space_guid:                 { type: 'string' },
+            stack_guid:                 { type: 'string' },
+            diego:                      { type: 'bool' },
+            docker_image:               { type: 'string' },
+            docker_credentials:         { type: 'hash' },
+            ports:                      { type: '[integer]' }
 
           })
       end
@@ -325,12 +325,12 @@ module VCAP::CloudController
 
       it 'creates the app' do
         request = {
-          name:             'maria',
-          space_guid:       space.guid,
-          environment_json: { 'KEY' => 'val' },
-          buildpack:        'http://example.com/buildpack',
+          name:                       'maria',
+          space_guid:                 space.guid,
+          environment_json:           { 'KEY' => 'val' },
+          buildpack:                  'http://example.com/buildpack',
           health_check_http_endpoint: '/healthz',
-          health_check_type: 'http',
+          health_check_type:          'http',
         }
 
         set_current_user(admin_user, admin: true)
@@ -501,25 +501,18 @@ module VCAP::CloudController
       end
       let(:decoded_response) { MultiJson.load(last_response.body) }
 
-      let(:login_server) { 'https://index.docker.io/v1' }
       let(:user) { 'user' }
       let(:password) { 'password' }
-      let(:email) { 'email@example.com' }
       let(:docker_credentials) do
         {
-          docker_login_server: login_server,
-          docker_user:         user,
-          docker_password:     password,
-          docker_email:        email
+          username: user,
+          password: password,
         }
       end
       let(:body) do
-        MultiJson.dump(initial_hash.merge(docker_credentials_json: docker_credentials))
+        MultiJson.dump(initial_hash.merge(docker_image: 'someimage', docker_credentials: docker_credentials))
       end
-
-      let(:space_developer) { make_developer_for_space(space) }
-
-      let(:redacted_message) { { 'redacted_message' => '[PRIVATE DATA HIDDEN]' } }
+      let(:redacted_message) { '***' }
 
       def create_app
         post '/v2/apps', body
@@ -539,57 +532,28 @@ module VCAP::CloudController
         expect(last_response).to have_status_code(201)
       end
 
-      context 'create app' do
-        context 'by admin' do
-          it 'redacts the credentials' do
-            set_current_user_as_admin
-            create_app
-            expect(decoded_response['entity']['docker_credentials_json']).to eq redacted_message
-          end
-        end
+      before do
+        set_current_user_as_admin
+      end
 
-        context 'by developer' do
-          it 'redacts the credentials' do
-            set_current_user(space_developer)
-            create_app
-            expect(decoded_response['entity']['docker_credentials_json']).to eq redacted_message
-          end
+      context 'create app' do
+        it 'redacts the credentials' do
+          create_app
+          expect(decoded_response['entity']['docker_credentials']['password']).to eq redacted_message
         end
       end
 
       context 'read app' do
-        context 'by admin' do
-          it 'redacts the credentials' do
-            set_current_user_as_admin
-            read_app
-            expect(decoded_response['entity']['docker_credentials_json']).to eq redacted_message
-          end
-        end
-
-        context 'by developer' do
-          it 'redacts the credentials' do
-            set_current_user(space_developer)
-            read_app
-            expect(decoded_response['entity']['docker_credentials_json']).to eq redacted_message
-          end
+        it 'redacts the credentials' do
+          read_app
+          expect(decoded_response['entity']['docker_credentials']['password']).to eq redacted_message
         end
       end
 
       context 'update app' do
-        context 'by admin' do
-          it 'redacts the credentials' do
-            set_current_user_as_admin
-            update_app
-            expect(decoded_response['entity']['docker_credentials_json']).to eq redacted_message
-          end
-        end
-
-        context 'by developer' do
-          it 'redacts the credentials' do
-            set_current_user(space_developer)
-            update_app
-            expect(decoded_response['entity']['docker_credentials_json']).to eq redacted_message
-          end
+        it 'redacts the credentials' do
+          update_app
+          expect(decoded_response['entity']['docker_credentials']['password']).to eq redacted_message
         end
       end
     end
@@ -992,33 +956,51 @@ module VCAP::CloudController
       end
 
       describe 'updating docker_image' do
+        before do
+          set_current_user(admin_user, admin: true)
+        end
+
         it 'creates a new docker package' do
           app              = AppFactory.make(app: AppModel.make(:docker), docker_image: 'repo/original-image')
           original_package = app.latest_package
 
           expect(app.docker_image).not_to eq('repo/new-image')
 
-          set_current_user(admin_user, admin: true)
-
           put "/v2/apps/#{app.guid}", MultiJson.dump({ docker_image: 'repo/new-image' })
+          expect(last_response.status).to eq(201)
 
+          parsed_response = MultiJson.load(last_response.body)
+          expect(parsed_response['entity']['docker_image']).to eq('repo/new-image')
+          expect(parsed_response['entity']['docker_credentials']).to eq({
+            'username' => nil,
+            'password' => nil
+          })
           expect(app.reload.docker_image).to eq('repo/new-image')
           expect(app.latest_package).not_to eq(original_package)
         end
 
-        context 'when the docker image is requested but is not a change' do
-          it 'does not create a new package' do
+        context 'when credentials are requested' do
+          let(:docker_credentials) do
+            { 'username' => 'fred', 'password' => 'derf' }
+          end
+
+          it 'creates a new docker package with those credentials' do
             app              = AppFactory.make(app: AppModel.make(:docker), docker_image: 'repo/original-image')
             original_package = app.latest_package
 
             expect(app.docker_image).not_to eq('repo/new-image')
 
-            set_current_user(admin_user, admin: true)
+            put "/v2/apps/#{app.guid}", MultiJson.dump({ docker_image: 'repo/new-image', docker_credentials: docker_credentials })
+            expect(last_response.status).to eq(201)
 
-            put "/v2/apps/#{app.guid}", MultiJson.dump({ docker_image: 'REPO/ORIGINAL-IMAGE' })
-
-            expect(app.reload.docker_image).to eq('repo/original-image')
-            expect(app.latest_package).to eq(original_package)
+            parsed_response = MultiJson.load(last_response.body)
+            expect(parsed_response['entity']['docker_image']).to eq('repo/new-image')
+            expect(parsed_response['entity']['docker_credentials']).to eq({
+              'username' => 'fred',
+              'password' => '***'
+            })
+            expect(app.reload.docker_image).to eq('repo/new-image')
+            expect(app.latest_package).not_to eq(original_package)
           end
         end
       end
@@ -2377,7 +2359,7 @@ module VCAP::CloudController
     describe 'GET /v2/apps/:guid/permissions' do
       let(:app_obj) { AppFactory.make(space: space) }
       let(:space) { Space.make }
-      let(:user)  { User.make }
+      let(:user) { User.make }
 
       before do
         space.organization.add_user(user)

@@ -29,7 +29,13 @@ module VCAP
           end
 
           describe '#lifecycle_data' do
-            let(:package) { PackageModel.make(:docker, docker_image: 'registry/image-name:latest') }
+            let(:package) do
+              PackageModel.make(:docker,
+                                docker_image: 'registry/image-name:latest',
+                                docker_username: 'dockerusername',
+                                docker_password: 'dockerpassword',
+                               )
+            end
             let(:droplet) { DropletModel.make(package_guid: package.guid) }
             let(:staging_details) do
               Diego::StagingDetails.new.tap do |details|
@@ -42,51 +48,22 @@ module VCAP
             it 'sets the docker image' do
               message = lifecycle_protocol.lifecycle_data(staging_details)
               expect(message[:docker_image]).to eq('registry/image-name:latest')
-            end
-
-            describe 'experimental v2 app docker credential support' do
-              it 'does not set docker credentials if there is no web process' do
-                message = lifecycle_protocol.lifecycle_data(staging_details)
-                expect(message[:docker_login_server]).to be_nil
-                expect(message[:docker_user]).to be_nil
-                expect(message[:docker_password]).to be_nil
-                expect(message[:docker_email]).to be_nil
-              end
-
-              it 'does not set docker credentials if the web process has no docker credentials' do
-                App.make(app: droplet.app, type: 'web', docker_credentials_json: nil)
-
-                message = lifecycle_protocol.lifecycle_data(staging_details)
-                expect(message[:docker_login_server]).to be_nil
-                expect(message[:docker_user]).to be_nil
-                expect(message[:docker_password]).to be_nil
-                expect(message[:docker_email]).to be_nil
-              end
-
-              it 'sets docker credentials if the web process has docker credentials' do
-                App.make(
-                  app: droplet.app,
-                  type: 'web',
-                  docker_credentials_json: {
-                    docker_login_server: 'login-server',
-                    docker_user: 'user',
-                    docker_password: 'password',
-                    docker_email: 'email',
-                  }
-                )
-
-                message = lifecycle_protocol.lifecycle_data(staging_details)
-                expect(message[:docker_login_server]).to eq('login-server')
-                expect(message[:docker_user]).to eq('user')
-                expect(message[:docker_password]).to eq('password')
-                expect(message[:docker_email]).to eq('email')
-              end
+              expect(message[:docker_user]).to eq('dockerusername')
+              expect(message[:docker_password]).to eq('dockerpassword')
             end
           end
 
           describe '#desired_app_message' do
             let(:app) { AppModel.make }
-            let(:droplet) { DropletModel.make(:docker, state: DropletModel::STAGED_STATE, app: app, docker_receipt_image: 'the-image') }
+            let(:droplet) do
+              DropletModel.make(:docker,
+                                state: DropletModel::STAGED_STATE,
+                                app: app,
+                                docker_receipt_image: 'the-image',
+                                docker_receipt_username: 'dockerusername',
+                                docker_receipt_password: 'dockerpassword',
+                               )
+            end
             let(:process) { App.make(app: app, diego: true, command: 'go go go', metadata: {}) }
 
             before do
@@ -98,9 +75,11 @@ module VCAP
               expect(message['start_command']).to eq('go go go')
             end
 
-            it 'uses the droplet receipt image' do
+            it 'uses the droplet receipt image and docker credentials' do
               message = lifecycle_protocol.desired_app_message(process)
               expect(message['docker_image']).to eq('the-image')
+              expect(message['docker_user']).to eq('dockerusername')
+              expect(message['docker_password']).to eq('dockerpassword')
             end
           end
 

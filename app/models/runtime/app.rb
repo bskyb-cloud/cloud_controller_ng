@@ -112,20 +112,16 @@ module VCAP::CloudController
                       :state, :version, :command, :console, :debug, :staging_task_id,
                       :package_state, :health_check_type, :health_check_timeout, :health_check_http_endpoint,
                       :staging_failed_reason, :staging_failed_description, :diego, :docker_image, :package_updated_at,
-                      :detected_start_command, :enable_ssh, :docker_credentials_json, :ports
+                      :detected_start_command, :enable_ssh, :ports
 
     import_attributes :name, :production, :space_guid, :stack_guid, :buildpack,
       :detected_buildpack, :environment_json, :memory, :instances, :disk_quota,
       :state, :command, :console, :debug, :staging_task_id,
       :service_binding_guids, :route_guids, :health_check_type, :health_check_http_endpoint,
-      :health_check_timeout, :diego, :docker_image, :app_guid, :enable_ssh,
-      :docker_credentials_json, :ports
+      :health_check_timeout, :diego, :docker_image, :app_guid, :enable_ssh, :ports
 
     serialize_attributes :json, :metadata
     serialize_attributes :integer_array, :ports
-
-    encrypt :docker_credentials_json, salt: :docker_salt, column: :encrypted_docker_credentials_json
-    serializes_via_json :docker_credentials_json
 
     STARTED            = 'STARTED'.freeze
     STOPPED            = 'STOPPED'.freeze
@@ -156,7 +152,7 @@ module VCAP::CloudController
     end
 
     def package_state
-      cached_latest_droplet = latest_droplet
+      cached_latest_droplet  = latest_droplet
       cached_current_droplet = current_droplet
       return 'FAILED' if cached_latest_droplet.try(:failed?)
       return 'PENDING' if cached_current_droplet != cached_latest_droplet
@@ -195,6 +191,14 @@ module VCAP::CloudController
 
     def docker_image
       latest_package.try(:image)
+    end
+
+    def docker_username
+      latest_package.try(:docker_username)
+    end
+
+    def docker_password
+      latest_package.try(:docker_password)
     end
 
     def copy_buildpack_errors
@@ -541,10 +545,8 @@ module VCAP::CloudController
     end
 
     def to_hash(opts={})
-      opts[:redact] = if VCAP::CloudController::Security::AccessContext.new.can?(:read_env, self)
-                        %w(docker_credentials_json)
-                      else
-                        %w(environment_json system_env_json docker_credentials_json)
+      opts[:redact] = if !VCAP::CloudController::Security::AccessContext.new.can?(:read_env, self)
+                        %w(environment_json system_env_json)
                       end
       super(opts)
     end
